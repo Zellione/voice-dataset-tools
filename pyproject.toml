@@ -1,0 +1,24 @@
+[project]
+name = "voice-dataset-tools"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Zellione", email = "nagels.sebastian@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "faster-whisper>=1.2.1",
+    "nvidia-cublas-cu12>=12.9.2.10",
+    "nvidia-cudnn-cu12>=9.26.0.51",
+    "soundfile>=0.14.0",
+    "typer>=0.27.2",
+]
+
+[project.scripts]
+voice-dataset = "voice_dataset.cli:app"
+voice-dataset-tools = "voice_dataset_tools:main"
+
+[build-system]
+requires = ["uv_build>=0.12.15,<0.13.0"]
+build-backend = "uv_build"
