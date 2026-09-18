@@ -17,6 +17,10 @@ from .detectors import (
     import_detector_regions,
     load_detector_output,
 )
+from .embeddings import (
+    import_embeddings,
+    load_embedding_output,
+)
 from .transcripts import (
     import_transcripts,
     load_transcript_output,
@@ -501,6 +505,89 @@ def region_import_transcripts(
     typer.echo(
         f"  model:          "
         f"{output.transcriber_model or '-'}"
+    )
+
+    typer.echo(
+        f"  representation: "
+        f"{output.representation}"
+    )
+
+    typer.echo(
+        f"  name:           "
+        f"{name}"
+    )
+
+
+@region_app.command("import-embeddings")
+def region_import_embeddings(
+    embedding_output: Path,
+    name: str = typer.Option(
+        ...,
+        help=(
+            "Embedding evidence name, "
+            "e.g. ecapa_raw or wespeaker_raw."
+        ),
+    ),
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Import speaker embeddings for candidate regions."""
+
+    embedding_output = (
+        embedding_output.resolve()
+    )
+
+    if not embedding_output.is_file():
+        raise typer.BadParameter(
+            "Embedding output does not exist: "
+            f"{embedding_output}"
+        )
+
+    storage = storage_for(dataset)
+
+    try:
+        output = load_embedding_output(
+            embedding_output
+        )
+
+        result = import_embeddings(
+            storage,
+            output,
+            name=name,
+        )
+
+    except (
+        ValueError,
+        KeyError,
+        RuntimeError,
+        OSError,
+    ) as exc:
+        typer.echo(
+            f"Import failed: {exc}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"Imported {result.imported} "
+        f"speaker embeddings."
+    )
+
+    typer.echo(
+        f"Skipped {result.skipped} "
+        f"existing speaker embeddings."
+    )
+
+    typer.echo(
+        f"  encoder:        "
+        f"{output.encoder_name}"
+    )
+
+    typer.echo(
+        f"  model:          "
+        f"{output.encoder_model or '-'}"
     )
 
     typer.echo(
