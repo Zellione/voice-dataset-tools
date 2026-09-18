@@ -1,5 +1,12 @@
 from dataclasses import dataclass
 
+from voice_dataset.cuda import preload_cuda_libraries
+
+# ctranslate2/faster-whisper loads CUDA libraries dynamically.
+# Preload the CUDA runtime dependencies installed in the virtualenv
+# before importing/using WhisperModel.
+preload_cuda_libraries()
+
 from faster_whisper import WhisperModel
 
 
