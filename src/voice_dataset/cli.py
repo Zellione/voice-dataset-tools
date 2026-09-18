@@ -17,6 +17,10 @@ from .detectors import (
     import_detector_regions,
     load_detector_output,
 )
+from .transcripts import (
+    import_transcripts,
+    load_transcript_output,
+)
 
 preload_cuda_libraries()
 
@@ -424,6 +428,89 @@ def region_import_detector(
     typer.echo(
         f"  source:   "
         f"{source_id}"
+    )
+
+
+@region_app.command("import-transcripts")
+def region_import_transcripts(
+    transcript_output: Path,
+    name: str = typer.Option(
+        ...,
+        help=(
+            "Transcript hypothesis name, "
+            "e.g. whisper_raw or whisper_speech."
+        ),
+    ),
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Import transcript hypotheses for candidate regions."""
+
+    transcript_output = (
+        transcript_output.resolve()
+    )
+
+    if not transcript_output.is_file():
+        raise typer.BadParameter(
+            "Transcript output does not exist: "
+            f"{transcript_output}"
+        )
+
+    storage = storage_for(dataset)
+
+    try:
+        output = load_transcript_output(
+            transcript_output
+        )
+
+        result = import_transcripts(
+            storage,
+            output,
+            name=name,
+        )
+
+    except (
+        ValueError,
+        KeyError,
+        RuntimeError,
+        OSError,
+    ) as exc:
+        typer.echo(
+            f"Import failed: {exc}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"Imported {result.imported} "
+        f"transcript hypotheses."
+    )
+
+    typer.echo(
+        f"Skipped {result.skipped} "
+        f"existing transcript hypotheses."
+    )
+
+    typer.echo(
+        f"  transcriber:    "
+        f"{output.transcriber_name}"
+    )
+
+    typer.echo(
+        f"  model:          "
+        f"{output.transcriber_model or '-'}"
+    )
+
+    typer.echo(
+        f"  representation: "
+        f"{output.representation}"
+    )
+
+    typer.echo(
+        f"  name:           "
+        f"{name}"
     )
 
 
