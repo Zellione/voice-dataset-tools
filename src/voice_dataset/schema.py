@@ -51,6 +51,90 @@ class EmbeddingReference:
 
 
 @dataclass
+class TranscriptHypothesis:
+    text: str | None = None
+    language: str | None = None
+
+    model: str | None = None
+    representation: str | None = None
+
+    confidence: float | None = None
+
+    metadata: dict[str, Any] = field(
+        default_factory=dict
+    )
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class CandidateRegion:
+    id: str
+    source_id: str
+
+    source_start: float
+    source_end: float
+
+    detector: str
+    detector_label: str | None = None
+
+    representations: dict[
+        str,
+        AudioRepresentation,
+    ] = field(default_factory=dict)
+
+    transcripts: dict[
+        str,
+        TranscriptHypothesis,
+    ] = field(default_factory=dict)
+
+    embeddings: dict[
+        str,
+        EmbeddingReference,
+    ] = field(default_factory=dict)
+
+    metadata: dict[str, Any] = field(
+        default_factory=dict
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            "schema_version": 1,
+            "record_type": "candidate_region",
+
+            "id": self.id,
+            "source_id": self.source_id,
+
+            "source_start": self.source_start,
+            "source_end": self.source_end,
+
+            "detector": self.detector,
+            "detector_label": self.detector_label,
+
+            "representations": {
+                name: representation.to_dict()
+                for name, representation
+                in self.representations.items()
+            },
+
+            "transcripts": {
+                name: transcript.to_dict()
+                for name, transcript
+                in self.transcripts.items()
+            },
+
+            "embeddings": {
+                name: embedding.to_dict()
+                for name, embedding
+                in self.embeddings.items()
+            },
+
+            "metadata": self.metadata,
+        }
+
+
+@dataclass
 class VoiceAssignment:
     status: AssignmentStatus = "unknown"
 

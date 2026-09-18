@@ -6,7 +6,11 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
-from .schema import TurnRecord, VoiceProfile
+from .schema import (
+    CandidateRegion,
+    TurnRecord,
+    VoiceProfile,
+)
 
 
 class JsonlStore:
@@ -161,6 +165,10 @@ class DatasetStorage:
     def __init__(self, root: Path):
         self.root = root
 
+        self.regions = JsonlStore(
+            root / "regions.jsonl"
+        )
+
         self.turns = JsonlStore(
             root / "turns.jsonl"
         )
@@ -225,6 +233,35 @@ class DatasetStorage:
         return self._get(
             self.voices,
             voice_id,
+        )
+
+    def next_region_id(self) -> str:
+        return self._next_id(
+            self.regions.load(),
+            prefix="region",
+            width=6,
+        )
+    
+    def add_region(
+        self,
+        region: CandidateRegion,
+    ) -> None:
+        self._ensure_unique(
+            self.regions,
+            region.id,
+        )
+    
+        self.regions.append(
+            region.to_dict()
+        )
+    
+    def get_region(
+        self,
+        region_id: str,
+    ) -> dict[str, Any] | None:
+        return self._get(
+            self.regions,
+            region_id,
         )
 
     @staticmethod
