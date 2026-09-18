@@ -12,6 +12,10 @@ from .voices import (
     mark_turn_unknown,
     set_voice_ignored,
 )
+from .detectors import (
+    import_detector_regions,
+    load_detector_output,
+)
 
 preload_cuda_libraries()
 
@@ -28,6 +32,11 @@ voice_app = typer.Typer(
     no_args_is_help=True,
 )
 
+region_app = typer.Typer(
+    help="Manage detector candidate regions.",
+    no_args_is_help=True,
+)
+
 turn_app = typer.Typer(
     help="Manage speech turns and voice assignments.",
     no_args_is_help=True,
@@ -36,6 +45,11 @@ turn_app = typer.Typer(
 app.add_typer(
     voice_app,
     name="voice",
+)
+
+app.add_typer(
+    region_app,
+    name="region",
 )
 
 app.add_typer(
@@ -340,6 +354,109 @@ def voice_restore(
     typer.echo(
         f"{voice['id']} is no longer ignored."
     )
+
+
+@region_app.command("import-detector")
+def region_import_detector(
+    detector_output: Path,
+    source_id: str = typer.Option(
+        ...,
+        help=(
+            "Dataset source identifier associated "
+            "with these detector regions."
+        ),
+    ),
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Import candidate regions from detector output."""
+
+    detector_output = (
+        detector_output.resolve()
+    )
+
+    if not detector_output.is_file():
+        raise typer.BadParameter(
+            "Detector output does not exist: "
+            f"{detector_output}"
+        )
+
+    storage = storage_for(dataset)
+
+    try:
+        output = load_detector_output(
+            detector_output
+        )
+
+        result = import_detector_regions(
+            storage,
+            output,
+            source_id=source_id,
+        )
+    except (
+        ValueError,
+        OSError,
+    ) as exc:
+        typer.echo(
+            f"Import failed: {exc}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"Imported {len(result.imported)} "
+        f"candidate regions."
+    )
+
+    typer.echo(
+        f"Skipped {result.skipped} "
+        f"existing candidate regions."
+    )
+
+    typer.echo(
+        f"  detector: "
+        f"{output.detector_name}"
+    )
+
+    typer.echo(
+        f"  source:   "
+        f"{source_id}"
+    )
+
+
+@region_app.command("list")
+def region_list(
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """List detector candidate regions."""
+
+    storage = storage_for(dataset)
+    regions = storage.regions.load()
+
+    if not regions:
+        typer.echo(
+            "No candidate regions."
+        )
+        return
+
+    for region in regions:
+        label = (
+            region.get("detector_label")
+            or "-"
+        )
+
+        typer.echo(
+            f"{region['id']}  "
+            f"{region['source_start']:.3f}-"
+            f"{region['source_end']:.3f}  "
+            f"{region['detector']}  "
+            f"{label}"
+        )
 
 
 @turn_app.command("list")
