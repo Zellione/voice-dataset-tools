@@ -1,23 +1,60 @@
 from pathlib import Path
-from .media import probe_audio_streams
+
 import typer
 
 from .cuda import preload_cuda_libraries
+from .media import probe_audio_streams
+from .storage import DatasetStorage
+from .voices import (
+    assign_turn,
+    create_voice,
+    ignore_turn,
+    mark_turn_unknown,
+    set_voice_ignored,
+)
 
 preload_cuda_libraries()
 
 from .ingest import ingest as ingest_source
+
 
 app = typer.Typer(
     help="Build and manage speech datasets for voice model training.",
     no_args_is_help=True,
 )
 
+voice_app = typer.Typer(
+    help="Manage persistent voice profiles.",
+    no_args_is_help=True,
+)
+
+turn_app = typer.Typer(
+    help="Manage speech turns and voice assignments.",
+    no_args_is_help=True,
+)
+
+app.add_typer(
+    voice_app,
+    name="voice",
+)
+
+app.add_typer(
+    turn_app,
+    name="turn",
+)
+
+
+def storage_for(dataset: Path) -> DatasetStorage:
+    return DatasetStorage(
+        dataset.resolve()
+    )
+
 
 @app.callback()
 def main():
     """Build and manage speech datasets for voice model training."""
     pass
+
 
 @app.command()
 def probe(
@@ -42,14 +79,35 @@ def probe(
     typer.echo()
 
     for stream in streams:
-        typer.echo(f"Audio stream #{stream.index}")
-        typer.echo(f"  Codec:          {stream.codec or '-'}")
-        typer.echo(f"  Sample rate:    {stream.sample_rate or '-'}")
-        typer.echo(f"  Channels:       {stream.channels or '-'}")
-        typer.echo(f"  Channel layout: {stream.channel_layout or '-'}")
-        typer.echo(f"  Language:       {stream.language or '-'}")
-        typer.echo(f"  Title:          {stream.title or '-'}")
+        typer.echo(
+            f"Audio stream #{stream.index}"
+        )
+        typer.echo(
+            f"  Codec:          "
+            f"{stream.codec or '-'}"
+        )
+        typer.echo(
+            f"  Sample rate:    "
+            f"{stream.sample_rate or '-'}"
+        )
+        typer.echo(
+            f"  Channels:       "
+            f"{stream.channels or '-'}"
+        )
+        typer.echo(
+            f"  Channel layout: "
+            f"{stream.channel_layout or '-'}"
+        )
+        typer.echo(
+            f"  Language:       "
+            f"{stream.language or '-'}"
+        )
+        typer.echo(
+            f"  Title:          "
+            f"{stream.title or '-'}"
+        )
         typer.echo()
+
 
 @app.command()
 def ingest(
@@ -68,11 +126,17 @@ def ingest(
     ),
     audio_stream: int = typer.Option(
         0,
-        help="Audio stream number within the audio streams (0 = first audio stream).",
+        help=(
+            "Audio stream number within the audio streams "
+            "(0 = first audio stream)."
+        ),
     ),
     channel: str = typer.Option(
         "auto",
-        help="Channel extraction mode: auto, mono, or center.",
+        help=(
+            "Channel extraction mode: "
+            "auto, mono, or center."
+        ),
     ),
     start: float | None = typer.Option(
         None,
@@ -91,9 +155,14 @@ def ingest(
 ):
     """Ingest source media into a speech dataset."""
 
-    if channel not in {"auto", "mono", "center"}:
+    if channel not in {
+        "auto",
+        "mono",
+        "center",
+    }:
         raise typer.BadParameter(
-            "--channel must be auto, mono, or center"
+            "--channel must be "
+            "auto, mono, or center"
         )
 
     ingest_source(
@@ -106,6 +175,314 @@ def ingest(
         channel=channel,
         start=start,
         duration=duration,
+    )
+
+
+@voice_app.command("create")
+def voice_create(
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+    character: str | None = typer.Option(
+        None,
+        help="Character represented by this voice.",
+    ),
+    language: str | None = typer.Option(
+        None,
+        help="Voice language, e.g. en or de.",
+    ),
+    alias: list[str] | None = typer.Option(
+        None,
+        "--alias",
+        help="Alias. May be specified multiple times.",
+    ),
+    notes: str | None = typer.Option(
+        None,
+        help="Optional notes about this voice.",
+    ),
+    ignore: bool = typer.Option(
+        False,
+        help="Create this as an ignored voice profile.",
+    ),
+):
+    """Create a persistent voice profile."""
+
+    storage = storage_for(dataset)
+
+    voice = create_voice(
+        storage,
+        character=character,
+        language=language,
+        aliases=alias,
+        ignored=ignore,
+        notes=notes,
+    )
+
+    typer.echo(
+        f"Created {voice['id']}"
+    )
+
+    typer.echo(
+        f"  character: "
+        f"{voice['character'] or '-'}"
+    )
+
+    typer.echo(
+        f"  language:  "
+        f"{voice['language'] or '-'}"
+    )
+
+    typer.echo(
+        f"  ignored:   "
+        f"{voice['ignored']}"
+    )
+
+
+@voice_app.command("list")
+def voice_list(
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """List persistent voice profiles."""
+
+    storage = storage_for(dataset)
+    voices = storage.voices.load()
+
+    if not voices:
+        typer.echo(
+            "No voice profiles."
+        )
+        return
+
+    for voice in voices:
+        character = (
+            voice.get("character")
+            or "-"
+        )
+
+        language = (
+            voice.get("language")
+            or "-"
+        )
+
+        ignored = (
+            " ignored"
+            if voice.get("ignored")
+            else ""
+        )
+
+        typer.echo(
+            f"{voice['id']}  "
+            f"character={character}  "
+            f"language={language}"
+            f"{ignored}"
+        )
+
+
+@voice_app.command("ignore")
+def voice_ignore(
+    voice_id: str,
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Ignore a known voice in future processing."""
+
+    storage = storage_for(dataset)
+
+    try:
+        voice = set_voice_ignored(
+            storage,
+            voice_id,
+            True,
+        )
+    except KeyError as exc:
+        typer.echo(
+            str(exc),
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"{voice['id']} is now ignored."
+    )
+
+
+@voice_app.command("restore")
+def voice_restore(
+    voice_id: str,
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Restore an ignored voice profile."""
+
+    storage = storage_for(dataset)
+
+    try:
+        voice = set_voice_ignored(
+            storage,
+            voice_id,
+            False,
+        )
+    except KeyError as exc:
+        typer.echo(
+            str(exc),
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"{voice['id']} is no longer ignored."
+    )
+
+
+@turn_app.command("list")
+def turn_list(
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """List speech turns."""
+
+    storage = storage_for(dataset)
+    turns = storage.turns.load()
+
+    if not turns:
+        typer.echo("No turns.")
+        return
+
+    for turn in turns:
+        assignment = turn.get(
+            "assignment",
+            {},
+        )
+
+        status = assignment.get(
+            "status",
+            "unknown",
+        )
+
+        voice_id = assignment.get(
+            "voice_id"
+        )
+
+        assignment_text = (
+            voice_id
+            if status == "assigned"
+            and voice_id
+            else status
+        )
+
+        transcript = (
+            turn.get("transcript")
+            or ""
+        )
+
+        typer.echo(
+            f"{turn['id']}  "
+            f"{turn['source_start']:.3f}-"
+            f"{turn['source_end']:.3f}  "
+            f"{assignment_text}  "
+            f"{transcript}"
+        )
+
+
+@turn_app.command("assign")
+def turn_assign(
+    turn_id: str,
+    voice_id: str,
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Assign a turn to a persistent voice profile."""
+
+    storage = storage_for(dataset)
+
+    try:
+        turn = assign_turn(
+            storage,
+            turn_id,
+            voice_id,
+            method="manual",
+        )
+    except KeyError as exc:
+        typer.echo(
+            str(exc),
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"{turn_id} -> "
+        f"{turn['assignment']['voice_id']}"
+    )
+
+
+@turn_app.command("unknown")
+def turn_unknown(
+    turn_id: str,
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Reset a turn to unknown voice."""
+
+    storage = storage_for(dataset)
+
+    try:
+        mark_turn_unknown(
+            storage,
+            turn_id,
+        )
+    except KeyError as exc:
+        typer.echo(
+            str(exc),
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"{turn_id} -> unknown"
+    )
+
+
+@turn_app.command("ignore")
+def turn_ignore(
+    turn_id: str,
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Ignore one specific turn."""
+
+    storage = storage_for(dataset)
+
+    try:
+        ignore_turn(
+            storage,
+            turn_id,
+            method="manual",
+        )
+    except KeyError as exc:
+        typer.echo(
+            str(exc),
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"{turn_id} -> ignore"
     )
 
 

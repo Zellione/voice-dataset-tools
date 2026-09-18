@@ -17,7 +17,6 @@ dependencies = [
 
 [project.scripts]
 voice-dataset = "voice_dataset.cli:app"
-voice-dataset-tools = "voice_dataset_tools:main"
 
 [build-system]
 requires = ["uv_build>=0.12.15,<0.13.0"]
