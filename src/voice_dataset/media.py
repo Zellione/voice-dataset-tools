@@ -164,3 +164,59 @@ def normalize_media(
         raise RuntimeError(
             f"ffmpeg failed to decode {source}"
         ) from exc
+
+
+def extract_audio_region(
+    source: Path,
+    destination: Path,
+    start: float,
+    end: float,
+) -> None:
+    if start < 0:
+        raise ValueError(
+            "Region start must not be negative"
+        )
+
+    if end <= start:
+        raise ValueError(
+            "Region end must be greater than start"
+        )
+
+    destination.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-ss",
+        str(start),
+        "-i",
+        str(source),
+        "-t",
+        str(end - start),
+        "-vn",
+        "-acodec",
+        "pcm_s16le",
+        str(destination),
+    ]
+
+    try:
+        subprocess.run(
+            command,
+            check=True,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "ffmpeg was not found in PATH."
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"ffmpeg failed to extract region "
+            f"{start:.3f}-{end:.3f} "
+            f"from {source}"
+        ) from exc

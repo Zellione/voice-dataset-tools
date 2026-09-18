@@ -264,6 +264,19 @@ class DatasetStorage:
             region_id,
         )
 
+    def update_region(
+        self,
+        region_id: str,
+        update_fn: Callable[
+            [dict[str, Any]],
+            dict[str, Any],
+        ],
+    ) -> dict[str, Any]:
+        return self.regions.update(
+            region_id,
+            update_fn,
+        )
+
     @staticmethod
     def _get(
         store: JsonlStore,

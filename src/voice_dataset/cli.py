@@ -4,6 +4,7 @@ import typer
 
 from .cuda import preload_cuda_libraries
 from .media import probe_audio_streams
+from .representations import materialize_regions
 from .storage import DatasetStorage
 from .voices import (
     assign_turn,
@@ -423,6 +424,79 @@ def region_import_detector(
     typer.echo(
         f"  source:   "
         f"{source_id}"
+    )
+
+
+@region_app.command("materialize-audio")
+def region_materialize_audio(
+    source: Path,
+    source_id: str = typer.Option(
+        ...,
+        help=(
+            "Dataset source identifier whose "
+            "candidate regions should be materialized."
+        ),
+    ),
+    name: str = typer.Option(
+        ...,
+        help="Representation name, e.g. raw or speech.",
+    ),
+    kind: str = typer.Option(
+        ...,
+        help="Representation kind, e.g. center or separated.",
+    ),
+    purpose: list[str] | None = typer.Option(
+        None,
+        "--purpose",
+        help=(
+            "Intended use of the representation. "
+            "May be specified multiple times."
+        ),
+    ),
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Materialize audio for candidate regions."""
+
+    source = source.resolve()
+
+    if not source.is_file():
+        raise typer.BadParameter(
+            f"Audio source does not exist: {source}"
+        )
+
+    storage = storage_for(dataset)
+
+    try:
+        result = materialize_regions(
+            storage=storage,
+            source_id=source_id,
+            source=source,
+            representation_name=name,
+            kind=kind,
+            purposes=purpose or [],
+        )
+    except (
+        ValueError,
+        KeyError,
+        OSError,
+    ) as exc:
+        typer.echo(
+            f"Materialization failed: {exc}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"Created {result.created} "
+        f"audio representations."
+    )
+
+    typer.echo(
+        f"Skipped {result.skipped} "
+        f"existing audio representations."
     )
 
 
