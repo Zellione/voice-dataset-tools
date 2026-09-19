@@ -9,10 +9,46 @@ ROOT_DIR="$(
 
 TOOLS_DIR="${ROOT_DIR}/tools"
 
+ECAPA_DIR="${TOOLS_DIR}/ecapa"
+ECAPA_VENV="${ECAPA_DIR}/.venv"
+
 mkdir -p "${TOOLS_DIR}"
 
 echo "voice-dataset-tools bootstrap"
 echo "project: ${ROOT_DIR}"
 echo "tools:   ${TOOLS_DIR}"
 echo
-echo "No external tools configured yet."
+
+if ! command -v uv >/dev/null 2>&1; then
+    echo "error: uv is required but was not found" >&2
+    exit 1
+fi
+
+echo "==> ECAPA"
+
+mkdir -p "${ECAPA_DIR}"
+
+if [[ ! -x "${ECAPA_VENV}/bin/python" ]]; then
+    echo "Creating ECAPA Python environment..."
+
+    uv venv \
+        --python 3.12 \
+        "${ECAPA_VENV}"
+else
+    echo "ECAPA Python environment already exists."
+fi
+
+echo "Installing ECAPA dependencies..."
+
+uv pip install \
+    --python "${ECAPA_VENV}/bin/python" \
+    "speechbrain==1.1.1" \
+    "torch==2.14.0" \
+    "torchaudio==2.11.0" \
+    "torchcodec==0.16.0" \
+    "numpy==2.5.3" \
+    "soundfile==0.14.0" \
+    "huggingface-hub==1.32.0"
+
+echo
+echo "Bootstrap complete."
