@@ -1526,6 +1526,14 @@ def turn_review(
         min=0.0,
         help="Context padding in seconds.",
     ),
+    speaker_embedding: str | None = typer.Option(
+        None,
+        "--speaker-embedding",
+        help=(
+            "Turn embedding name used to show "
+            "speaker similarity evidence."
+        ),
+    ),
 ):
     """Interactively review reconciled speech turns."""
 
@@ -1567,14 +1575,20 @@ def turn_review(
         )
         assignment = current.get("assignment") or {}
 
-        if assignment.get("status", "unknown") == "unknown":
+        if (
+            speaker_embedding is not None
+            and assignment.get(
+                "status",
+                "unknown",
+            ) == "unknown"
+        ):
             embeddings = current.get("embeddings") or {}
 
-            if "wespeaker_raw" in embeddings:
+            if speaker_embedding in embeddings:
                 matches = rank_voice_matches(
                     storage,
                     turn_id,
-                    "wespeaker_raw",
+                    speaker_embedding,
                 )
 
                 voices = {
@@ -1584,7 +1598,8 @@ def turn_review(
 
                 typer.echo()
                 typer.echo(
-                    "speaker evidence [wespeaker_raw]"
+                    "speaker evidence "
+                    f"[{speaker_embedding}]"
                 )
                 typer.echo(
                     format_voice_matches(
