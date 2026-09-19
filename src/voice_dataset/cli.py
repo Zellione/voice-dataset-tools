@@ -1526,12 +1526,13 @@ def turn_review(
         min=0.0,
         help="Context padding in seconds.",
     ),
-    speaker_embedding: str | None = typer.Option(
+    speaker_embedding: list[str] | None = typer.Option(
         None,
         "--speaker-embedding",
         help=(
             "Turn embedding name used to show "
-            "speaker similarity evidence."
+            "speaker similarity evidence. "
+            "May be specified multiple times."
         ),
     ),
 ):
@@ -1576,7 +1577,7 @@ def turn_review(
         assignment = current.get("assignment") or {}
 
         if (
-            speaker_embedding is not None
+            speaker_embedding
             and assignment.get(
                 "status",
                 "unknown",
@@ -1584,22 +1585,25 @@ def turn_review(
         ):
             embeddings = current.get("embeddings") or {}
 
-            if speaker_embedding in embeddings:
+            voices = {
+                voice["id"]: voice
+                for voice in storage.voices.load()
+            }
+
+            for embedding_name in speaker_embedding:
+                if embedding_name not in embeddings:
+                    continue
+
                 matches = rank_voice_matches(
                     storage,
                     turn_id,
-                    speaker_embedding,
+                    embedding_name,
                 )
-
-                voices = {
-                    voice["id"]: voice
-                    for voice in storage.voices.load()
-                }
 
                 typer.echo()
                 typer.echo(
                     "speaker evidence "
-                    f"[{speaker_embedding}]"
+                    f"[{embedding_name}]"
                 )
                 typer.echo(
                     format_voice_matches(
