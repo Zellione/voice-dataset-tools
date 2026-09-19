@@ -1,4 +1,5 @@
 from __future__ import annotations
+from pathlib import Path
 
 from typing import Any
 
@@ -661,7 +662,61 @@ def split_turn(
 
             seen_regions[region_id] = turn.get("id")
 
+    old_representations = original.get(
+        "representations",
+        {},
+    )
+
+    if not isinstance(old_representations, dict):
+        raise ValueError(
+            f"{turn_id}: representations must be a dict"
+        )
+
+    stale_paths: list[Path] = []
+
+    for name, representation in (
+        old_representations.items()
+    ):
+        if not isinstance(representation, dict):
+            raise ValueError(
+                f"{turn_id}/{name}: invalid representation"
+            )
+
+        relative_path = representation.get("path")
+
+        if not isinstance(relative_path, str):
+            raise ValueError(
+                f"{turn_id}/{name}: "
+                "representation has invalid path"
+            )
+
+        candidate = (
+            storage.root / relative_path
+        ).resolve()
+
+        turn_directory = (
+            storage.root
+            / "turns"
+            / turn_id
+        ).resolve()
+
+        try:
+            candidate.relative_to(turn_directory)
+        except ValueError as exc:
+            raise ValueError(
+                f"{turn_id}/{name}: "
+                "representation path escapes "
+                "turn directory"
+            ) from exc
+
+        stale_paths.append(candidate)
+
     storage.turns.replace(final_turns)
+
+    for stale_path in stale_paths:
+        stale_path.unlink(
+            missing_ok=True
+        )
 
     stored_left = storage.get_turn(turn_id)
     stored_right = storage.get_turn(new_turn_id)
