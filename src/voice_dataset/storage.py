@@ -226,6 +226,18 @@ class DatasetStorage:
             turn_id,
         )
 
+
+    def update_turn(
+        self,
+        turn_id: str,
+        update_fn,
+    ) -> dict[str, Any]:
+        return self.turns.update(
+            turn_id,
+            update_fn,
+        )
+
+
     def get_voice(
         self,
         voice_id: str,

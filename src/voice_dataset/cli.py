@@ -4,7 +4,10 @@ import typer
 
 from .cuda import preload_cuda_libraries
 from .media import probe_audio_streams
-from .representations import materialize_regions
+from .representations import (
+    materialize_regions,
+    materialize_turns,
+)
 from .reconciliation import create_turn_from_regions
 from .storage import DatasetStorage
 from .voices import (
@@ -706,6 +709,71 @@ def region_list(
             f"{region['detector']}  "
             f"{label}"
         )
+
+
+@turn_app.command("materialize-audio")
+def turn_materialize_audio(
+    source_id: str = typer.Option(
+        ...,
+        help="Source ID whose turns should be materialized.",
+    ),
+    source: Path = typer.Option(
+        ...,
+        help="Timeline-aligned audio source.",
+    ),
+    name: str = typer.Option(
+        ...,
+        help="Representation name, e.g. raw or speech.",
+    ),
+    kind: str = typer.Option(
+        ...,
+        help="Representation kind, e.g. center or separated-speech.",
+    ),
+    purpose: list[str] = typer.Option(
+        ...,
+        help=(
+            "Purpose of this representation. "
+            "May be specified multiple times."
+        ),
+    ),
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Materialize audio representations for speech turns."""
+
+    storage = storage_for(dataset)
+
+    try:
+        result = materialize_turns(
+            storage=storage,
+            source_id=source_id,
+            source=source,
+            representation_name=name,
+            kind=kind,
+            purposes=purpose,
+        )
+    except (
+        ValueError,
+        KeyError,
+        RuntimeError,
+        OSError,
+    ) as exc:
+        typer.echo(
+            f"Turn materialization failed: {exc}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"Created {result.created} turn "
+        f"audio representations."
+    )
+    typer.echo(
+        f"Skipped {result.skipped} existing "
+        f"turn audio representations."
+    )
 
 
 @turn_app.command("create-from-regions")

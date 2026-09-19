@@ -19,6 +19,12 @@ class MaterializeRegionsResult:
     skipped: int
 
 
+@dataclass
+class MaterializeTurnsResult:
+    created: int
+    skipped: int
+
+
 def probe_representation_source(
     source: Path,
 ) -> tuple[int, int]:
@@ -371,6 +377,325 @@ def materialize_regions(
         created += 1
 
     return MaterializeRegionsResult(
+        created=created,
+        skipped=skipped,
+    )
+
+
+def materialize_turn_audio(
+    storage: DatasetStorage,
+    turn_id: str,
+    source: Path,
+    representation_name: str,
+    kind: str,
+    purposes: list[str],
+    sample_rate: int | None = None,
+    channels: int | None = None,
+) -> AudioRepresentation:
+    source = source.resolve()
+
+    if not source.is_file():
+        raise ValueError(
+            f"Audio source does not exist: {source}"
+        )
+
+    if (
+        sample_rate is None
+        or channels is None
+    ):
+        (
+            detected_sample_rate,
+            detected_channels,
+        ) = probe_representation_source(
+            source
+        )
+
+        if sample_rate is None:
+            sample_rate = detected_sample_rate
+
+        if channels is None:
+            channels = detected_channels
+
+    turn = storage.get_turn(turn_id)
+
+    if turn is None:
+        raise KeyError(
+            f"Turn does not exist: {turn_id}"
+        )
+
+    representations = turn.get(
+        "representations",
+        {},
+    )
+
+    if not isinstance(
+        representations,
+        dict,
+    ):
+        raise ValueError(
+            f"Invalid representations for {turn_id}"
+        )
+
+    existing = representations.get(
+        representation_name
+    )
+
+    if existing is not None:
+        raise ValueError(
+            f"Representation already exists: "
+            f"{turn_id}/{representation_name}"
+        )
+
+    start = turn.get("source_start")
+    end = turn.get("source_end")
+
+    if not isinstance(
+        start,
+        (int, float),
+    ):
+        raise ValueError(
+            f"Invalid source_start for {turn_id}"
+        )
+
+    if not isinstance(
+        end,
+        (int, float),
+    ):
+        raise ValueError(
+            f"Invalid source_end for {turn_id}"
+        )
+
+    if start < 0 or end <= start:
+        raise ValueError(
+            f"Invalid source range for {turn_id}: "
+            f"{start}-{end}"
+        )
+
+    relative_path = (
+        Path("turns")
+        / turn_id
+        / f"{representation_name}.wav"
+    )
+
+    destination = (
+        storage.root
+        / relative_path
+    )
+
+    temporary = destination.with_name(
+        f".{destination.name}.tmp.wav"
+    )
+
+    if destination.exists():
+        raise ValueError(
+            f"Representation file already exists: "
+            f"{destination}"
+        )
+
+    temporary.unlink(
+        missing_ok=True
+    )
+
+    try:
+        extract_audio_region(
+            source=source,
+            destination=temporary,
+            start=float(start),
+            end=float(end),
+        )
+
+        os.replace(
+            temporary,
+            destination,
+        )
+
+        representation = AudioRepresentation(
+            path=relative_path.as_posix(),
+            kind=kind,
+            sample_rate=sample_rate,
+            channels=channels,
+            purposes=list(purposes),
+            metadata={
+                "source": str(source),
+            },
+        )
+
+        def update(
+            record: dict[str, Any],
+        ) -> dict[str, Any]:
+            current = record.get(
+                "representations"
+            )
+
+            if not isinstance(
+                current,
+                dict,
+            ):
+                raise ValueError(
+                    f"Invalid representations "
+                    f"for {turn_id}"
+                )
+
+            if representation_name in current:
+                raise ValueError(
+                    f"Representation already exists: "
+                    f"{turn_id}/"
+                    f"{representation_name}"
+                )
+
+            current[
+                representation_name
+            ] = representation.to_dict()
+
+            return record
+
+        storage.update_turn(
+            turn_id,
+            update,
+        )
+
+    except Exception:
+        temporary.unlink(
+            missing_ok=True
+        )
+
+        destination.unlink(
+            missing_ok=True
+        )
+
+        raise
+
+    return representation
+
+
+def materialize_turns(
+    storage: DatasetStorage,
+    source_id: str,
+    source: Path,
+    representation_name: str,
+    kind: str,
+    purposes: list[str],
+) -> MaterializeTurnsResult:
+    source = source.resolve()
+
+    if not source.is_file():
+        raise ValueError(
+            f"Audio source does not exist: {source}"
+        )
+
+    (
+        sample_rate,
+        channels,
+    ) = probe_representation_source(
+        source
+    )
+
+    turns = storage.turns.load()
+
+    created = 0
+    skipped = 0
+
+    for turn in turns:
+        if turn.get("source_id") != source_id:
+            continue
+
+        turn_id = turn.get("id")
+
+        if not isinstance(
+            turn_id,
+            str,
+        ) or not turn_id:
+            raise ValueError(
+                "Turn has invalid id"
+            )
+
+        representations = turn.get(
+            "representations"
+        )
+
+        if not isinstance(
+            representations,
+            dict,
+        ):
+            raise ValueError(
+                f"Invalid representations "
+                f"for {turn_id}"
+            )
+
+        existing = representations.get(
+            representation_name
+        )
+
+        expected_relative_path = (
+            Path("turns")
+            / turn_id
+            / f"{representation_name}.wav"
+        )
+
+        expected_destination = (
+            storage.root
+            / expected_relative_path
+        )
+
+        if existing is not None:
+            if not isinstance(
+                existing,
+                dict,
+            ):
+                raise ValueError(
+                    f"Invalid representation "
+                    f"{turn_id}/"
+                    f"{representation_name}"
+                )
+
+            existing_path = existing.get(
+                "path"
+            )
+
+            if (
+                existing_path
+                != expected_relative_path.as_posix()
+            ):
+                raise ValueError(
+                    f"Unexpected representation path "
+                    f"for {turn_id}/"
+                    f"{representation_name}: "
+                    f"{existing_path}"
+                )
+
+            if not expected_destination.is_file():
+                raise ValueError(
+                    f"Representation metadata exists "
+                    f"but file is missing: "
+                    f"{expected_destination}"
+                )
+
+            skipped += 1
+            continue
+
+        if expected_destination.exists():
+            raise ValueError(
+                f"Representation file exists "
+                f"without metadata: "
+                f"{expected_destination}"
+            )
+
+        materialize_turn_audio(
+            storage=storage,
+            turn_id=turn_id,
+            source=source,
+            representation_name=(
+                representation_name
+            ),
+            kind=kind,
+            purposes=purposes,
+            sample_rate=sample_rate,
+            channels=channels,
+        )
+
+        created += 1
+
+    return MaterializeTurnsResult(
         created=created,
         skipped=skipped,
     )
