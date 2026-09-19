@@ -12,6 +12,7 @@ from .reconciliation import (
     create_turn_from_regions,
     effective_region_reconciliation,
     reject_region,
+    split_turn,
 )
 from .storage import DatasetStorage
 from .voices import (
@@ -1067,6 +1068,74 @@ def turn_create_from_regions(
     typer.echo(
         f"  transcript: "
         f"{turn.get('transcript') or '-'}"
+    )
+
+
+@turn_app.command("split")
+
+def turn_split(
+    turn_id: str,
+    after_region: str = typer.Option(
+        ...,
+        "--after",
+        help=(
+            "Split after this candidate region. "
+            "The original turn ID is retained "
+            "for the left side."
+        ),
+    ),
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Split one reconciled speech turn into two turns."""
+
+    storage = storage_for(dataset)
+
+    try:
+        left, right = split_turn(
+            storage,
+            turn_id,
+            after_region_id=after_region,
+        )
+
+    except (
+        ValueError,
+        KeyError,
+        RuntimeError,
+        OSError,
+    ) as exc:
+        typer.echo(
+            f"Turn split failed: {exc}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"Split {turn_id}"
+    )
+
+    typer.echo(
+        f"  left:   {left['id']}  "
+        + ", ".join(left["source_regions"])
+    )
+
+    typer.echo(
+        f"          "
+        f"{left['source_start']:.6f}-"
+        f"{left['source_end']:.6f}"
+    )
+
+    typer.echo(
+        f"  right:  {right['id']}  "
+        + ", ".join(right["source_regions"])
+    )
+
+    typer.echo(
+        f"          "
+        f"{right['source_start']:.6f}-"
+        f"{right['source_end']:.6f}"
     )
 
 

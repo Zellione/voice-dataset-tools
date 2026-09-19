@@ -458,3 +458,217 @@ def create_turn_from_regions(
         )
 
     return stored
+
+
+def split_turn(
+    storage: DatasetStorage,
+    turn_id: str,
+    *,
+    after_region_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    turns = storage.turns.load()
+
+    matches = [
+        (index, turn)
+        for index, turn in enumerate(turns)
+        if turn.get("id") == turn_id
+    ]
+
+    if not matches:
+        raise KeyError(
+            f"Turn does not exist: {turn_id}"
+        )
+
+    if len(matches) > 1:
+        raise RuntimeError(
+            f"Duplicate turn id: {turn_id}"
+        )
+
+    turn_index, original = matches[0]
+
+    source_regions = original.get("source_regions")
+
+    if not isinstance(source_regions, list):
+        raise ValueError(
+            f"{turn_id}: source_regions must be a list"
+        )
+
+    if len(source_regions) < 2:
+        raise ValueError(
+            "A turn must contain at least two regions "
+            "to be split"
+        )
+
+    if after_region_id not in source_regions:
+        raise ValueError(
+            f"{after_region_id} does not belong to "
+            f"{turn_id}"
+        )
+
+    split_index = (
+        source_regions.index(after_region_id) + 1
+    )
+
+    if split_index >= len(source_regions):
+        raise ValueError(
+            "Cannot split after the final region "
+            f"of {turn_id}"
+        )
+
+    left_ids = source_regions[:split_index]
+    right_ids = source_regions[split_index:]
+
+    regions: dict[str, dict[str, Any]] = {}
+
+    for region_id in source_regions:
+        region = storage.get_region(region_id)
+
+        if region is None:
+            raise KeyError(
+                "Candidate region does not exist: "
+                f"{region_id}"
+            )
+
+        regions[region_id] = region
+
+    source_id = original.get("source_id")
+
+    if not isinstance(source_id, str):
+        raise ValueError(
+            f"{turn_id}: invalid source_id"
+        )
+
+    for region_id in source_regions:
+        region = regions[region_id]
+
+        if region.get("source_id") != source_id:
+            raise ValueError(
+                f"{region_id}: source does not match "
+                f"{turn_id}"
+            )
+
+        effective = effective_region_reconciliation(
+            storage,
+            region,
+        )
+
+        if (
+            effective["status"] != "reconciled"
+            or effective["turn_id"] != turn_id
+        ):
+            raise ValueError(
+                f"{region_id} is not exclusively "
+                f"reconciled to {turn_id}"
+            )
+
+    def bounds(
+        region_ids: list[str],
+    ) -> tuple[float, float]:
+        first = regions[region_ids[0]]
+        last = regions[region_ids[-1]]
+
+        start = first.get("source_start")
+        end = last.get("source_end")
+
+        if not isinstance(start, (int, float)):
+            raise ValueError(
+                f"{first['id']}: invalid source_start"
+            )
+
+        if not isinstance(end, (int, float)):
+            raise ValueError(
+                f"{last['id']}: invalid source_end"
+            )
+
+        if end <= start:
+            raise ValueError(
+                "Invalid split turn source range"
+            )
+
+        return float(start), float(end)
+
+    left_start, left_end = bounds(left_ids)
+    right_start, right_end = bounds(right_ids)
+
+    new_turn_id = storage.next_turn_id()
+
+    def fresh_turn(
+        *,
+        record_id: str,
+        region_ids: list[str],
+        start: float,
+        end: float,
+        split_side: str,
+    ) -> dict[str, Any]:
+        return TurnRecord(
+            id=record_id,
+            source_id=source_id,
+            source_start=start,
+            source_end=end,
+            source_regions=region_ids,
+            metadata={
+                "creation": {
+                    "method": "manual_split",
+                    "source_turn_id": turn_id,
+                    "split_after_region":
+                        after_region_id,
+                    "split_side": split_side,
+                }
+            },
+        ).to_dict()
+
+    left = fresh_turn(
+        record_id=turn_id,
+        region_ids=left_ids,
+        start=left_start,
+        end=left_end,
+        split_side="left",
+    )
+
+    right = fresh_turn(
+        record_id=new_turn_id,
+        region_ids=right_ids,
+        start=right_start,
+        end=right_end,
+        split_side="right",
+    )
+
+    final_turns = turns.copy()
+    final_turns[turn_index] = left
+    final_turns.append(right)
+
+    seen_regions: dict[str, str] = {}
+
+    for turn in final_turns:
+        candidate_ids = turn.get("source_regions")
+
+        if not isinstance(candidate_ids, list):
+            raise ValueError(
+                f"{turn.get('id', '<unknown>')}: "
+                "source_regions must be a list"
+            )
+
+        for region_id in candidate_ids:
+            previous = seen_regions.get(region_id)
+
+            if previous is not None:
+                raise ValueError(
+                    "Candidate region would belong "
+                    "to multiple turns: "
+                    f"{region_id} -> "
+                    f"{previous}, {turn.get('id')}"
+                )
+
+            seen_regions[region_id] = turn.get("id")
+
+    storage.turns.replace(final_turns)
+
+    stored_left = storage.get_turn(turn_id)
+    stored_right = storage.get_turn(new_turn_id)
+
+    if stored_left is None or stored_right is None:
+        raise RuntimeError(
+            "Failed to read back split turns"
+        )
+
+    return stored_left, stored_right
