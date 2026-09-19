@@ -21,6 +21,7 @@ class AudioRepresentation:
 
     sample_rate: int | None = None
     channels: int | None = None
+    duration: float | None = None
 
     # Timestamp in the original SourceRecord.media_path that
     # corresponds to 0.0 seconds in this representation.

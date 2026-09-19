@@ -8,7 +8,10 @@ from .schema import (
     TurnRecord,
 )
 from .storage import DatasetStorage
-
+from .boundary_evidence import (
+    calculate_boundary_evidence,
+    find_boundary_representation,
+)
 
 def region_reconciliation(
     region: dict[str, Any],
@@ -429,6 +432,47 @@ def create_turn_from_regions(
 
         return existing
 
+    boundary_evidence = None
+
+    source = storage.get_source(source_id)
+
+    if source is not None:
+        boundary_representation = (
+            find_boundary_representation(source)
+        )
+
+        if boundary_representation is not None:
+            (
+                boundary_representation_name,
+                representation,
+            ) = boundary_representation
+
+            boundary_evidence = (
+                calculate_boundary_evidence(
+                    representation_name=(
+                        boundary_representation_name
+                    ),
+                    representation=representation,
+                    start=float(
+                        ordered[0]["source_start"]
+                    ),
+                    end=float(
+                        ordered[-1]["source_end"]
+                    ),
+                )
+            )
+
+    metadata = {
+        "creation": {
+            "method": "manual_reconciliation",
+        }
+    }
+
+    if boundary_evidence is not None:
+        metadata["boundary_evidence"] = (
+            boundary_evidence
+        )
+
     turn = TurnRecord(
         id=storage.next_turn_id(),
         source_id=source_id,
@@ -441,11 +485,7 @@ def create_turn_from_regions(
         source_regions=ordered_ids,
         language=language,
         transcript=transcript,
-        metadata={
-            "creation": {
-                "method": "manual_reconciliation",
-            }
-        },
+        metadata=metadata,
     )
 
     storage.add_turn(turn)

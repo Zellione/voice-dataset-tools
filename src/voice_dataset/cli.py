@@ -52,6 +52,9 @@ from .transcripts import (
     import_transcripts,
     load_transcript_output,
 )
+from .boundary_evidence import (
+    refresh_source_boundary_evidence,
+)
 
 preload_cuda_libraries()
 
@@ -711,6 +714,60 @@ def region_import_embeddings(
     typer.echo(
         f"  name:           "
         f"{name}"
+    )
+
+
+@turn_app.command(
+    "refresh-boundary-evidence"
+)
+def turn_refresh_boundary_evidence(
+    source_id: str,
+    dataset: Path = typer.Option(
+        ...,
+        help="Dataset root directory.",
+    ),
+):
+    """Refresh boundary evidence for all turns of a source."""
+
+    storage = storage_for(dataset)
+
+    try:
+        turns = refresh_source_boundary_evidence(
+            storage,
+            source_id,
+        )
+    except (KeyError, ValueError) as exc:
+        raise typer.BadParameter(
+            str(exc)
+        ) from exc
+
+    near_start = sum(
+        bool(
+            turn.get("metadata", {})
+            .get("boundary_evidence", {})
+            .get("near_source_start")
+        )
+        for turn in turns
+    )
+
+    near_end = sum(
+        bool(
+            turn.get("metadata", {})
+            .get("boundary_evidence", {})
+            .get("near_source_end")
+        )
+        for turn in turns
+    )
+
+    typer.echo(
+        f"Updated {len(turns)} turns "
+        f"for {source_id}"
+    )
+    typer.echo(
+        f"  near source start: {near_start}"
+    )
+    typer.echo(
+        f"  near source end:   {near_end}"
     )
 
 

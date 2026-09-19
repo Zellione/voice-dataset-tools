@@ -23,6 +23,7 @@ def test_add_and_get_source(
                 kind="center",
                 sample_rate=48000,
                 channels=1,
+                duration=60.0,
                 media_start=600.0,
                 purposes=[
                     "speaker_embedding",
@@ -83,6 +84,13 @@ def test_add_and_get_source(
     assert (
         result["representations"]["center"]["channel_mode"]
         == "center"
+    )
+
+    assert (
+        result["representations"]["center"][
+            "duration"
+        ]
+        == 60.0
     )
 
     assert (

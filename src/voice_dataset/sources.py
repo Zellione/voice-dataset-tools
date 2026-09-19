@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+
+import soundfile as sf
 
 from .storage import DatasetStorage
 
@@ -9,6 +12,47 @@ SUPPORTED_CHANNEL_MODES = {
     "mono",
     "center",
 }
+
+
+def probe_audio_representation(
+    path: Path,
+) -> dict[str, Any]:
+    path = path.resolve()
+
+    if not path.is_file():
+        raise ValueError(
+            "Representation audio does not exist: "
+            f"{path}"
+        )
+
+    with sf.SoundFile(path) as audio:
+        sample_rate = int(audio.samplerate)
+        channels = int(audio.channels)
+        frames = int(audio.frames)
+
+    if sample_rate <= 0:
+        raise ValueError(
+            "Representation has invalid sample rate: "
+            f"{path}"
+        )
+
+    if channels <= 0:
+        raise ValueError(
+            "Representation has invalid channel count: "
+            f"{path}"
+        )
+
+    if frames < 0:
+        raise ValueError(
+            "Representation has invalid frame count: "
+            f"{path}"
+        )
+
+    return {
+        "sample_rate": sample_rate,
+        "channels": channels,
+        "duration": frames / sample_rate,
+    }
 
 
 def set_representation_provenance(
@@ -38,29 +82,74 @@ def set_representation_provenance(
             f"{channel_mode}"
         )
 
+    source = storage.get_source(source_id)
+
+    if source is None:
+        raise KeyError(
+            f"Source does not exist: {source_id}"
+        )
+
+    representations = source.get(
+        "representations",
+        {},
+    )
+
+    if representation_name not in representations:
+        raise KeyError(
+            "Source representation does not exist: "
+            f"{representation_name}"
+        )
+
+    representation = representations[
+        representation_name
+    ]
+
+    path_value = representation.get("path")
+
+    if not isinstance(path_value, str) or not path_value:
+        raise ValueError(
+            "Source representation has no valid path: "
+            f"{representation_name}"
+        )
+
+    representation_path = Path(path_value)
+
+    if not representation_path.is_absolute():
+        representation_path = (
+            storage.root / representation_path
+        )
+
+    audio_info = probe_audio_representation(
+        representation_path
+    )
+
     def update(
-        source: dict[str, Any],
+        record: dict[str, Any],
     ) -> dict[str, Any]:
-        representations = source.get(
+        current_representations = record.get(
             "representations",
             {},
         )
 
-        if representation_name not in representations:
-            raise KeyError(
-                "Source representation does not exist: "
-                f"{representation_name}"
-            )
-
-        representation = representations[
+        current = current_representations[
             representation_name
         ]
 
-        representation["media_start"] = media_start
-        representation["stream_index"] = stream_index
-        representation["channel_mode"] = channel_mode
+        current["media_start"] = media_start
+        current["stream_index"] = stream_index
+        current["channel_mode"] = channel_mode
 
-        return source
+        current["sample_rate"] = audio_info[
+            "sample_rate"
+        ]
+        current["channels"] = audio_info[
+            "channels"
+        ]
+        current["duration"] = audio_info[
+            "duration"
+        ]
+
+        return record
 
     return storage.update_source(
         source_id,
