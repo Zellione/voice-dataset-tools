@@ -2,6 +2,7 @@ from pathlib import Path
 
 from voice_dataset.reviewer import (
     format_turn,
+    format_voice_matches,
     sorted_turns,
     turn_assignment_text,
     turn_boundary_review_status,
@@ -10,6 +11,10 @@ from voice_dataset.reviewer import (
 )
 from voice_dataset.schema import TurnRecord
 from voice_dataset.storage import DatasetStorage
+from voice_dataset.speaker_similarity import (
+    VoiceMatch,
+    VoiceTurnMatch,
+)
 
 
 def add_turn(
@@ -315,3 +320,66 @@ def test_format_turn_shows_boundary_status():
         "boundary:        near start -> unknown"
         in result
     )
+
+
+def test_format_voice_matches():
+    matches = [
+        VoiceMatch(
+            voice_id="voice_001",
+            matches=(
+                VoiceTurnMatch(
+                    turn_id="turn_000009",
+                    similarity=0.3734,
+                ),
+                VoiceTurnMatch(
+                    turn_id="turn_000008",
+                    similarity=0.3566,
+                ),
+                VoiceTurnMatch(
+                    turn_id="turn_000003",
+                    similarity=0.3378,
+                ),
+                VoiceTurnMatch(
+                    turn_id="turn_000005",
+                    similarity=0.1512,
+                ),
+            ),
+        ),
+        VoiceMatch(
+            voice_id="voice_002",
+            matches=(
+                VoiceTurnMatch(
+                    turn_id="turn_000012",
+                    similarity=0.4781,
+                ),
+                VoiceTurnMatch(
+                    turn_id="turn_000010",
+                    similarity=0.4432,
+                ),
+            ),
+        ),
+    ]
+
+    voices = {
+        "voice_001": {
+            "character": "Jayce",
+        },
+        "voice_002": {
+            "character": "Viktor",
+        },
+    }
+
+    result = format_voice_matches(
+        matches,
+        voices,
+    )
+
+    assert result == "\n".join([
+        "voice_001 (Jayce)",
+        "  turn_000009: 0.373",
+        "  turn_000008: 0.357",
+        "  turn_000003: 0.338",
+        "voice_002 (Viktor)",
+        "  turn_000012: 0.478",
+        "  turn_000010: 0.443",
+    ])

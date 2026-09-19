@@ -31,6 +31,7 @@ from .review import (
 )
 from .reviewer import (
     format_turn,
+    format_voice_matches,
     raw_representation,
     reviewer_help,
     sorted_turns,
@@ -61,6 +62,7 @@ from .boundary_evidence import (
 preload_cuda_libraries()
 
 from .ingest import ingest as ingest_source
+from .speaker_similarity import rank_voice_matches
 
 
 app = typer.Typer(
@@ -1563,6 +1565,33 @@ def turn_review(
                 total=len(turns),
             )
         )
+        assignment = current.get("assignment") or {}
+
+        if assignment.get("status", "unknown") == "unknown":
+            embeddings = current.get("embeddings") or {}
+
+            if "wespeaker_raw" in embeddings:
+                matches = rank_voice_matches(
+                    storage,
+                    turn_id,
+                    "wespeaker_raw",
+                )
+
+                voices = {
+                    voice["id"]: voice
+                    for voice in storage.voices.load()
+                }
+
+                typer.echo()
+                typer.echo(
+                    "speaker evidence [wespeaker_raw]"
+                )
+                typer.echo(
+                    format_voice_matches(
+                        matches,
+                        voices,
+                    )
+                )
         typer.echo()
 
         try:

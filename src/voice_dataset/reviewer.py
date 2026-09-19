@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .storage import DatasetStorage
+from .speaker_similarity import VoiceMatch
 
 
 def sorted_turns(
@@ -105,6 +106,51 @@ def turn_representation_names(
     )
 
     return list(representations)
+
+
+def format_voice_matches(
+    matches: list[VoiceMatch],
+    voices: dict[str, dict[str, Any]],
+    *,
+    limit_per_voice: int = 3,
+) -> str:
+    if limit_per_voice <= 0:
+        raise ValueError(
+            "limit_per_voice must be positive"
+        )
+
+    if not matches:
+        return "No speaker evidence."
+
+    lines: list[str] = []
+
+    for voice_match in matches:
+        voice = voices.get(voice_match.voice_id)
+        character = (
+            voice.get("character")
+            if voice is not None
+            else None
+        )
+
+        if character:
+            heading = (
+                f"{voice_match.voice_id} "
+                f"({character})"
+            )
+        else:
+            heading = voice_match.voice_id
+
+        lines.append(heading)
+
+        for match in voice_match.matches[
+            :limit_per_voice
+        ]:
+            lines.append(
+                f"  {match.turn_id}: "
+                f"{match.similarity:.3f}"
+            )
+
+    return "\n".join(lines)
 
 
 def format_turn(
