@@ -167,6 +167,9 @@ class TurnRecord:
 
     source_start: float
     source_end: float
+    source_regions: list[str] = field(
+        default_factory=list
+    )
 
     language: str | None = None
     transcript: str | None = None
@@ -205,6 +208,8 @@ class TurnRecord:
 
             "source_start": self.source_start,
             "source_end": self.source_end,
+            "source_regions":
+                self.source_regions,
 
             "language": self.language,
             "transcript": self.transcript,

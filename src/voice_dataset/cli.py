@@ -5,6 +5,7 @@ import typer
 from .cuda import preload_cuda_libraries
 from .media import probe_audio_streams
 from .representations import materialize_regions
+from .reconciliation import create_turn_from_regions
 from .storage import DatasetStorage
 from .voices import (
     assign_turn,
@@ -705,6 +706,99 @@ def region_list(
             f"{region['detector']}  "
             f"{label}"
         )
+
+
+@turn_app.command("create-from-regions")
+def turn_create_from_regions(
+    region_ids: list[str] = typer.Argument(
+        ...,
+        help=(
+            "Candidate region IDs in source "
+            "timeline order."
+        ),
+    ),
+    transcript: str | None = typer.Option(
+        None,
+        help="Optional reconciled transcript.",
+    ),
+    language: str | None = typer.Option(
+        None,
+        help="Optional language, e.g. en or de.",
+    ),
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Create a speech turn from candidate regions."""
+
+    storage = storage_for(dataset)
+
+    try:
+        before_ids = {
+            turn.get("id")
+            for turn in storage.turns.load()
+        }
+
+        turn = create_turn_from_regions(
+            storage,
+            region_ids,
+            transcript=transcript,
+            language=language,
+        )
+
+    except (
+        ValueError,
+        KeyError,
+        RuntimeError,
+        OSError,
+    ) as exc:
+        typer.echo(
+            f"Reconciliation failed: {exc}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    created = (
+        turn["id"] not in before_ids
+    )
+
+    action = (
+        "Created"
+        if created
+        else "Existing"
+    )
+
+    typer.echo(
+        f"{action} {turn['id']}"
+    )
+
+    typer.echo(
+        "  regions:    "
+        + ", ".join(
+            turn["source_regions"]
+        )
+    )
+
+    typer.echo(
+        f"  source:     {turn['source_id']}"
+    )
+
+    typer.echo(
+        f"  range:      "
+        f"{turn['source_start']:.6f}-"
+        f"{turn['source_end']:.6f}"
+    )
+
+    typer.echo(
+        f"  language:   "
+        f"{turn.get('language') or '-'}"
+    )
+
+    typer.echo(
+        f"  transcript: "
+        f"{turn.get('transcript') or '-'}"
+    )
 
 
 @turn_app.command("list")
