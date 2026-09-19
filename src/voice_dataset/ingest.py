@@ -151,7 +151,7 @@ def ingest(
         normalize_media(
             source=source,
             destination=work_audio,
-            audio_stream=audio_stream,
+            stream_index=selected_stream.index,
             channel_mode=channel_mode,
             start=start,
             duration=duration,

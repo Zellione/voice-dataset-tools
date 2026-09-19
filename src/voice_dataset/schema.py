@@ -22,6 +22,26 @@ class AudioRepresentation:
     sample_rate: int | None = None
     channels: int | None = None
 
+    # Timestamp in the original SourceRecord.media_path that
+    # corresponds to 0.0 seconds in this representation.
+    #
+    # None means that no mapping to the original media
+    # timeline is known.
+    media_start: float | None = None
+    # Global stream index in the original media container,
+    # as reported by ffprobe.
+    #
+    # None means that the representation is not directly
+    # mapped to a known media stream.
+    stream_index: int | None = None
+
+    # Channel extraction applied when deriving this
+    # representation from the original media.
+    #
+    # Currently supported source extraction modes are
+    # "mono" and "center".
+    channel_mode: str | None = None
+
     purposes: list[str] = field(
         default_factory=list
     )

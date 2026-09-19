@@ -90,7 +90,7 @@ def choose_channel_mode(
 def normalize_media(
     source: Path,
     destination: Path,
-    audio_stream: int = 0,
+    stream_index: int,
     channel_mode: str = "mono",
     start: float | None = None,
     duration: float | None = None,
@@ -124,7 +124,7 @@ def normalize_media(
     
     command.extend([
         "-map",
-        f"0:a:{audio_stream}",
+        f"0:{stream_index}",
         "-vn",
     ])
 
@@ -220,3 +220,31 @@ def extract_audio_region(
             f"{start:.3f}-{end:.3f} "
             f"from {source}"
         ) from exc
+
+def extract_media_audio_region(
+    source: Path,
+    destination: Path,
+    start: float,
+    end: float,
+    *,
+    stream_index: int,
+    channel_mode: str = "mono",
+) -> None:
+    if start < 0:
+        raise ValueError(
+            "Region start must not be negative"
+        )
+
+    if end <= start:
+        raise ValueError(
+            "Region end must be greater than start"
+        )
+
+    normalize_media(
+        source=source,
+        destination=destination,
+        stream_index=stream_index,
+        channel_mode=channel_mode,
+        start=start,
+        duration=end - start,
+    )

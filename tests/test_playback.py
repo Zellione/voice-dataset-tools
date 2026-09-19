@@ -315,3 +315,122 @@ def test_play_turn_context_rejects_source_mismatch(
             source,
             turn,
         )
+
+
+def test_has_original_media_mapping():
+    representation = {
+        "media_start": 600.0,
+        "stream_index": 1,
+        "channel_mode": "center",
+    }
+
+    assert playback.has_original_media_mapping(
+        representation
+    )
+
+
+def test_has_original_media_mapping_requires_all_fields():
+    representation = {
+        "media_start": 600.0,
+        "stream_index": 1,
+    }
+
+    assert not playback.has_original_media_mapping(
+        representation
+    )
+
+
+def test_play_turn_context_uses_original_media(
+    tmp_path: Path,
+    monkeypatch,
+):
+    media_path = tmp_path / "episode.mkv"
+    media_path.touch()
+
+    source = {
+        "id": "source-1",
+        "media_path": str(media_path),
+        "representations": {
+            "center": {
+                "path": "/unused/center.wav",
+                "kind": "center",
+                "media_start": 600.0,
+                "stream_index": 1,
+                "channel_mode": "center",
+                "purposes": ["context"],
+            },
+        },
+    }
+
+    turn = {
+        "id": "turn-1",
+        "source_id": "source-1",
+        "source_start": 0.031,
+        "source_end": 1.027,
+    }
+
+    extraction = {}
+    played = []
+
+    def fake_extract_media_audio_region(
+        source,
+        destination,
+        start,
+        end,
+        *,
+        stream_index,
+        channel_mode,
+    ):
+        extraction.update(
+            {
+                "source": source,
+                "destination": destination,
+                "start": start,
+                "end": end,
+                "stream_index": stream_index,
+                "channel_mode": channel_mode,
+            }
+        )
+        destination.touch()
+
+    def fake_play_file(path):
+        played.append(path)
+
+    monkeypatch.setattr(
+        playback,
+        "extract_media_audio_region",
+        fake_extract_media_audio_region,
+    )
+    monkeypatch.setattr(
+        playback,
+        "play_file",
+        fake_play_file,
+    )
+
+    name, path, start, end = (
+        playback.play_turn_context(
+            source,
+            turn,
+            padding=2.0,
+        )
+    )
+
+    assert name == "original-media"
+    assert path == media_path.resolve()
+
+    assert start == pytest.approx(598.031)
+    assert end == pytest.approx(603.027)
+
+    assert extraction["source"] == (
+        media_path.resolve()
+    )
+    assert extraction["start"] == pytest.approx(
+        598.031
+    )
+    assert extraction["end"] == pytest.approx(
+        603.027
+    )
+    assert extraction["stream_index"] == 1
+    assert extraction["channel_mode"] == "center"
+
+    assert len(played) == 1

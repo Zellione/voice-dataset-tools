@@ -1,8 +1,12 @@
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 import sounddevice as sd
 import soundfile as sf
+
+from .media import extract_media_audio_region
+from .timeline import representation_time_to_media_time
 
 
 def representation_path(
@@ -63,6 +67,34 @@ def external_representation_path(
     return path
 
 
+def source_media_path(
+    source: dict[str, Any],
+) -> Path:
+    raw_path = source.get("media_path")
+
+    if not raw_path:
+        raise ValueError(
+            "Source has no media_path"
+        )
+
+    path = Path(raw_path).expanduser()
+
+    if not path.is_absolute():
+        raise ValueError(
+            "Source media_path must be absolute: "
+            f"{raw_path}"
+        )
+
+    path = path.resolve()
+
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Source media does not exist: {path}"
+        )
+
+    return path
+
+
 def preferred_review_representation(
     turn: dict[str, Any],
 ) -> tuple[str, dict[str, Any]]:
@@ -106,6 +138,16 @@ def preferred_context_representation(
     raise ValueError(
         f"Source {source.get('id', '<unknown>')} has no "
         "audio representation for context"
+    )
+
+
+def has_original_media_mapping(
+    representation: dict[str, Any],
+) -> bool:
+    return (
+        representation.get("media_start") is not None
+        and representation.get("stream_index") is not None
+        and representation.get("channel_mode") is not None
     )
 
 
@@ -233,6 +275,82 @@ def play_preferred_review_audio(
     return name, path
 
 
+def play_original_media_context(
+    source: dict[str, Any],
+    representation: dict[str, Any],
+    source_start: float,
+    source_end: float,
+    *,
+    padding: float,
+    blocking: bool,
+) -> tuple[Path, float, float]:
+    media_path = source_media_path(source)
+
+    media_start = representation_time_to_media_time(
+        representation,
+        source_start,
+    )
+    media_end = representation_time_to_media_time(
+        representation,
+        source_end,
+    )
+
+    requested_start = max(
+        0.0,
+        media_start - padding,
+    )
+    requested_end = media_end + padding
+
+    stream_index = representation.get(
+        "stream_index"
+    )
+    channel_mode = representation.get(
+        "channel_mode"
+    )
+
+    if not isinstance(stream_index, int):
+        raise ValueError(
+            "Context representation has invalid "
+            "stream_index"
+        )
+
+    if channel_mode not in {
+        "mono",
+        "center",
+    }:
+        raise ValueError(
+            "Context representation has invalid "
+            "channel_mode"
+        )
+
+    with TemporaryDirectory(
+        prefix="voice-dataset-context-"
+    ) as temp_dir:
+        context_path = (
+            Path(temp_dir) / "context.wav"
+        )
+
+        extract_media_audio_region(
+            source=media_path,
+            destination=context_path,
+            start=requested_start,
+            end=requested_end,
+            stream_index=stream_index,
+            channel_mode=channel_mode,
+        )
+
+        play_file(context_path)
+
+        if blocking:
+            wait()
+
+    return (
+        media_path,
+        requested_start,
+        requested_end,
+    )
+
+
 def play_turn_context(
     source: dict[str, Any],
     turn: dict[str, Any],
@@ -274,6 +392,9 @@ def play_turn_context(
             "Turn has invalid source_end"
         )
 
+    source_start = float(source_start)
+    source_end = float(source_end)
+
     if source_end <= source_start:
         raise ValueError(
             "Turn source_end must be after "
@@ -284,16 +405,39 @@ def play_turn_context(
         preferred_context_representation(source)
     )
 
+    if has_original_media_mapping(
+        representation
+    ):
+        (
+            media_path,
+            actual_start,
+            actual_end,
+        ) = play_original_media_context(
+            source,
+            representation,
+            source_start,
+            source_end,
+            padding=padding,
+            blocking=blocking,
+        )
+
+        return (
+            "original-media",
+            media_path,
+            actual_start,
+            actual_end,
+        )
+
     path = external_representation_path(
         representation
     )
 
     requested_start = max(
         0.0,
-        float(source_start) - padding,
+        source_start - padding,
     )
     requested_end = (
-        float(source_end) + padding
+        source_end + padding
     )
 
     actual_start, actual_end = (

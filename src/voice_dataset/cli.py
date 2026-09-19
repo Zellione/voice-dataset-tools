@@ -16,6 +16,23 @@ from .reconciliation import (
     split_turn,
 )
 from .storage import DatasetStorage
+from .sources import set_representation_provenance
+from .playback import (
+    play_preferred_review_audio,
+    play_representation,
+    play_turn_context,
+    stop,
+)
+from .review import (
+    mark_turn_pending,
+    mark_turn_reviewed,
+)
+from .reviewer import (
+    format_turn,
+    raw_representation,
+    reviewer_help,
+    sorted_turns,
+)
 from .voices import (
     assign_turn,
     create_voice,
@@ -46,6 +63,11 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
+source_app = typer.Typer(
+    help="Manage dataset sources and their representations.",
+    no_args_is_help=True,
+)
+
 voice_app = typer.Typer(
     help="Manage persistent voice profiles.",
     no_args_is_help=True,
@@ -59,6 +81,11 @@ region_app = typer.Typer(
 turn_app = typer.Typer(
     help="Manage speech turns and voice assignments.",
     no_args_is_help=True,
+)
+
+app.add_typer(
+    source_app,
+    name="source",
 )
 
 app.add_typer(
@@ -87,6 +114,75 @@ def storage_for(dataset: Path) -> DatasetStorage:
 def main():
     """Build and manage speech datasets for voice model training."""
     pass
+
+
+@source_app.command(
+    "set-provenance"
+)
+def source_set_provenance(
+    source_id: str,
+    representation: str,
+    dataset: Path = typer.Option(
+        ...,
+        help="Dataset root directory.",
+    ),
+    media_start: float = typer.Option(
+        ...,
+        help=(
+            "Timestamp in the original media that "
+            "corresponds to 0.0 seconds in the "
+            "representation."
+        ),
+    ),
+    stream_index: int = typer.Option(
+        ...,
+        help=(
+            "Global media container stream index "
+            "reported by ffprobe."
+        ),
+    ),
+    channel_mode: str = typer.Option(
+        ...,
+        help="Source channel extraction mode.",
+    ),
+):
+    """Set original-media provenance for a source representation."""
+
+    storage = storage_for(dataset)
+
+    try:
+        updated = set_representation_provenance(
+            storage,
+            source_id,
+            representation,
+            media_start=media_start,
+            stream_index=stream_index,
+            channel_mode=channel_mode,
+        )
+    except (KeyError, ValueError) as exc:
+        raise typer.BadParameter(
+            str(exc)
+        ) from exc
+
+    provenance = updated[
+        "representations"
+    ][representation]
+
+    typer.echo(
+        f"Updated {source_id}:{representation}"
+    )
+    typer.echo(
+        f"  media_start:  "
+        f"{provenance['media_start']}"
+    )
+    typer.echo(
+        f"  stream_index: "
+        f"{provenance['stream_index']}"
+    )
+    typer.echo(
+        f"  channel_mode: "
+        f"{provenance['channel_mode']}"
+    )
 
 
 @app.command()
@@ -1352,3 +1448,262 @@ def turn_ignore(
 
 if __name__ == "__main__":
     app()
+
+
+@turn_app.command("review")
+def turn_review(
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+    source_id: str | None = typer.Option(
+        None,
+        help="Review only turns from this source.",
+    ),
+    context_padding: float = typer.Option(
+        2.0,
+        min=0.0,
+        help="Context padding in seconds.",
+    ),
+):
+    """Interactively review reconciled speech turns."""
+
+    storage = storage_for(dataset)
+    dataset = storage.root
+
+    turns = sorted_turns(
+        storage,
+        source_id=source_id,
+    )
+
+    if not turns:
+        typer.echo("No speech turns to review.")
+        return
+
+    index = 0
+
+    typer.echo(reviewer_help())
+
+    while True:
+        turn_id = turns[index]["id"]
+
+        current = storage.get_turn(turn_id)
+
+        if current is None:
+            typer.echo(
+                f"Turn disappeared: {turn_id}",
+                err=True,
+            )
+            raise typer.Exit(1)
+
+        typer.echo()
+        typer.echo(
+            format_turn(
+                current,
+                position=index + 1,
+                total=len(turns),
+            )
+        )
+        typer.echo()
+
+        try:
+            command = input(
+                "[p/r/c/s/t/l/v/u/i/a/x/n/b/h/q] > "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            stop()
+            typer.echo()
+            return
+
+        try:
+            if command == "p":
+                name, path = (
+                    play_preferred_review_audio(
+                        dataset,
+                        current,
+                    )
+                )
+
+                typer.echo(
+                    f"Playing {name}: {path}"
+                )
+
+            elif command == "r":
+                representation = (
+                    raw_representation(current)
+                )
+
+                path = play_representation(
+                    dataset,
+                    representation,
+                )
+
+                typer.echo(
+                    f"Playing raw: {path}"
+                )
+
+            elif command == "c":
+                source = storage.get_source(
+                    current["source_id"]
+                )
+
+                if source is None:
+                    raise KeyError(
+                        "Source does not exist: "
+                        f"{current['source_id']}"
+                    )
+
+                (
+                    name,
+                    path,
+                    start,
+                    end,
+                ) = play_turn_context(
+                    source,
+                    current,
+                    padding=context_padding,
+                )
+
+                typer.echo(
+                    f"Playing context {name}: "
+                    f"{start:.3f}-{end:.3f} "
+                    f"from {path}"
+                )
+
+            elif command == "s":
+                stop()
+                typer.echo("Playback stopped.")
+
+            elif command == "t":
+                value = input(
+                    "Transcript "
+                    "(blank = cancel): "
+                )
+
+                if value.strip():
+                    edit_turn(
+                        storage,
+                        turn_id,
+                        transcript=value,
+                    )
+
+            elif command == "l":
+                value = input(
+                    "Language "
+                    "(blank = cancel): "
+                )
+
+                if value.strip():
+                    edit_turn(
+                        storage,
+                        turn_id,
+                        language=value,
+                    )
+
+            elif command == "v":
+                voices = storage.voices.load()
+
+                if not voices:
+                    typer.echo(
+                        "No voice profiles."
+                    )
+                    continue
+
+                typer.echo("Voices:")
+
+                for voice in voices:
+                    ignored = (
+                        " [ignored]"
+                        if voice.get("ignored")
+                        else ""
+                    )
+
+                    typer.echo(
+                        f"  {voice['id']}  "
+                        f"{voice.get('character') or '-'}"
+                        f"{ignored}"
+                    )
+
+                voice_id = input(
+                    "Voice ID "
+                    "(blank = cancel): "
+                ).strip()
+
+                if voice_id:
+                    assign_turn(
+                        storage,
+                        turn_id,
+                        voice_id,
+                    )
+
+            elif command == "u":
+                mark_turn_unknown(
+                    storage,
+                    turn_id,
+                )
+
+            elif command == "i":
+                ignore_turn(
+                    storage,
+                    turn_id,
+                )
+
+            elif command == "a":
+                mark_turn_reviewed(
+                    storage,
+                    turn_id,
+                )
+
+            elif command == "x":
+                mark_turn_pending(
+                    storage,
+                    turn_id,
+                )
+
+            elif command == "n":
+                stop()
+
+                if index < len(turns) - 1:
+                    index += 1
+                else:
+                    typer.echo(
+                        "Already at final turn."
+                    )
+
+            elif command == "b":
+                stop()
+
+                if index > 0:
+                    index -= 1
+                else:
+                    typer.echo(
+                        "Already at first turn."
+                    )
+
+            elif command == "h":
+                typer.echo(
+                    reviewer_help()
+                )
+
+            elif command == "q":
+                stop()
+                return
+
+            elif not command:
+                continue
+
+            else:
+                typer.echo(
+                    f"Unknown command: {command}"
+                )
+
+        except (
+            ValueError,
+            KeyError,
+            RuntimeError,
+            OSError,
+        ) as exc:
+            typer.echo(
+                f"Action failed: {exc}",
+                err=True,
+            )

@@ -204,6 +204,16 @@ class DatasetStorage:
             source_id,
         )
 
+    def update_source(
+        self,
+        source_id: str,
+        update_fn,
+    ) -> dict[str, Any]:
+        return self.sources.update(
+            source_id,
+            update_fn,
+        )
+
     def next_turn_id(self) -> str:
         return self._next_id(
             self.turns.load(),
