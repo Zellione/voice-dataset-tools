@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from .schema import (
     CandidateRegion,
+    SourceRecord,
     TurnRecord,
     VoiceProfile,
 )
@@ -165,6 +166,10 @@ class DatasetStorage:
     def __init__(self, root: Path):
         self.root = root
 
+        self.sources = JsonlStore(
+            root / "sources.jsonl"
+        )
+
         self.regions = JsonlStore(
             root / "regions.jsonl"
         )
@@ -175,6 +180,28 @@ class DatasetStorage:
 
         self.voices = JsonlStore(
             root / "voices.jsonl"
+        )
+
+    def add_source(
+        self,
+        source: SourceRecord,
+    ) -> None:
+        self._ensure_unique(
+            self.sources,
+            source.id,
+        )
+
+        self.sources.append(
+            source.to_dict()
+        )
+
+    def get_source(
+        self,
+        source_id: str,
+    ) -> dict[str, Any] | None:
+        return self._get(
+            self.sources,
+            source_id,
         )
 
     def next_turn_id(self) -> str:

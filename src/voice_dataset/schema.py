@@ -120,6 +120,39 @@ class RegionReconciliation:
 
 
 @dataclass
+class SourceRecord:
+    id: str
+
+    media_path: str | None = None
+
+    representations: dict[
+        str,
+        AudioRepresentation,
+    ] = field(default_factory=dict)
+
+    metadata: dict[str, Any] = field(
+        default_factory=dict
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            "schema_version": 1,
+            "record_type": "source",
+
+            "id": self.id,
+            "media_path": self.media_path,
+
+            "representations": {
+                name: representation.to_dict()
+                for name, representation
+                in self.representations.items()
+            },
+
+            "metadata": self.metadata,
+        }
+
+
+@dataclass
 class CandidateRegion:
     id: str
     source_id: str
