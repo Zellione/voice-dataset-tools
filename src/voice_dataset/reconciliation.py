@@ -267,6 +267,40 @@ def reject_region(
     )
 
 
+def _boundary_evidence_for_turn(
+    storage: DatasetStorage,
+    *,
+    source_id: str,
+    start: float,
+    end: float,
+) -> dict[str, Any] | None:
+    source = storage.get_source(source_id)
+
+    if source is None:
+        return None
+
+    boundary_representation = (
+        find_boundary_representation(source)
+    )
+
+    if boundary_representation is None:
+        return None
+
+    (
+        boundary_representation_name,
+        representation,
+    ) = boundary_representation
+
+    return calculate_boundary_evidence(
+        representation_name=(
+            boundary_representation_name
+        ),
+        representation=representation,
+        start=start,
+        end=end,
+    )
+
+
 def create_turn_from_regions(
     storage: DatasetStorage,
     region_ids: list[str],
@@ -432,35 +466,16 @@ def create_turn_from_regions(
 
         return existing
 
-    boundary_evidence = None
-
-    source = storage.get_source(source_id)
-
-    if source is not None:
-        boundary_representation = (
-            find_boundary_representation(source)
-        )
-
-        if boundary_representation is not None:
-            (
-                boundary_representation_name,
-                representation,
-            ) = boundary_representation
-
-            boundary_evidence = (
-                calculate_boundary_evidence(
-                    representation_name=(
-                        boundary_representation_name
-                    ),
-                    representation=representation,
-                    start=float(
-                        ordered[0]["source_start"]
-                    ),
-                    end=float(
-                        ordered[-1]["source_end"]
-                    ),
-                )
-            )
+    boundary_evidence = _boundary_evidence_for_turn(
+        storage,
+        source_id=source_id,
+        start=float(
+            ordered[0]["source_start"]
+        ),
+        end=float(
+            ordered[-1]["source_end"]
+        ),
+    )
 
     metadata = {
         "creation": {
@@ -688,21 +703,37 @@ def split_turn(
         end: float,
         split_side: str,
     ) -> dict[str, Any]:
+        metadata = {
+            "creation": {
+                "method": "manual_split",
+                "source_turn_id": turn_id,
+                "split_after_region":
+                    after_region_id,
+                "split_side": split_side,
+            }
+        }
+
+        boundary_evidence = (
+            _boundary_evidence_for_turn(
+                storage,
+                source_id=source_id,
+                start=start,
+                end=end,
+            )
+        )
+
+        if boundary_evidence is not None:
+            metadata["boundary_evidence"] = (
+                boundary_evidence
+            )
+
         return TurnRecord(
             id=record_id,
             source_id=source_id,
             source_start=start,
             source_end=end,
             source_regions=region_ids,
-            metadata={
-                "creation": {
-                    "method": "manual_split",
-                    "source_turn_id": turn_id,
-                    "split_after_region":
-                        after_region_id,
-                    "split_side": split_side,
-                }
-            },
+            metadata=metadata,
         ).to_dict()
 
     left = fresh_turn(
