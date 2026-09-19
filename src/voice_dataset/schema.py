@@ -68,6 +68,57 @@ class TranscriptHypothesis:
         return asdict(self)
 
 
+ReconciliationStatus = Literal[
+    "pending",
+    "rejected",
+]
+
+RejectionReason = Literal[
+    "non_speech",
+    "unusable",
+    "duplicate",
+    "other",
+]
+
+REJECTION_REASONS: frozenset[str] = frozenset({
+    "non_speech",
+    "unusable",
+    "duplicate",
+    "other",
+})
+
+
+@dataclass
+class RegionReconciliation:
+    status: ReconciliationStatus = "pending"
+
+    reason: RejectionReason | None = None
+    notes: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.status == "rejected":
+            if self.reason is None:
+                raise ValueError(
+                    "rejected reconciliation "
+                    "requires reason"
+                )
+
+            if self.reason not in REJECTION_REASONS:
+                raise ValueError(
+                    "invalid rejection reason: "
+                    f"{self.reason!r}"
+                )
+
+        elif self.reason is not None:
+            raise ValueError(
+                "pending reconciliation "
+                "must not contain reason"
+            )
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
 @dataclass
 class CandidateRegion:
     id: str
@@ -94,13 +145,17 @@ class CandidateRegion:
         EmbeddingReference,
     ] = field(default_factory=dict)
 
+    reconciliation: RegionReconciliation = field(
+        default_factory=RegionReconciliation
+    )
+
     metadata: dict[str, Any] = field(
         default_factory=dict
     )
 
     def to_dict(self) -> dict:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "record_type": "candidate_region",
 
             "id": self.id,
@@ -129,6 +184,9 @@ class CandidateRegion:
                 for name, embedding
                 in self.embeddings.items()
             },
+
+            "reconciliation":
+                self.reconciliation.to_dict(),
 
             "metadata": self.metadata,
         }

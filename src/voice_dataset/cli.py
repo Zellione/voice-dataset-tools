@@ -8,7 +8,11 @@ from .representations import (
     materialize_regions,
     materialize_turns,
 )
-from .reconciliation import create_turn_from_regions
+from .reconciliation import (
+    create_turn_from_regions,
+    effective_region_reconciliation,
+    reject_region,
+)
 from .storage import DatasetStorage
 from .voices import (
     assign_turn,
@@ -775,6 +779,69 @@ def region_materialize_audio(
     )
 
 
+@region_app.command("reject")
+def region_reject(
+    region_id: str = typer.Argument(
+        ...,
+        help="Candidate region ID to reject.",
+    ),
+    reason: str = typer.Option(
+        ...,
+        help=(
+            "Rejection reason: non_speech, "
+            "unusable, duplicate, or other."
+        ),
+    ),
+    notes: str | None = typer.Option(
+        None,
+        help="Optional notes about the rejection.",
+    ),
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Reject a candidate region."""
+
+    storage = storage_for(dataset)
+
+    try:
+        region = reject_region(
+            storage,
+            region_id,
+            reason=reason,
+            notes=notes,
+        )
+
+    except (
+        ValueError,
+        KeyError,
+        RuntimeError,
+        OSError,
+    ) as exc:
+        typer.echo(
+            f"Region rejection failed: {exc}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    reconciliation = (
+        effective_region_reconciliation(
+            storage,
+            region,
+        )
+    )
+
+    typer.echo(f"Rejected {region_id}")
+    typer.echo(
+        f"  reason: {reconciliation['reason']}"
+    )
+    typer.echo(
+        f"  notes:  "
+        f"{reconciliation['notes'] or '-'}"
+    )
+
+
 @region_app.command("list")
 def region_list(
     dataset: Path = typer.Option(
@@ -799,12 +866,49 @@ def region_list(
             or "-"
         )
 
+        try:
+            reconciliation = (
+                effective_region_reconciliation(
+                    storage,
+                    region,
+                )
+            )
+        except (
+            ValueError,
+            RuntimeError,
+        ) as exc:
+            typer.echo(
+                "Failed to determine reconciliation "
+                f"for {region.get('id', '<unknown>')}: "
+                f"{exc}",
+                err=True,
+            )
+            raise typer.Exit(1)
+
+        status = reconciliation["status"]
+
+        if status == "reconciled":
+            reconciliation_text = (
+                "reconciled -> "
+                f"{reconciliation['turn_id']}"
+            )
+
+        elif status == "rejected":
+            reconciliation_text = (
+                "rejected "
+                f"({reconciliation['reason']})"
+            )
+
+        else:
+            reconciliation_text = "pending"
+
         typer.echo(
             f"{region['id']}  "
             f"{region['source_start']:.3f}-"
             f"{region['source_end']:.3f}  "
             f"{region['detector']}  "
-            f"{label}"
+            f"{label}  "
+            f"{reconciliation_text}"
         )
 
 
