@@ -1238,6 +1238,11 @@ def turn_list(
             else status
         )
 
+        language = (
+            turn.get("language")
+            or "-"
+        )
+
         transcript = (
             turn.get("transcript")
             or ""
@@ -1247,6 +1252,7 @@ def turn_list(
             f"{turn['id']}  "
             f"{turn['source_start']:.3f}-"
             f"{turn['source_end']:.3f}  "
+            f"{language}  "
             f"{assignment_text}  "
             f"{transcript}"
         )
