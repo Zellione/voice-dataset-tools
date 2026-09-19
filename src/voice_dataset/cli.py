@@ -10,6 +10,7 @@ from .representations import (
 )
 from .reconciliation import (
     create_turn_from_regions,
+    edit_turn,
     effective_region_reconciliation,
     reject_region,
     split_turn,
@@ -1065,6 +1066,66 @@ def turn_create_from_regions(
         f"{turn.get('language') or '-'}"
     )
 
+    typer.echo(
+        f"  transcript: "
+        f"{turn.get('transcript') or '-'}"
+    )
+
+
+@turn_app.command("edit")
+def turn_edit(
+    turn_id: str,
+    transcript: str | None = typer.Option(
+        None,
+        help="Set the reconciled transcript.",
+    ),
+    language: str | None = typer.Option(
+        None,
+        help="Set the language, e.g. en or de.",
+    ),
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Edit transcript and language metadata for a speech turn."""
+
+    if transcript is None and language is None:
+        typer.echo(
+            "Nothing to edit: specify --transcript "
+            "and/or --language.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    storage = storage_for(dataset)
+
+    try:
+        turn = edit_turn(
+            storage,
+            turn_id,
+            transcript=transcript,
+            language=language,
+        )
+    except (
+        ValueError,
+        KeyError,
+        RuntimeError,
+        OSError,
+    ) as exc:
+        typer.echo(
+            f"Turn edit failed: {exc}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"Updated {turn_id}"
+    )
+    typer.echo(
+        f"  language:   "
+        f"{turn.get('language') or '-'}"
+    )
     typer.echo(
         f"  transcript: "
         f"{turn.get('transcript') or '-'}"

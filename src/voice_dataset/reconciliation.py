@@ -461,6 +461,53 @@ def create_turn_from_regions(
     return stored
 
 
+def edit_turn(
+    storage: DatasetStorage,
+    turn_id: str,
+    *,
+    transcript: str | None = None,
+    language: str | None = None,
+) -> dict[str, Any]:
+    turn = storage.get_turn(turn_id)
+
+    if turn is None:
+        raise KeyError(
+            f"Unknown turn: {turn_id}"
+        )
+
+    if transcript is not None:
+        transcript = transcript.strip()
+
+        if not transcript:
+            raise ValueError(
+                "Transcript must not be empty"
+            )
+
+    if language is not None:
+        language = language.strip()
+
+        if not language:
+            raise ValueError(
+                "Language must not be empty"
+            )
+
+    def update(
+        record: dict[str, Any],
+    ) -> dict[str, Any]:
+        if transcript is not None:
+            record["transcript"] = transcript
+
+        if language is not None:
+            record["language"] = language
+
+        return record
+
+    return storage.update_turn(
+        turn_id,
+        update,
+    )
+
+
 def split_turn(
     storage: DatasetStorage,
     turn_id: str,
