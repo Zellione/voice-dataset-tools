@@ -40,3 +40,7 @@ models/
 # OS
 .DS_Store
 Thumbs.db
+
+# Bootstrapped external tool runtimes.
+# Everything here must be reproducible via scripts/bootstrap.
+tools/
