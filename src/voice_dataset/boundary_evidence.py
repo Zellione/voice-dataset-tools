@@ -228,6 +228,14 @@ def refresh_turn_boundary_evidence(
             {},
         )
 
+        previous_evidence = metadata.get(
+            "boundary_evidence"
+        )
+
+        evidence_changed = (
+            previous_evidence != evidence
+        )
+
         if evidence is None:
             metadata.pop(
                 "boundary_evidence",
@@ -237,6 +245,12 @@ def refresh_turn_boundary_evidence(
             metadata["boundary_evidence"] = (
                 evidence
             )
+
+        if evidence_changed:
+            review = record.get("review")
+
+            if isinstance(review, dict):
+                review.pop("boundary", None)
 
         return record
 

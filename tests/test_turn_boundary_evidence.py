@@ -276,6 +276,135 @@ def test_refresh_turn_boundary_evidence_is_idempotent(
     assert second_bytes == first_bytes
 
 
+def test_refresh_preserves_boundary_review_when_evidence_unchanged(
+    tmp_path: Path,
+) -> None:
+    storage = make_storage(tmp_path)
+    add_existing_turn(storage)
+
+    refresh_turn_boundary_evidence(
+        storage,
+        "turn_000001",
+    )
+
+    def add_boundary_review(
+        record: dict,
+    ) -> dict:
+        record["review"]["boundary"] = {
+            "status": "clipped",
+        }
+        return record
+
+    storage.update_turn(
+        "turn_000001",
+        add_boundary_review,
+    )
+
+    turn = refresh_turn_boundary_evidence(
+        storage,
+        "turn_000001",
+    )
+
+    assert turn["review"]["boundary"] == {
+        "status": "clipped",
+    }
+
+
+def test_refresh_removes_boundary_review_when_evidence_removed(
+    tmp_path: Path,
+) -> None:
+    storage = make_storage(
+        tmp_path,
+        with_boundary_representation=False,
+    )
+    add_existing_turn(storage)
+
+    def add_stale_boundary_state(
+        record: dict,
+    ) -> dict:
+        record["metadata"]["boundary_evidence"] = {
+            "representation": "old",
+            "margin": 0.1,
+            "near_source_start": True,
+            "near_source_end": False,
+        }
+        record["review"]["boundary"] = {
+            "status": "clipped",
+        }
+        return record
+
+    storage.update_turn(
+        "turn_000001",
+        add_stale_boundary_state,
+    )
+
+    turn = refresh_turn_boundary_evidence(
+        storage,
+        "turn_000001",
+    )
+
+    assert (
+        "boundary_evidence"
+        not in turn["metadata"]
+    )
+    assert "boundary" not in turn["review"]
+
+
+def test_refresh_removes_boundary_review_when_evidence_changes(
+    tmp_path: Path,
+) -> None:
+    storage = make_storage(tmp_path)
+    add_existing_turn(storage)
+
+    turn = refresh_turn_boundary_evidence(
+        storage,
+        "turn_000001",
+    )
+
+    assert turn["metadata"]["boundary_evidence"][
+        "near_source_start"
+    ] is True
+
+    def add_boundary_review(
+        record: dict,
+    ) -> dict:
+        record["review"]["boundary"] = {
+            "status": "complete",
+        }
+        return record
+
+    storage.update_turn(
+        "turn_000001",
+        add_boundary_review,
+    )
+
+    def move_turn_into_source(
+        record: dict,
+    ) -> dict:
+        record["source_start"] = 10.0
+        record["source_end"] = 12.0
+        return record
+
+    storage.update_turn(
+        "turn_000001",
+        move_turn_into_source,
+    )
+
+    turn = refresh_turn_boundary_evidence(
+        storage,
+        "turn_000001",
+    )
+
+    assert turn["metadata"]["boundary_evidence"] == {
+        "representation": "center",
+        "margin": 0.1,
+        "near_source_start": False,
+        "near_source_end": False,
+    }
+
+    assert "boundary" not in turn["review"]
+
+
 def test_refresh_removes_stale_boundary_evidence(
     tmp_path: Path,
 ) -> None:
