@@ -19,6 +19,18 @@ class SpeakerSimilarity:
     similarity: float
 
 
+@dataclass(frozen=True)
+class VoiceTurnMatch:
+    turn_id: str
+    similarity: float
+
+
+@dataclass(frozen=True)
+class VoiceMatch:
+    voice_id: str
+    matches: tuple[VoiceTurnMatch, ...]
+
+
 def _embedding_reference(
     turn: dict[str, Any],
     embedding_name: str,
@@ -247,3 +259,109 @@ def compare_turn_embeddings(
         dimension=left_dimension,
         similarity=similarity,
     )
+
+
+def rank_voice_matches(
+    storage: DatasetStorage,
+    turn_id: str,
+    embedding_name: str,
+) -> list[VoiceMatch]:
+    query_turn = storage.get_turn(turn_id)
+
+    if query_turn is None:
+        raise KeyError(
+            f"Unknown turn: {turn_id}"
+        )
+
+    # Validate the query embedding up front.
+    load_turn_embedding(
+        storage,
+        turn_id,
+        embedding_name,
+    )
+
+    matches_by_voice: dict[
+        str,
+        list[VoiceTurnMatch],
+    ] = {}
+
+    for reference_turn in storage.turns.load():
+        reference_turn_id = reference_turn.get("id")
+
+        if reference_turn_id == turn_id:
+            continue
+
+        assignment = reference_turn.get("assignment")
+
+        if not isinstance(assignment, dict):
+            continue
+
+        if assignment.get("status") != "assigned":
+            continue
+
+        if assignment.get("method") != "manual":
+            continue
+
+        voice_id = assignment.get("voice_id")
+
+        if not isinstance(voice_id, str) or not voice_id:
+            continue
+
+        voice = storage.get_voice(voice_id)
+
+        if voice is None:
+            raise ValueError(
+                f"{reference_turn_id}: assigned voice "
+                f"does not exist: {voice_id}"
+            )
+
+        if voice.get("ignored") is True:
+            continue
+
+        embeddings = reference_turn.get("embeddings")
+
+        if not isinstance(embeddings, dict):
+            continue
+
+        if embedding_name not in embeddings:
+            continue
+
+        similarity = compare_turn_embeddings(
+            storage,
+            turn_id,
+            reference_turn_id,
+            embedding_name,
+        )
+
+        matches_by_voice.setdefault(
+            voice_id,
+            [],
+        ).append(
+            VoiceTurnMatch(
+                turn_id=reference_turn_id,
+                similarity=similarity.similarity,
+            )
+        )
+
+    results = []
+
+    for voice_id, matches in matches_by_voice.items():
+        matches.sort(
+            key=lambda match: (
+                -match.similarity,
+                match.turn_id,
+            )
+        )
+
+        results.append(
+            VoiceMatch(
+                voice_id=voice_id,
+                matches=tuple(matches),
+            )
+        )
+
+    results.sort(
+        key=lambda match: match.voice_id
+    )
+
+    return results
