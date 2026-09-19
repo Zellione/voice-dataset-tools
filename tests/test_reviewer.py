@@ -376,10 +376,10 @@ def test_format_voice_matches():
 
     assert result == "\n".join([
         "voice_001 (Jayce)",
-        "  turn_000009: 0.373",
-        "  turn_000008: 0.357",
-        "  turn_000003: 0.338",
+        "  turn_000009: 37.3% similarity",
+        "  turn_000008: 35.7% similarity",
+        "  turn_000003: 33.8% similarity",
         "voice_002 (Viktor)",
-        "  turn_000012: 0.478",
-        "  turn_000010: 0.443",
+        "  turn_000012: 47.8% similarity",
+        "  turn_000010: 44.3% similarity",
     ])

@@ -147,7 +147,7 @@ def format_voice_matches(
         ]:
             lines.append(
                 f"  {match.turn_id}: "
-                f"{match.similarity:.3f}"
+                f"{match.similarity * 100:.1f}% similarity"
             )
 
     return "\n".join(lines)
