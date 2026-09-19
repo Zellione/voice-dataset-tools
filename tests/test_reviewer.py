@@ -4,6 +4,8 @@ from voice_dataset.reviewer import (
     format_turn,
     sorted_turns,
     turn_assignment_text,
+    turn_boundary_review_status,
+    turn_boundary_text,
     turn_review_status,
 )
 from voice_dataset.schema import TurnRecord
@@ -205,3 +207,111 @@ def test_raw_representation_missing():
                 "representations": {},
             }
         )
+
+
+def test_turn_boundary_review_status_defaults_unknown():
+    assert (
+        turn_boundary_review_status({})
+        == "unknown"
+    )
+
+
+def test_turn_boundary_text_without_evidence():
+    assert turn_boundary_text({}) == "-"
+
+
+def test_turn_boundary_text_near_start_unknown():
+    turn = {
+        "metadata": {
+            "boundary_evidence": {
+                "representation": "center",
+                "margin": 0.1,
+                "near_source_start": True,
+                "near_source_end": False,
+            },
+        },
+        "review": {
+            "status": "pending",
+        },
+    }
+
+    assert (
+        turn_boundary_text(turn)
+        == "near start -> unknown"
+    )
+
+
+def test_turn_boundary_text_near_end_clipped():
+    turn = {
+        "metadata": {
+            "boundary_evidence": {
+                "representation": "center",
+                "margin": 0.1,
+                "near_source_start": False,
+                "near_source_end": True,
+            },
+        },
+        "review": {
+            "status": "reviewed",
+            "boundary": {
+                "status": "clipped",
+            },
+        },
+    }
+
+    assert (
+        turn_boundary_text(turn)
+        == "near end -> clipped"
+    )
+
+
+def test_turn_boundary_text_near_both_complete():
+    turn = {
+        "metadata": {
+            "boundary_evidence": {
+                "near_source_start": True,
+                "near_source_end": True,
+            },
+        },
+        "review": {
+            "boundary": {
+                "status": "complete",
+            },
+        },
+    }
+
+    assert (
+        turn_boundary_text(turn)
+        == "near start/end -> complete"
+    )
+
+
+def test_format_turn_shows_boundary_status():
+    turn = {
+        "id": "turn_000003",
+        "source_id": "arcane-s01e09-test",
+        "source_start": 0.031,
+        "source_end": 1.027,
+        "metadata": {
+            "boundary_evidence": {
+                "representation": "center",
+                "margin": 0.1,
+                "near_source_start": True,
+                "near_source_end": False,
+            },
+        },
+        "review": {
+            "status": "pending",
+        },
+    }
+
+    result = format_turn(
+        turn,
+        position=1,
+        total=12,
+    )
+
+    assert (
+        "boundary:        near start -> unknown"
+        in result
+    )

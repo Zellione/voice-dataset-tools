@@ -24,6 +24,8 @@ from .playback import (
     stop,
 )
 from .review import (
+    mark_turn_boundary_clipped,
+    mark_turn_boundary_complete,
     mark_turn_pending,
     mark_turn_reviewed,
 )
@@ -1565,7 +1567,7 @@ def turn_review(
 
         try:
             command = input(
-                "[p/r/c/s/t/l/v/u/i/a/x/n/b/h/q] > "
+                "[p/r/c/s/t/l/v/u/i/a/x/k/d/n/b/h/q] > "
             ).strip().lower()
         except (EOFError, KeyboardInterrupt):
             stop()
@@ -1713,6 +1715,18 @@ def turn_review(
 
             elif command == "x":
                 mark_turn_pending(
+                    storage,
+                    turn_id,
+                )
+
+            elif command == "k":
+                mark_turn_boundary_complete(
+                    storage,
+                    turn_id,
+                )
+
+            elif command == "d":
+                mark_turn_boundary_clipped(
                     storage,
                     turn_id,
                 )

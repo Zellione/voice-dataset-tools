@@ -40,6 +40,48 @@ def turn_review_status(
     )
 
 
+def turn_boundary_review_status(
+    turn: dict[str, Any],
+) -> str:
+    review = turn.get("review") or {}
+    boundary = review.get("boundary") or {}
+
+    return str(
+        boundary.get("status") or "unknown"
+    )
+
+
+def turn_boundary_text(
+    turn: dict[str, Any],
+) -> str:
+    metadata = turn.get("metadata") or {}
+    evidence = (
+        metadata.get("boundary_evidence") or {}
+    )
+
+    near_start = bool(
+        evidence.get("near_source_start")
+    )
+    near_end = bool(
+        evidence.get("near_source_end")
+    )
+
+    if not near_start and not near_end:
+        return "-"
+
+    if near_start and near_end:
+        location = "near start/end"
+    elif near_start:
+        location = "near start"
+    else:
+        location = "near end"
+
+    return (
+        f"{location} -> "
+        f"{turn_boundary_review_status(turn)}"
+    )
+
+
 def turn_assignment_text(
     turn: dict[str, Any],
 ) -> str:
@@ -117,6 +159,10 @@ def format_turn(
             f"{turn_review_status(turn)}"
         ),
         (
+            "boundary:        "
+            f"{turn_boundary_text(turn)}"
+        ),
+        (
             "representations: "
             f"{representation_text}"
         ),
@@ -139,6 +185,8 @@ def reviewer_help() -> str:
         "  i  ignore turn",
         "  a  mark reviewed",
         "  x  mark review pending",
+        "  k  mark boundary complete",
+        "  d  mark boundary clipped",
         "  n  next turn",
         "  b  previous turn",
         "  h  show help",
