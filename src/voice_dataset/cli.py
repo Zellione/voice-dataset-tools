@@ -556,6 +556,103 @@ def region_import_embeddings(
             embedding_output
         )
 
+        if output.record_type != "region":
+            raise ValueError(
+                "Embedding output contains "
+                f"{output.record_type} records; "
+                "region records are required"
+            )
+
+        result = import_embeddings(
+            storage,
+            output,
+            name=name,
+        )
+
+    except (
+        ValueError,
+        KeyError,
+        RuntimeError,
+        OSError,
+    ) as exc:
+        typer.echo(
+            f"Import failed: {exc}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"Imported {result.imported} "
+        f"speaker embeddings."
+    )
+
+    typer.echo(
+        f"Skipped {result.skipped} "
+        f"existing speaker embeddings."
+    )
+
+    typer.echo(
+        f"  encoder:        "
+        f"{output.encoder_name}"
+    )
+
+    typer.echo(
+        f"  model:          "
+        f"{output.encoder_model or '-'}"
+    )
+
+    typer.echo(
+        f"  representation: "
+        f"{output.representation}"
+    )
+
+    typer.echo(
+        f"  name:           "
+        f"{name}"
+    )
+
+
+@turn_app.command("import-embeddings")
+def turn_import_embeddings(
+    embedding_output: Path,
+    name: str = typer.Option(
+        ...,
+        help=(
+            "Embedding evidence name, "
+            "e.g. ecapa_raw or wespeaker_raw."
+        ),
+    ),
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Import speaker embeddings for reconciled turns."""
+
+    embedding_output = (
+        embedding_output.resolve()
+    )
+
+    if not embedding_output.is_file():
+        raise typer.BadParameter(
+            "Embedding output does not exist: "
+            f"{embedding_output}"
+        )
+
+    storage = storage_for(dataset)
+
+    try:
+        output = load_embedding_output(
+            embedding_output
+        )
+
+        if output.record_type != "turn":
+            raise ValueError(
+                "Embedding output contains "
+                f"{output.record_type} records; "
+                "turn records are required"
+            )
+
         result = import_embeddings(
             storage,
             output,

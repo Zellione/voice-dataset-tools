@@ -1,14 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
-import math
 import os
 import shutil
 import tempfile
-import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -22,10 +21,12 @@ EMBEDDING_OUTPUT_FORMAT = (
 
 EMBEDDING_OUTPUT_VERSION = 1
 
+RecordType = Literal["region", "turn"]
+
 
 @dataclass
 class ValidatedEmbedding:
-    region_id: str
+    record_id: str
     path: Path
     dimension: int
     metadata: dict[str, Any]
@@ -33,6 +34,7 @@ class ValidatedEmbedding:
 
 @dataclass
 class EmbeddingOutput:
+    record_type: RecordType
     encoder_name: str
     encoder_model: str | None
     representation: str
@@ -76,6 +78,32 @@ def _positive_int(
     return value
 
 
+def _record_type(
+    value: Any,
+) -> RecordType:
+    # Version 1 manifests created before record_type
+    # existed always described candidate regions.
+    if value is None:
+        return "region"
+
+    if value not in ("region", "turn"):
+        raise ValueError(
+            "record_type must be "
+            "'region' or 'turn'"
+        )
+
+    return value
+
+
+def _id_field(
+    record_type: RecordType,
+) -> str:
+    if record_type == "region":
+        return "region_id"
+
+    return "turn_id"
+
+
 def load_embedding_output(
     path: Path,
 ) -> EmbeddingOutput:
@@ -113,6 +141,12 @@ def load_embedding_output(
         raise ValueError(
             "Unsupported embedding output version"
         )
+
+    record_type = _record_type(
+        document.get("record_type")
+    )
+
+    id_field = _id_field(record_type)
 
     encoder = document.get("encoder")
 
@@ -165,7 +199,7 @@ def load_embedding_output(
         ValidatedEmbedding
     ] = []
 
-    seen_regions: set[str] = set()
+    seen_ids: set[str] = set()
 
     for index, item in enumerate(
         raw_embeddings
@@ -176,24 +210,24 @@ def load_embedding_output(
                 f"{index} must be an object"
             )
 
-        region_id = item.get("region_id")
+        record_id = item.get(id_field)
 
         if (
-            not isinstance(region_id, str)
-            or not region_id
+            not isinstance(record_id, str)
+            or not record_id
         ):
             raise ValueError(
                 "embedding item "
-                f"{index} has invalid region_id"
+                f"{index} has invalid {id_field}"
             )
 
-        if region_id in seen_regions:
+        if record_id in seen_ids:
             raise ValueError(
-                "Duplicate embedding region_id: "
-                f"{region_id}"
+                f"Duplicate embedding {id_field}: "
+                f"{record_id}"
             )
 
-        seen_regions.add(region_id)
+        seen_ids.add(record_id)
 
         raw_path = item.get("path")
 
@@ -202,7 +236,7 @@ def load_embedding_output(
             or not raw_path
         ):
             raise ValueError(
-                f"{region_id}: path must be a "
+                f"{record_id}: path must be a "
                 "non-empty string"
             )
 
@@ -220,14 +254,14 @@ def load_embedding_output(
 
         if not embedding_path.is_file():
             raise ValueError(
-                f"{region_id}: embedding file "
+                f"{record_id}: embedding file "
                 f"does not exist: "
                 f"{embedding_path}"
             )
 
         dimension = _positive_int(
             item.get("dimension"),
-            f"{region_id}.dimension",
+            f"{record_id}.dimension",
         )
 
         metadata = item.get(
@@ -237,7 +271,7 @@ def load_embedding_output(
 
         if not isinstance(metadata, dict):
             raise ValueError(
-                f"{region_id}.metadata "
+                f"{record_id}.metadata "
                 "must be an object"
             )
 
@@ -248,19 +282,19 @@ def load_embedding_output(
             )
         except Exception as exc:
             raise ValueError(
-                f"{region_id}: cannot load "
+                f"{record_id}: cannot load "
                 f"embedding: {exc}"
             ) from exc
 
         if vector.ndim != 1:
             raise ValueError(
-                f"{region_id}: embedding must "
+                f"{record_id}: embedding must "
                 "be a 1-D vector"
             )
 
         if vector.shape[0] != dimension:
             raise ValueError(
-                f"{region_id}: declared "
+                f"{record_id}: declared "
                 f"dimension {dimension} does "
                 f"not match vector dimension "
                 f"{vector.shape[0]}"
@@ -271,7 +305,7 @@ def load_embedding_output(
             np.number,
         ):
             raise ValueError(
-                f"{region_id}: embedding must "
+                f"{record_id}: embedding must "
                 "contain numeric values"
             )
 
@@ -279,13 +313,13 @@ def load_embedding_output(
             np.isfinite(vector)
         ):
             raise ValueError(
-                f"{region_id}: embedding contains "
+                f"{record_id}: embedding contains "
                 "non-finite values"
             )
 
         embeddings.append(
             ValidatedEmbedding(
-                region_id=region_id,
+                record_id=record_id,
                 path=embedding_path,
                 dimension=dimension,
                 metadata=metadata,
@@ -293,6 +327,7 @@ def load_embedding_output(
         )
 
     return EmbeddingOutput(
+        record_type=record_type,
         encoder_name=encoder_name,
         encoder_model=encoder_model,
         representation=representation,
@@ -336,6 +371,45 @@ def _expected_reference(
     )
 
 
+def _load_records(
+    storage: DatasetStorage,
+    record_type: RecordType,
+) -> list[dict[str, Any]]:
+    if record_type == "region":
+        return storage.regions.load()
+
+    return storage.turns.load()
+
+
+def _get_record(
+    storage: DatasetStorage,
+    record_type: RecordType,
+    record_id: str,
+) -> dict[str, Any] | None:
+    if record_type == "region":
+        return storage.get_region(record_id)
+
+    return storage.get_turn(record_id)
+
+
+def _update_record(
+    storage: DatasetStorage,
+    record_type: RecordType,
+    record_id: str,
+    update_fn,
+) -> dict[str, Any]:
+    if record_type == "region":
+        return storage.update_region(
+            record_id,
+            update_fn,
+        )
+
+    return storage.update_turn(
+        record_id,
+        update_fn,
+    )
+
+
 def import_embeddings(
     storage: DatasetStorage,
     output: EmbeddingOutput,
@@ -347,46 +421,53 @@ def import_embeddings(
             "non-empty string"
         )
 
-    regions = storage.regions.load()
+    records = _load_records(
+        storage,
+        output.record_type,
+    )
 
-    regions_by_id: dict[
+    records_by_id: dict[
         str,
         dict[str, Any],
     ] = {}
 
-    for region in regions:
-        region_id = region.get("id")
+    for record in records:
+        record_id = record.get("id")
 
         if (
-            not isinstance(region_id, str)
-            or not region_id
+            not isinstance(record_id, str)
+            or not record_id
         ):
             raise ValueError(
-                "Persisted region has invalid id"
+                "Persisted "
+                f"{output.record_type} "
+                "has invalid id"
             )
 
-        if region_id in regions_by_id:
+        if record_id in records_by_id:
             raise ValueError(
-                f"Duplicate region id: "
-                f"{region_id}"
+                f"Duplicate "
+                f"{output.record_type} id: "
+                f"{record_id}"
             )
 
-        regions_by_id[region_id] = region
+        records_by_id[record_id] = record
 
     # Preflight everything before copying or
     # updating dataset metadata.
     for embedding in output.embeddings:
-        region = regions_by_id.get(
-            embedding.region_id
+        record = records_by_id.get(
+            embedding.record_id
         )
 
-        if region is None:
+        if record is None:
             raise ValueError(
                 "Embedding references unknown "
-                f"region: {embedding.region_id}"
+                f"{output.record_type}: "
+                f"{embedding.record_id}"
             )
 
-        representations = region.get(
+        representations = record.get(
             "representations"
         )
 
@@ -395,7 +476,7 @@ def import_embeddings(
             dict,
         ):
             raise ValueError(
-                f"{embedding.region_id}: "
+                f"{embedding.record_id}: "
                 "representations must be "
                 "an object"
             )
@@ -405,12 +486,12 @@ def import_embeddings(
             not in representations
         ):
             raise ValueError(
-                f"{embedding.region_id}: "
+                f"{embedding.record_id}: "
                 "representation does not exist: "
                 f"{output.representation}"
             )
 
-        existing_embeddings = region.get(
+        existing_embeddings = record.get(
             "embeddings"
         )
 
@@ -419,28 +500,37 @@ def import_embeddings(
             dict,
         ):
             raise ValueError(
-                f"{embedding.region_id}: "
+                f"{embedding.record_id}: "
                 "embeddings must be an object"
             )
 
     imported = 0
     skipped = 0
 
+    record_directory = (
+        "regions"
+        if output.record_type == "region"
+        else "turns"
+    )
+
     for embedding in output.embeddings:
-        region = storage.get_region(
-            embedding.region_id
+        record = _get_record(
+            storage,
+            output.record_type,
+            embedding.record_id,
         )
 
-        if region is None:
+        if record is None:
             raise RuntimeError(
-                "Region disappeared during "
-                "embedding import: "
-                f"{embedding.region_id}"
+                f"{output.record_type.capitalize()} "
+                "disappeared during embedding "
+                "import: "
+                f"{embedding.record_id}"
             )
 
         relative_path = (
-            Path("regions")
-            / embedding.region_id
+            Path(record_directory)
+            / embedding.record_id
             / "embeddings"
             / f"{name}.npy"
         )
@@ -456,7 +546,7 @@ def import_embeddings(
             relative_path,
         ).to_dict()
 
-        existing_embeddings = region[
+        existing_embeddings = record[
             "embeddings"
         ]
 
@@ -472,13 +562,13 @@ def import_embeddings(
                 raise ValueError(
                     "Persisted embedding "
                     "reference must be an object: "
-                    f"{embedding.region_id}/{name}"
+                    f"{embedding.record_id}/{name}"
                 )
 
             if existing != expected:
                 raise ValueError(
                     "Embedding evidence conflict: "
-                    f"{embedding.region_id}/{name}"
+                    f"{embedding.record_id}/{name}"
                 )
 
             if not destination.is_file():
@@ -567,7 +657,7 @@ def import_embeddings(
                 if name in current:
                     raise ValueError(
                         "Embedding already exists: "
-                        f"{embedding.region_id}/"
+                        f"{embedding.record_id}/"
                         f"{name}"
                     )
 
@@ -575,8 +665,10 @@ def import_embeddings(
 
                 return record
 
-            storage.update_region(
-                embedding.region_id,
+            _update_record(
+                storage,
+                output.record_type,
+                embedding.record_id,
                 update,
             )
 
