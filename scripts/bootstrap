@@ -12,6 +12,9 @@ TOOLS_DIR="${ROOT_DIR}/tools"
 ECAPA_DIR="${TOOLS_DIR}/ecapa"
 ECAPA_VENV="${ECAPA_DIR}/.venv"
 
+PYANNOTE_DIR="${TOOLS_DIR}/pyannote"
+PYANNOTE_VENV="${PYANNOTE_DIR}/.venv"
+
 mkdir -p "${TOOLS_DIR}"
 
 echo "voice-dataset-tools bootstrap"
@@ -49,6 +52,36 @@ uv pip install \
     "numpy==2.5.3" \
     "soundfile==0.14.0" \
     "huggingface-hub==1.32.0"
+
+echo
+echo "==> Pyannote / WeSpeaker"
+
+mkdir -p "${PYANNOTE_DIR}"
+
+if [[ ! -x "${PYANNOTE_VENV}/bin/python" ]]; then
+    echo "Creating Pyannote Python environment..."
+
+    uv venv \
+        --python 3.12 \
+        "${PYANNOTE_VENV}"
+else
+    echo "Pyannote Python environment already exists."
+fi
+
+echo "Installing Pyannote / WeSpeaker dependencies..."
+
+uv pip install \
+    --python "${PYANNOTE_VENV}/bin/python" \
+    "pyannote-audio==4.0.7" \
+    "torch==2.14.0" \
+    "torchaudio==2.11.0" \
+    "torchcodec==0.16.0" \
+    "numpy==2.5.3" \
+    "soundfile==0.14.0" \
+    "huggingface-hub==1.32.0" \
+    "safetensors==0.8.0" \
+    "lightning==2.6.6" \
+    "asteroid-filterbanks==0.4.0"
 
 echo
 echo "Bootstrap complete."
