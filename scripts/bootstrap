@@ -19,6 +19,18 @@ COMMUNITY_MODEL_ID="pyannote/speaker-diarization-community-1"
 COMMUNITY_MODEL_REVISION="3533c8cf8e369892e6b79ff1bf80f7b0286a54ee"
 COMMUNITY_MODEL_DIR="${PYANNOTE_DIR}/models/speaker-diarization-community-1"
 
+BANDIT_DIR="${TOOLS_DIR}/bandit"
+BANDIT_SOURCE_DIR="${BANDIT_DIR}/source"
+BANDIT_VENV="${BANDIT_DIR}/.venv"
+BANDIT_MODEL_DIR="${BANDIT_DIR}/models"
+
+BANDIT_REPOSITORY="https://github.com/wolfram0108/bandit-v2-Wolfram.git"
+BANDIT_REVISION="e6bdc5bf56abc10d72f09fb6214c224e0da5864b"
+
+BANDIT_MODEL_URL="https://zenodo.org/api/records/12701995/files/checkpoint-multi.ckpt/content"
+BANDIT_MODEL_PATH="${BANDIT_MODEL_DIR}/checkpoint-multi.ckpt"
+BANDIT_MODEL_SHA256="abcfccf65446752a057f4a302c941479a54b7560ebf8d7bca039d2ea98e64cfc"
+
 mkdir -p "${TOOLS_DIR}"
 
 echo "voice-dataset-tools bootstrap"
@@ -131,6 +143,126 @@ else
         echo "  ${PYANNOTE_VENV}/bin/hf auth login" >&2
         exit 1
     fi
+fi
+
+echo
+echo "==> BandIt v2"
+
+mkdir -p "${BANDIT_DIR}"
+
+if [[ ! -d "${BANDIT_SOURCE_DIR}/.git" ]]; then
+    echo "Cloning BandIt source..."
+
+    rm -rf "${BANDIT_SOURCE_DIR}"
+
+    git clone \
+        "${BANDIT_REPOSITORY}" \
+        "${BANDIT_SOURCE_DIR}"
+else
+    echo "BandIt source already exists."
+fi
+
+echo "Checking out pinned BandIt revision..."
+
+git -C "${BANDIT_SOURCE_DIR}" fetch origin
+git -C "${BANDIT_SOURCE_DIR}" checkout --detach "${BANDIT_REVISION}"
+
+current_bandit_revision="$(
+    git -C "${BANDIT_SOURCE_DIR}" rev-parse HEAD
+)"
+
+if [[ "${current_bandit_revision}" != "${BANDIT_REVISION}" ]]; then
+    echo "BandIt revision verification failed." >&2
+    exit 1
+fi
+
+if [[ ! -x "${BANDIT_VENV}/bin/python" ]]; then
+    echo "Creating BandIt Python environment..."
+
+    uv venv \
+        --python 3.10 \
+        "${BANDIT_VENV}"
+else
+    echo "BandIt Python environment already exists."
+fi
+
+echo "Installing BandIt dependencies..."
+
+uv pip install \
+    --python "${BANDIT_VENV}/bin/python" \
+    "torch==2.14.0" \
+    "torchaudio==2.11.0" \
+    "torchcodec==0.16.0" \
+    "numpy==2.2.6" \
+    "soundfile==0.14.0" \
+    "huggingface-hub==1.32.0" \
+    "pytorch-lightning" \
+    "hydra-core" \
+    "omegaconf" \
+    "librosa" \
+    "einops" \
+    "tqdm" \
+    "julius" \
+    "pyyaml" \
+    "scipy" \
+    "pandas"
+
+mkdir -p "${BANDIT_MODEL_DIR}"
+
+bandit_model_valid=false
+
+if [[ -f "${BANDIT_MODEL_PATH}" ]]; then
+    actual_bandit_sha256="$(
+        sha256sum "${BANDIT_MODEL_PATH}" |
+        awk '{print $1}'
+    )"
+
+    if [[ "${actual_bandit_sha256}" == "${BANDIT_MODEL_SHA256}" ]]; then
+        bandit_model_valid=true
+    else
+        echo "Existing BandIt checkpoint has wrong SHA-256."
+    fi
+fi
+
+if [[ "${bandit_model_valid}" == true ]]; then
+    echo "BandIt checkpoint already exists and is valid."
+else
+    echo "Downloading BandIt checkpoint..."
+
+    temporary_bandit_model="${BANDIT_MODEL_PATH}.tmp"
+
+    rm -f "${temporary_bandit_model}"
+
+    if ! curl \
+        -L \
+        --fail \
+        --progress-bar \
+        -o "${temporary_bandit_model}" \
+        "${BANDIT_MODEL_URL}"
+    then
+        rm -f "${temporary_bandit_model}"
+        echo "Failed to download BandIt checkpoint." >&2
+        exit 1
+    fi
+
+    actual_bandit_sha256="$(
+        sha256sum "${temporary_bandit_model}" |
+        awk '{print $1}'
+    )"
+
+    if [[ "${actual_bandit_sha256}" != "${BANDIT_MODEL_SHA256}" ]]; then
+        rm -f "${temporary_bandit_model}"
+
+        echo "BandIt checkpoint SHA-256 verification failed." >&2
+        echo "Expected: ${BANDIT_MODEL_SHA256}" >&2
+        echo "Actual:   ${actual_bandit_sha256}" >&2
+
+        exit 1
+    fi
+
+    mv \
+        "${temporary_bandit_model}" \
+        "${BANDIT_MODEL_PATH}"
 fi
 
 echo
