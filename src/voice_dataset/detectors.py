@@ -19,6 +19,7 @@ DETECTOR_OUTPUT_VERSION = 1
 class DetectorOutput:
     detector_name: str
     detector_model: str | None
+    detector_revision: str | None
 
     source_path: Path
     source_sample_rate: int | None
@@ -102,6 +103,22 @@ def load_detector_output(
             "Detector model must be a string or null"
         )
 
+    detector_revision = detector.get(
+        "revision"
+    )
+
+    if (
+        detector_revision is not None
+        and not isinstance(
+            detector_revision,
+            str,
+        )
+    ):
+        raise ValueError(
+            "Detector revision must be "
+            "a string or null"
+        )
+
     source = document.get("source")
 
     if not isinstance(source, dict):
@@ -175,6 +192,7 @@ def load_detector_output(
     return DetectorOutput(
         detector_name=detector_name,
         detector_model=detector_model,
+        detector_revision=detector_revision,
         source_path=Path(source_path_value),
         source_sample_rate=sample_rate,
         source_channels=channels,
@@ -275,12 +293,14 @@ def _region_identity(
     source_id: str,
     detector: str,
     detector_model: str | None,
+    detector_revision: str | None,
     start: float,
     end: float,
     label: str | None,
 ) -> tuple[
     str,
     str,
+    str | None,
     str | None,
     float,
     float,
@@ -290,6 +310,7 @@ def _region_identity(
         source_id,
         detector,
         detector_model,
+        detector_revision,
         start,
         end,
         label,
@@ -328,6 +349,10 @@ def import_detector_regions(
             "detector_model"
         )
 
+        detector_revision = metadata.get(
+            "detector_revision"
+        )
+
         label = record.get(
             "detector_label"
         )
@@ -359,6 +384,13 @@ def import_detector_regions(
                 )
             )
             or (
+                detector_revision is not None
+                and not isinstance(
+                    detector_revision,
+                    str,
+                )
+            )
+            or (
                 label is not None
                 and not isinstance(
                     label,
@@ -375,6 +407,9 @@ def import_detector_regions(
                 source_id=source_id_value,
                 detector=detector,
                 detector_model=detector_model,
+                detector_revision=(
+                    detector_revision
+                ),
                 start=float(start),
                 end=float(end),
                 label=label,
@@ -396,6 +431,9 @@ def import_detector_regions(
             detector_model=(
                 detector_output.detector_model
             ),
+            detector_revision=(
+                detector_output.detector_revision
+            ),
             start=item.start,
             end=item.end,
             label=item.label,
@@ -404,6 +442,21 @@ def import_detector_regions(
         if identity in existing_identities:
             skipped += 1
             continue
+
+        metadata = {
+            "detector_model": (
+                detector_output.detector_model
+            ),
+            "detector_region_index": index,
+        }
+
+        if (
+            detector_output.detector_revision
+            is not None
+        ):
+            metadata["detector_revision"] = (
+                detector_output.detector_revision
+            )
 
         region = CandidateRegion(
             id=storage.next_region_id(),
@@ -414,12 +467,7 @@ def import_detector_regions(
                 detector_output.detector_name
             ),
             detector_label=item.label,
-            metadata={
-                "detector_model": (
-                    detector_output.detector_model
-                ),
-                "detector_region_index": index,
-            },
+            metadata=metadata,
         )
 
         storage.add_region(region)
