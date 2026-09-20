@@ -17,6 +17,7 @@ BANDIT_LOCK="${TOOL_LOCKS_DIR}/bandit.txt"
 
 ECAPA_DIR="${TOOLS_DIR}/ecapa"
 ECAPA_VENV="${ECAPA_DIR}/.venv"
+ECAPA_PYTHON="3.12.14"
 ECAPA_MODEL_ID="speechbrain/spkrec-ecapa-voxceleb"
 ECAPA_MODEL_REVISION="0f99f2d0ebe89ac095bcc5903c4dd8f72b367286"
 ECAPA_MODEL_DIR="${ECAPA_DIR}/models/spkrec-ecapa-voxceleb"
@@ -29,6 +30,7 @@ ECAPA_MEAN_VAR_NORM_SHA256="cd70225b05b37be64fc5a95e24395d804231d43f74b2e1e5a513
 
 PYANNOTE_DIR="${TOOLS_DIR}/pyannote"
 PYANNOTE_VENV="${PYANNOTE_DIR}/.venv"
+PYANNOTE_PYTHON="3.12.14"
 
 WESPEAKER_MODEL_ID="pyannote/wespeaker-voxceleb-resnet34-LM"
 WESPEAKER_MODEL_REVISION="837717ddb9ff5507820346191109dc79c958d614"
@@ -49,6 +51,7 @@ BANDIT_DIR="${TOOLS_DIR}/bandit"
 BANDIT_SOURCE_DIR="${BANDIT_DIR}/source"
 BANDIT_VENV="${BANDIT_DIR}/.venv"
 BANDIT_MODEL_DIR="${BANDIT_DIR}/models"
+BANDIT_PYTHON="3.10.21"
 
 BANDIT_REPOSITORY="https://github.com/wolfram0108/bandit-v2-Wolfram.git"
 BANDIT_REVISION="e6bdc5bf56abc10d72f09fb6214c224e0da5864b"
@@ -88,7 +91,7 @@ if [[ ! -x "${ECAPA_VENV}/bin/python" ]]; then
     echo "Creating ECAPA Python environment..."
 
     uv venv \
-        --python 3.12 \
+        --python "${ECAPA_PYTHON}" \
         "${ECAPA_VENV}"
 else
     echo "ECAPA Python environment already exists."
@@ -202,7 +205,7 @@ if [[ ! -x "${PYANNOTE_VENV}/bin/python" ]]; then
     echo "Creating Pyannote Python environment..."
 
     uv venv \
-        --python 3.12 \
+        --python "${PYANNOTE_PYTHON}" \
         "${PYANNOTE_VENV}"
 else
     echo "Pyannote Python environment already exists."
@@ -384,7 +387,7 @@ if [[ ! -x "${BANDIT_VENV}/bin/python" ]]; then
     echo "Creating BandIt Python environment..."
 
     uv venv \
-        --python 3.10 \
+        --python "${BANDIT_PYTHON}" \
         "${BANDIT_VENV}"
 else
     echo "BandIt Python environment already exists."
