@@ -15,6 +15,10 @@ ECAPA_VENV="${ECAPA_DIR}/.venv"
 PYANNOTE_DIR="${TOOLS_DIR}/pyannote"
 PYANNOTE_VENV="${PYANNOTE_DIR}/.venv"
 
+COMMUNITY_MODEL_ID="pyannote/speaker-diarization-community-1"
+COMMUNITY_MODEL_REVISION="3533c8cf8e369892e6b79ff1bf80f7b0286a54ee"
+COMMUNITY_MODEL_DIR="${PYANNOTE_DIR}/models/speaker-diarization-community-1"
+
 mkdir -p "${TOOLS_DIR}"
 
 echo "voice-dataset-tools bootstrap"
@@ -82,6 +86,52 @@ uv pip install \
     "safetensors==0.8.0" \
     "lightning==2.6.6" \
     "asteroid-filterbanks==0.4.0"
+
+echo
+echo "==> Pyannote Community-1"
+
+COMMUNITY_CONFIG="${COMMUNITY_MODEL_DIR}/config.yaml"
+COMMUNITY_SEGMENTATION="${COMMUNITY_MODEL_DIR}/segmentation/pytorch_model.bin"
+COMMUNITY_EMBEDDING="${COMMUNITY_MODEL_DIR}/embedding/pytorch_model.bin"
+COMMUNITY_PLDA="${COMMUNITY_MODEL_DIR}/plda/plda.npz"
+COMMUNITY_XVEC="${COMMUNITY_MODEL_DIR}/plda/xvec_transform.npz"
+
+community_model_complete=true
+
+for file in \
+    "${COMMUNITY_CONFIG}" \
+    "${COMMUNITY_SEGMENTATION}" \
+    "${COMMUNITY_EMBEDDING}" \
+    "${COMMUNITY_PLDA}" \
+    "${COMMUNITY_XVEC}"
+do
+    if [[ ! -f "${file}" ]]; then
+        community_model_complete=false
+        break
+    fi
+done
+
+if [[ "${community_model_complete}" == true ]]; then
+    echo "Community-1 model already exists."
+else
+    echo "Downloading Community-1 model..."
+
+    rm -rf "${COMMUNITY_MODEL_DIR}"
+    mkdir -p "$(dirname "${COMMUNITY_MODEL_DIR}")"
+
+    if ! "${PYANNOTE_VENV}/bin/hf" download \
+        "${COMMUNITY_MODEL_ID}" \
+        --revision "${COMMUNITY_MODEL_REVISION}" \
+        --local-dir "${COMMUNITY_MODEL_DIR}"
+    then
+        echo >&2
+        echo "Failed to download Community-1." >&2
+        echo "The model is gated and requires Hugging Face access." >&2
+        echo "Accept its access conditions and authenticate with:" >&2
+        echo "  ${PYANNOTE_VENV}/bin/hf auth login" >&2
+        exit 1
+    fi
+fi
 
 echo
 echo "Bootstrap complete."
