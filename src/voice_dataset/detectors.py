@@ -20,6 +20,7 @@ class DetectorOutput:
     detector_name: str
     detector_model: str | None
     detector_revision: str | None
+    detector_parameters: dict[str, Any]
 
     source_path: Path
     source_sample_rate: int | None
@@ -119,6 +120,20 @@ def load_detector_output(
             "a string or null"
         )
 
+    detector_parameters = detector.get(
+        "parameters",
+        {},
+    )
+
+    if not isinstance(
+        detector_parameters,
+        dict,
+    ):
+        raise ValueError(
+            "Detector parameters must be "
+            "an object"
+        )
+
     source = document.get("source")
 
     if not isinstance(source, dict):
@@ -193,6 +208,9 @@ def load_detector_output(
         detector_name=detector_name,
         detector_model=detector_model,
         detector_revision=detector_revision,
+        detector_parameters=(
+            detector_parameters
+        ),
         source_path=Path(source_path_value),
         source_sample_rate=sample_rate,
         source_channels=channels,
@@ -288,12 +306,24 @@ class DetectorImportResult:
     skipped: int
 
 
+def _parameter_identity(
+    parameters: dict[str, Any],
+) -> str:
+    return json.dumps(
+        parameters,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+
 def _region_identity(
     *,
     source_id: str,
     detector: str,
     detector_model: str | None,
     detector_revision: str | None,
+    detector_parameters: dict[str, Any],
     start: float,
     end: float,
     label: str | None,
@@ -302,6 +332,7 @@ def _region_identity(
     str,
     str | None,
     str | None,
+    str,
     float,
     float,
     str | None,
@@ -311,6 +342,9 @@ def _region_identity(
         detector,
         detector_model,
         detector_revision,
+        _parameter_identity(
+            detector_parameters
+        ),
         start,
         end,
         label,
@@ -353,6 +387,11 @@ def import_detector_regions(
             "detector_revision"
         )
 
+        detector_parameters = metadata.get(
+            "detector_parameters",
+            {},
+        )
+
         label = record.get(
             "detector_label"
         )
@@ -390,6 +429,10 @@ def import_detector_regions(
                     str,
                 )
             )
+            or not isinstance(
+                detector_parameters,
+                dict,
+            )
             or (
                 label is not None
                 and not isinstance(
@@ -409,6 +452,9 @@ def import_detector_regions(
                 detector_model=detector_model,
                 detector_revision=(
                     detector_revision
+                ),
+                detector_parameters=(
+                    detector_parameters
                 ),
                 start=float(start),
                 end=float(end),
@@ -434,6 +480,9 @@ def import_detector_regions(
             detector_revision=(
                 detector_output.detector_revision
             ),
+            detector_parameters=(
+                detector_output.detector_parameters
+            ),
             start=item.start,
             end=item.end,
             label=item.label,
@@ -456,6 +505,11 @@ def import_detector_regions(
         ):
             metadata["detector_revision"] = (
                 detector_output.detector_revision
+            )
+
+        if detector_output.detector_parameters:
+            metadata["detector_parameters"] = (
+                detector_output.detector_parameters
             )
 
         region = CandidateRegion(

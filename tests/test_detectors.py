@@ -272,3 +272,216 @@ def test_same_detector_revision_is_idempotent(
     assert second.skipped == 1
 
     assert len(storage.regions.load()) == 1
+
+
+def test_import_preserves_detector_parameters(
+    tmp_path: Path,
+) -> None:
+    storage = make_storage(tmp_path)
+
+    path = write_detector_output(
+        tmp_path,
+        revision="abc123",
+    )
+
+    document = json.loads(
+        path.read_text(encoding="utf-8")
+    )
+
+    document["detector"]["parameters"] = {
+        "min_speakers": 2,
+    }
+
+    path.write_text(
+        json.dumps(document),
+        encoding="utf-8",
+    )
+
+    output = load_detector_output(path)
+
+    result = import_detector_regions(
+        storage,
+        output,
+        source_id="source_001",
+    )
+
+    assert len(result.imported) == 1
+
+    region = storage.regions.load()[0]
+
+    assert region["metadata"][
+        "detector_parameters"
+    ] == {
+        "min_speakers": 2,
+    }
+
+
+def test_empty_detector_parameters_are_not_persisted(
+    tmp_path: Path,
+) -> None:
+    storage = make_storage(tmp_path)
+
+    path = write_detector_output(
+        tmp_path,
+        revision="abc123",
+    )
+
+    document = json.loads(
+        path.read_text(encoding="utf-8")
+    )
+
+    document["detector"]["parameters"] = {}
+
+    path.write_text(
+        json.dumps(document),
+        encoding="utf-8",
+    )
+
+    output = load_detector_output(path)
+
+    result = import_detector_regions(
+        storage,
+        output,
+        source_id="source_001",
+    )
+
+    assert len(result.imported) == 1
+
+    region = storage.regions.load()[0]
+
+    assert (
+        "detector_parameters"
+        not in region["metadata"]
+    )
+
+
+def test_load_rejects_invalid_detector_parameters(
+    tmp_path: Path,
+) -> None:
+    path = write_detector_output(
+        tmp_path,
+        revision="abc123",
+    )
+
+    document = json.loads(
+        path.read_text(encoding="utf-8")
+    )
+
+    document["detector"]["parameters"] = [
+        "not",
+        "an",
+        "object",
+    ]
+
+    path.write_text(
+        json.dumps(document),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Detector parameters must be "
+            "an object"
+        ),
+    ):
+        load_detector_output(path)
+
+
+def test_different_detector_parameters_are_distinct_evidence(
+    tmp_path: Path,
+) -> None:
+    storage = make_storage(tmp_path)
+
+    path = write_detector_output(
+        tmp_path,
+        revision="abc123",
+    )
+
+    document = json.loads(
+        path.read_text(encoding="utf-8")
+    )
+
+    document["detector"]["parameters"] = {}
+
+    path.write_text(
+        json.dumps(document),
+        encoding="utf-8",
+    )
+
+    first_output = load_detector_output(path)
+
+    first = import_detector_regions(
+        storage,
+        first_output,
+        source_id="source_001",
+    )
+
+    document["detector"]["parameters"] = {
+        "min_speakers": 2,
+    }
+
+    path.write_text(
+        json.dumps(document),
+        encoding="utf-8",
+    )
+
+    second_output = load_detector_output(path)
+
+    second = import_detector_regions(
+        storage,
+        second_output,
+        source_id="source_001",
+    )
+
+    assert len(first.imported) == 1
+    assert first.skipped == 0
+
+    assert len(second.imported) == 1
+    assert second.skipped == 0
+
+    assert len(storage.regions.load()) == 2
+
+
+def test_same_detector_parameters_are_idempotent(
+    tmp_path: Path,
+) -> None:
+    storage = make_storage(tmp_path)
+
+    path = write_detector_output(
+        tmp_path,
+        revision="abc123",
+    )
+
+    document = json.loads(
+        path.read_text(encoding="utf-8")
+    )
+
+    document["detector"]["parameters"] = {
+        "min_speakers": 2,
+    }
+
+    path.write_text(
+        json.dumps(document),
+        encoding="utf-8",
+    )
+
+    output = load_detector_output(path)
+
+    first = import_detector_regions(
+        storage,
+        output,
+        source_id="source_001",
+    )
+
+    second = import_detector_regions(
+        storage,
+        output,
+        source_id="source_001",
+    )
+
+    assert len(first.imported) == 1
+    assert first.skipped == 0
+
+    assert len(second.imported) == 0
+    assert second.skipped == 1

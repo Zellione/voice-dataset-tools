@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import soundfile as sf
 import torch
 from pyannote.audio import Pipeline
 
@@ -25,47 +26,58 @@ MODEL_DIR = (
 DEVICE = torch.device("cuda")
 
 
-def annotation_to_records(annotation: Any) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
+def annotation_to_regions(
+    annotation: Any,
+) -> list[dict[str, Any]]:
+    regions: list[dict[str, Any]] = []
 
     for turn, speaker in annotation:
-        records.append(
+        regions.append(
             {
-                "speaker": str(speaker),
                 "start": float(turn.start),
                 "end": float(turn.end),
+                "label": str(speaker),
             }
         )
 
-    return records
+    return regions
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Run pinned Pyannote Community-1 speaker diarization."
+        description=(
+            "Run pinned Pyannote Community-1 "
+            "speaker diarization and emit "
+            "voice-dataset detector regions."
+        )
     )
+
     parser.add_argument(
         "audio",
         type=Path,
         help="Audio file to diarize.",
     )
+
     parser.add_argument(
         "output",
         type=Path,
-        help="Output JSON file.",
+        help="Detector output JSON file.",
     )
+
     parser.add_argument(
         "--num-speakers",
         type=int,
         default=None,
         help="Exact number of speakers.",
     )
+
     parser.add_argument(
         "--min-speakers",
         type=int,
         default=None,
         help="Minimum number of speakers.",
     )
+
     parser.add_argument(
         "--max-speakers",
         type=int,
@@ -79,11 +91,14 @@ def main() -> None:
     output = args.output.resolve()
 
     if not audio.is_file():
-        raise SystemExit(f"Audio file does not exist: {audio}")
+        raise SystemExit(
+            f"Audio file does not exist: {audio}"
+        )
 
     if not MODEL_DIR.is_dir():
         raise SystemExit(
-            f"Community-1 model does not exist: {MODEL_DIR}\n"
+            f"Community-1 model does not exist: "
+            f"{MODEL_DIR}\n"
             "Run ./scripts/bootstrap first."
         )
 
@@ -102,51 +117,76 @@ def main() -> None:
         and args.min_speakers > args.max_speakers
     ):
         raise SystemExit(
-            "--min-speakers cannot be greater than --max-speakers."
+            "--min-speakers cannot be greater than "
+            "--max-speakers."
         )
 
-    print(f"Loading Community-1 from {MODEL_DIR}...")
+    info = sf.info(audio)
 
-    pipeline = Pipeline.from_pretrained(MODEL_DIR)
+    print(
+        f"Loading Community-1 from {MODEL_DIR}..."
+    )
+
+    pipeline = Pipeline.from_pretrained(
+        MODEL_DIR
+    )
+
     pipeline.to(DEVICE)
 
-    kwargs: dict[str, int] = {}
+    parameters: dict[str, int] = {}
 
     if args.num_speakers is not None:
-        kwargs["num_speakers"] = args.num_speakers
+        parameters["num_speakers"] = (
+            args.num_speakers
+        )
 
     if args.min_speakers is not None:
-        kwargs["min_speakers"] = args.min_speakers
+        parameters["min_speakers"] = (
+            args.min_speakers
+        )
 
     if args.max_speakers is not None:
-        kwargs["max_speakers"] = args.max_speakers
+        parameters["max_speakers"] = (
+            args.max_speakers
+        )
 
     print(f"Device: {DEVICE}")
     print(f"Audio: {audio}")
     print("Running diarization...")
 
-    result = pipeline(audio, **kwargs)
+    result = pipeline(
+        audio,
+        **parameters,
+    )
+
+    regions = annotation_to_regions(
+        result.speaker_diarization
+    )
 
     payload = {
-        "format": "voice-dataset-diarization-output",
+        "format": (
+            "voice-dataset-detector-output"
+        ),
         "version": 1,
-        "model": {
+        "detector": {
             "name": "pyannote-community-1",
-            "source": MODEL_ID,
+            "model": MODEL_ID,
             "revision": MODEL_REVISION,
+            "parameters": parameters,
         },
-        "audio": str(audio),
-        "parameters": {
-            "num_speakers": args.num_speakers,
-            "min_speakers": args.min_speakers,
-            "max_speakers": args.max_speakers,
+        "source": {
+            "path": str(audio),
+            "sample_rate": int(
+                info.samplerate
+            ),
+            "channels": int(
+                info.channels
+            ),
+            "duration": float(
+                info.duration
+            ),
         },
-        "regular": annotation_to_records(
-            result.speaker_diarization
-        ),
-        "exclusive": annotation_to_records(
-            result.exclusive_speaker_diarization
-        ),
+        "regions": regions,
     }
 
     output.parent.mkdir(
@@ -169,17 +209,18 @@ def main() -> None:
                 indent=2,
                 ensure_ascii=False,
             )
+
             handle.write("\n")
 
         temporary.replace(output)
+
     finally:
         temporary.unlink(
             missing_ok=True,
         )
 
     print(
-        f"Wrote {len(payload['regular'])} regular and "
-        f"{len(payload['exclusive'])} exclusive segments "
+        f"Wrote {len(regions)} detector regions "
         f"to {output}"
     )
 
