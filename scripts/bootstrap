@@ -17,6 +17,15 @@ BANDIT_LOCK="${TOOL_LOCKS_DIR}/bandit.txt"
 
 ECAPA_DIR="${TOOLS_DIR}/ecapa"
 ECAPA_VENV="${ECAPA_DIR}/.venv"
+ECAPA_MODEL_ID="speechbrain/spkrec-ecapa-voxceleb"
+ECAPA_MODEL_REVISION="0f99f2d0ebe89ac095bcc5903c4dd8f72b367286"
+ECAPA_MODEL_DIR="${ECAPA_DIR}/models/spkrec-ecapa-voxceleb"
+
+ECAPA_CLASSIFIER_SHA256="fd9e3634fe68bd0a427c95e354c0c677374f62b3f434e45b78599950d860d535"
+ECAPA_EMBEDDING_SHA256="0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2"
+ECAPA_HYPERPARAMS_SHA256="6f78854fa04ba59e761437b76a2575d3aba5e5016de3e9b69f0c9a5077fb1a41"
+ECAPA_LABEL_ENCODER_SHA256="e13c3a167bb4112685670ee896d20e2b565af16b3a4ceeaa8689fa4d22adb8b9"
+ECAPA_MEAN_VAR_NORM_SHA256="cd70225b05b37be64fc5a95e24395d804231d43f74b2e1e5a513db7b69b34c33"
 
 PYANNOTE_DIR="${TOOLS_DIR}/pyannote"
 PYANNOTE_VENV="${PYANNOTE_DIR}/.venv"
@@ -79,6 +88,99 @@ echo "Installing locked ECAPA dependencies..."
 uv pip install \
     --python "${ECAPA_VENV}/bin/python" \
     --requirement "${ECAPA_LOCK}"
+
+echo "Checking ECAPA model..."
+
+ECAPA_CLASSIFIER="${ECAPA_MODEL_DIR}/classifier.ckpt"
+ECAPA_EMBEDDING="${ECAPA_MODEL_DIR}/embedding_model.ckpt"
+ECAPA_HYPERPARAMS="${ECAPA_MODEL_DIR}/hyperparams.yaml"
+ECAPA_LABEL_ENCODER="${ECAPA_MODEL_DIR}/label_encoder.txt"
+ECAPA_MEAN_VAR_NORM="${ECAPA_MODEL_DIR}/mean_var_norm_emb.ckpt"
+
+ecapa_model_valid=true
+
+check_ecapa_file() {
+    local path="$1"
+    local expected_sha256="$2"
+
+    if [[ ! -f "${path}" ]]; then
+        ecapa_model_valid=false
+        return
+    fi
+
+    local actual_sha256
+    actual_sha256="$(
+        sha256sum "${path}" |
+        awk '{print $1}'
+    )"
+
+    if [[ "${actual_sha256}" != "${expected_sha256}" ]]; then
+        ecapa_model_valid=false
+    fi
+}
+
+check_ecapa_file \
+    "${ECAPA_CLASSIFIER}" \
+    "${ECAPA_CLASSIFIER_SHA256}"
+
+check_ecapa_file \
+    "${ECAPA_EMBEDDING}" \
+    "${ECAPA_EMBEDDING_SHA256}"
+
+check_ecapa_file \
+    "${ECAPA_HYPERPARAMS}" \
+    "${ECAPA_HYPERPARAMS_SHA256}"
+
+check_ecapa_file \
+    "${ECAPA_LABEL_ENCODER}" \
+    "${ECAPA_LABEL_ENCODER_SHA256}"
+
+check_ecapa_file \
+    "${ECAPA_MEAN_VAR_NORM}" \
+    "${ECAPA_MEAN_VAR_NORM_SHA256}"
+
+if [[ "${ecapa_model_valid}" == true ]]; then
+    echo "ECAPA model already exists and is valid."
+else
+    echo "Downloading pinned ECAPA model..."
+
+    rm -rf "${ECAPA_MODEL_DIR}"
+    mkdir -p "$(dirname "${ECAPA_MODEL_DIR}")"
+
+    "${ECAPA_VENV}/bin/hf" download \
+        "${ECAPA_MODEL_ID}" \
+        --revision "${ECAPA_MODEL_REVISION}" \
+        --local-dir "${ECAPA_MODEL_DIR}"
+
+    ecapa_model_valid=true
+
+    check_ecapa_file \
+        "${ECAPA_CLASSIFIER}" \
+        "${ECAPA_CLASSIFIER_SHA256}"
+
+    check_ecapa_file \
+        "${ECAPA_EMBEDDING}" \
+        "${ECAPA_EMBEDDING_SHA256}"
+
+    check_ecapa_file \
+        "${ECAPA_HYPERPARAMS}" \
+        "${ECAPA_HYPERPARAMS_SHA256}"
+
+    check_ecapa_file \
+        "${ECAPA_LABEL_ENCODER}" \
+        "${ECAPA_LABEL_ENCODER_SHA256}"
+
+    check_ecapa_file \
+        "${ECAPA_MEAN_VAR_NORM}" \
+        "${ECAPA_MEAN_VAR_NORM_SHA256}"
+
+    if [[ "${ecapa_model_valid}" != true ]]; then
+        echo "ECAPA model verification failed." >&2
+        exit 1
+    fi
+
+    echo "ECAPA model downloaded and verified."
+fi
 
 echo
 echo "==> Pyannote / WeSpeaker"

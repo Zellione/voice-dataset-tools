@@ -7,15 +7,10 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torchaudio
+from speechbrain.inference.speaker import EncoderClassifier
 
-from speechbrain.inference.speaker import (
-    EncoderClassifier,
-)
-
-
-MODEL_SOURCE = (
-    "speechbrain/spkrec-ecapa-voxceleb"
-)
+MODEL_ID = "speechbrain/spkrec-ecapa-voxceleb"
+MODEL_REVISION = "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -321,8 +316,10 @@ def main() -> None:
 
     classifier = (
         EncoderClassifier.from_hparams(
-            source=MODEL_SOURCE,
-            savedir=str(MODEL_DIR),
+            source=str(MODEL_DIR),
+            overrides={
+                "pretrained_path": str(MODEL_DIR),
+            },
             run_opts={
                 "device": DEVICE,
             },
@@ -423,7 +420,8 @@ def main() -> None:
             "record_type": args.record_type,
             "encoder": {
                 "name": "speechbrain-ecapa",
-                "model": MODEL_SOURCE,
+                "model": MODEL_ID,
+                "revision": MODEL_REVISION,
             },
             "representation": (
                 args.representation
