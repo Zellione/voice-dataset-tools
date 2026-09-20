@@ -39,6 +39,11 @@ WESPEAKER_MODEL_SHA256="366edf44f4c80889a3eb7a9d7bdf02c4aede3127f7dd15e274dcdb82
 COMMUNITY_MODEL_ID="pyannote/speaker-diarization-community-1"
 COMMUNITY_MODEL_REVISION="3533c8cf8e369892e6b79ff1bf80f7b0286a54ee"
 COMMUNITY_MODEL_DIR="${PYANNOTE_DIR}/models/speaker-diarization-community-1"
+COMMUNITY_CONFIG_SHA256="5ce2bfa9a938dc132cec1172592d65173cbb8f444ea1e4133f10f9391de155be"
+COMMUNITY_SEGMENTATION_SHA256="7ad24338d844fb95985486eb1a464e32d229f6d7a03c9abe60f978bacf3f816e"
+COMMUNITY_EMBEDDING_SHA256="6f10ff60898a1d185fa22e1d11e0bfa8a92efec811f11bca48cb8cafebefd929"
+COMMUNITY_PLDA_SHA256="9b77bcd840692710dd3496f62ecfeed8d8e5f002fd991b785079b244eab7d255"
+COMMUNITY_XVEC_SHA256="325f1ce8e48f7e55e9c8aa47e05d2766b7c48c4b25b8de8dd751e7a4cc5fbe8f"
 
 BANDIT_DIR="${TOOLS_DIR}/bandit"
 BANDIT_SOURCE_DIR="${BANDIT_DIR}/source"
@@ -265,25 +270,58 @@ COMMUNITY_EMBEDDING="${COMMUNITY_MODEL_DIR}/embedding/pytorch_model.bin"
 COMMUNITY_PLDA="${COMMUNITY_MODEL_DIR}/plda/plda.npz"
 COMMUNITY_XVEC="${COMMUNITY_MODEL_DIR}/plda/xvec_transform.npz"
 
-community_model_complete=true
+community_model_valid=true
 
-for file in \
-    "${COMMUNITY_CONFIG}" \
-    "${COMMUNITY_SEGMENTATION}" \
-    "${COMMUNITY_EMBEDDING}" \
-    "${COMMUNITY_PLDA}" \
-    "${COMMUNITY_XVEC}"
-do
-    if [[ ! -f "${file}" ]]; then
-        community_model_complete=false
-        break
+check_community_file() {
+    local path="$1"
+    local expected_sha256="$2"
+
+    if [[ ! -f "${path}" ]]; then
+        community_model_valid=false
+        return
     fi
-done
 
-if [[ "${community_model_complete}" == true ]]; then
-    echo "Community-1 model already exists."
+    local actual_sha256
+    actual_sha256="$(
+        sha256sum "${path}" |
+        awk '{print $1}'
+    )"
+
+    if [[ "${actual_sha256}" != "${expected_sha256}" ]]; then
+        community_model_valid=false
+    fi
+}
+
+check_community_model() {
+    community_model_valid=true
+
+    check_community_file \
+        "${COMMUNITY_CONFIG}" \
+        "${COMMUNITY_CONFIG_SHA256}"
+
+    check_community_file \
+        "${COMMUNITY_SEGMENTATION}" \
+        "${COMMUNITY_SEGMENTATION_SHA256}"
+
+    check_community_file \
+        "${COMMUNITY_EMBEDDING}" \
+        "${COMMUNITY_EMBEDDING_SHA256}"
+
+    check_community_file \
+        "${COMMUNITY_PLDA}" \
+        "${COMMUNITY_PLDA_SHA256}"
+
+    check_community_file \
+        "${COMMUNITY_XVEC}" \
+        "${COMMUNITY_XVEC_SHA256}"
+}
+
+check_community_model
+
+if [[ "${community_model_valid}" == true ]]; then
+    echo "Community-1 model already exists and is valid."
 else
-    echo "Downloading Community-1 model..."
+    echo "Downloading pinned Community-1 model..."
 
     rm -rf "${COMMUNITY_MODEL_DIR}"
     mkdir -p "$(dirname "${COMMUNITY_MODEL_DIR}")"
@@ -300,6 +338,15 @@ else
         echo "  ${PYANNOTE_VENV}/bin/hf auth login" >&2
         exit 1
     fi
+
+    check_community_model
+
+    if [[ "${community_model_valid}" != true ]]; then
+        echo "Community-1 model verification failed." >&2
+        exit 1
+    fi
+
+    echo "Community-1 model downloaded and verified."
 fi
 
 echo
