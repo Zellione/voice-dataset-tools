@@ -10,6 +10,7 @@ from voice_dataset.schema import (
 )
 from voice_dataset.sources import (
     probe_audio_representation,
+    resolve_source_representation,
     set_representation_provenance,
 )
 from voice_dataset.storage import DatasetStorage
@@ -174,4 +175,125 @@ def test_set_representation_provenance_rejects_invalid_values(
             media_start=media_start,
             stream_index=stream_index,
             channel_mode=channel_mode,
+        )
+
+
+def test_resolve_source_representation(
+    tmp_path: Path,
+) -> None:
+    storage = make_storage(tmp_path)
+
+    representation, path = (
+        resolve_source_representation(
+            storage,
+            "source-1",
+            "center",
+        )
+    )
+
+    assert representation["kind"] == "center"
+    assert path == (
+        tmp_path / "center.wav"
+    ).resolve()
+
+
+def test_resolve_relative_source_representation(
+    tmp_path: Path,
+) -> None:
+    storage = make_storage(tmp_path)
+
+    storage.update_source(
+        "source-1",
+        lambda record: {
+            **record,
+            "representations": {
+                **record["representations"],
+                "center": {
+                    **record[
+                        "representations"
+                    ]["center"],
+                    "path": "center.wav",
+                },
+            },
+        },
+    )
+
+    _, path = resolve_source_representation(
+        storage,
+        "source-1",
+        "center",
+    )
+
+    assert path == (
+        tmp_path / "center.wav"
+    ).resolve()
+
+
+def test_resolve_source_representation_rejects_unknown_source(
+    tmp_path: Path,
+) -> None:
+    storage = make_storage(tmp_path)
+
+    with pytest.raises(
+        KeyError,
+        match="Source does not exist",
+    ):
+        resolve_source_representation(
+            storage,
+            "missing",
+            "center",
+        )
+
+
+def test_resolve_source_representation_rejects_unknown_representation(
+    tmp_path: Path,
+) -> None:
+    storage = make_storage(tmp_path)
+
+    with pytest.raises(
+        KeyError,
+        match=(
+            "Source representation "
+            "does not exist"
+        ),
+    ):
+        resolve_source_representation(
+            storage,
+            "source-1",
+            "missing",
+        )
+
+
+def test_resolve_source_representation_rejects_missing_file(
+    tmp_path: Path,
+) -> None:
+    storage = make_storage(tmp_path)
+
+    storage.update_source(
+        "source-1",
+        lambda record: {
+            **record,
+            "representations": {
+                **record["representations"],
+                "center": {
+                    **record[
+                        "representations"
+                    ]["center"],
+                    "path": "missing.wav",
+                },
+            },
+        },
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Source representation audio "
+            "does not exist"
+        ),
+    ):
+        resolve_source_representation(
+            storage,
+            "source-1",
+            "center",
         )
