@@ -9,6 +9,12 @@ ROOT_DIR="$(
 
 TOOLS_DIR="${ROOT_DIR}/tools"
 
+TOOL_LOCKS_DIR="${ROOT_DIR}/tool-locks"
+
+ECAPA_LOCK="${TOOL_LOCKS_DIR}/ecapa.txt"
+PYANNOTE_LOCK="${TOOL_LOCKS_DIR}/pyannote.txt"
+BANDIT_LOCK="${TOOL_LOCKS_DIR}/bandit.txt"
+
 ECAPA_DIR="${TOOLS_DIR}/ecapa"
 ECAPA_VENV="${ECAPA_DIR}/.venv"
 
@@ -30,6 +36,17 @@ BANDIT_REVISION="e6bdc5bf56abc10d72f09fb6214c224e0da5864b"
 BANDIT_MODEL_URL="https://zenodo.org/api/records/12701995/files/checkpoint-multi.ckpt/content"
 BANDIT_MODEL_PATH="${BANDIT_MODEL_DIR}/checkpoint-multi.ckpt"
 BANDIT_MODEL_SHA256="abcfccf65446752a057f4a302c941479a54b7560ebf8d7bca039d2ea98e64cfc"
+
+for lock_file in \
+    "${ECAPA_LOCK}" \
+    "${PYANNOTE_LOCK}" \
+    "${BANDIT_LOCK}"
+do
+    if [[ ! -f "${lock_file}" ]]; then
+        echo "Required tool lock does not exist: ${lock_file}" >&2
+        exit 1
+    fi
+done
 
 mkdir -p "${TOOLS_DIR}"
 
@@ -57,17 +74,11 @@ else
     echo "ECAPA Python environment already exists."
 fi
 
-echo "Installing ECAPA dependencies..."
+echo "Installing locked ECAPA dependencies..."
 
 uv pip install \
     --python "${ECAPA_VENV}/bin/python" \
-    "speechbrain==1.1.1" \
-    "torch==2.14.0" \
-    "torchaudio==2.11.0" \
-    "torchcodec==0.16.0" \
-    "numpy==2.5.3" \
-    "soundfile==0.14.0" \
-    "huggingface-hub==1.32.0"
+    --requirement "${ECAPA_LOCK}"
 
 echo
 echo "==> Pyannote / WeSpeaker"
@@ -84,20 +95,11 @@ else
     echo "Pyannote Python environment already exists."
 fi
 
-echo "Installing Pyannote / WeSpeaker dependencies..."
+echo "Installing locked Pyannote / WeSpeaker dependencies..."
 
 uv pip install \
     --python "${PYANNOTE_VENV}/bin/python" \
-    "pyannote-audio==4.0.7" \
-    "torch==2.14.0" \
-    "torchaudio==2.11.0" \
-    "torchcodec==0.16.0" \
-    "numpy==2.5.3" \
-    "soundfile==0.14.0" \
-    "huggingface-hub==1.32.0" \
-    "safetensors==0.8.0" \
-    "lightning==2.6.6" \
-    "asteroid-filterbanks==0.4.0"
+    --requirement "${PYANNOTE_LOCK}"
 
 echo
 echo "==> Pyannote Community-1"
@@ -186,26 +188,11 @@ else
     echo "BandIt Python environment already exists."
 fi
 
-echo "Installing BandIt dependencies..."
+echo "Installing locked BandIt dependencies..."
 
 uv pip install \
     --python "${BANDIT_VENV}/bin/python" \
-    "torch==2.14.0" \
-    "torchaudio==2.11.0" \
-    "torchcodec==0.16.0" \
-    "numpy==2.2.6" \
-    "soundfile==0.14.0" \
-    "huggingface-hub==1.32.0" \
-    "pytorch-lightning" \
-    "hydra-core" \
-    "omegaconf" \
-    "librosa" \
-    "einops" \
-    "tqdm" \
-    "julius" \
-    "pyyaml" \
-    "scipy" \
-    "pandas"
+    --requirement "${BANDIT_LOCK}"
 
 mkdir -p "${BANDIT_MODEL_DIR}"
 
