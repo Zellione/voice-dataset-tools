@@ -1,12 +1,14 @@
 import json
 import math
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .schema import CandidateRegion
+from .sources import resolve_source_representation
 from .storage import DatasetStorage
-
+from .workers import run_worker, worker
 
 DETECTOR_OUTPUT_FORMAT = (
     "voice-dataset-detector-output"
@@ -306,6 +308,13 @@ class DetectorImportResult:
     skipped: int
 
 
+@dataclass
+class DetectorRunResult:
+    output: DetectorOutput
+    imported: list[CandidateRegion]
+    skipped: int
+
+
 def _parameter_identity(
     parameters: dict[str, Any],
 ) -> str:
@@ -534,4 +543,119 @@ def import_detector_regions(
     return DetectorImportResult(
         imported=imported,
         skipped=skipped,
+    )
+
+
+def detect_source_regions(
+    storage: DatasetStorage,
+    source_id: str,
+    representation_name: str,
+    *,
+    num_speakers: int | None = None,
+    min_speakers: int | None = None,
+    max_speakers: int | None = None,
+) -> DetectorRunResult:
+    _, representation_path = (
+        resolve_source_representation(
+            storage,
+            source_id,
+            representation_name,
+        )
+    )
+
+    if (
+        num_speakers is not None
+        and num_speakers <= 0
+    ):
+        raise ValueError(
+            "num_speakers must be positive"
+        )
+
+    if (
+        min_speakers is not None
+        and min_speakers <= 0
+    ):
+        raise ValueError(
+            "min_speakers must be positive"
+        )
+
+    if (
+        max_speakers is not None
+        and max_speakers <= 0
+    ):
+        raise ValueError(
+            "max_speakers must be positive"
+        )
+
+    if (
+        min_speakers is not None
+        and max_speakers is not None
+        and min_speakers > max_speakers
+    ):
+        raise ValueError(
+            "min_speakers cannot be greater "
+            "than max_speakers"
+        )
+
+    arguments: list[str | Path] = [
+        representation_path,
+    ]
+
+    with tempfile.TemporaryDirectory(
+        prefix="voice-dataset-detector-"
+    ) as temporary_directory:
+        output_path = (
+            Path(temporary_directory)
+            / "detector.json"
+        )
+
+        arguments.append(output_path)
+
+        if num_speakers is not None:
+            arguments.extend([
+                "--num-speakers",
+                str(num_speakers),
+            ])
+
+        if min_speakers is not None:
+            arguments.extend([
+                "--min-speakers",
+                str(min_speakers),
+            ])
+
+        if max_speakers is not None:
+            arguments.extend([
+                "--max-speakers",
+                str(max_speakers),
+            ])
+
+        run_worker(
+            worker("community-1"),
+            arguments,
+        )
+
+        output = load_detector_output(
+            output_path
+        )
+
+        if (
+            output.source_path.resolve()
+            != representation_path.resolve()
+        ):
+            raise ValueError(
+                "Detector output source does not "
+                "match requested representation: "
+                f"{output.source_path}"
+            )
+
+        result = import_detector_regions(
+            storage,
+            output,
+            source_id=source_id,
+        )
+
+    return DetectorRunResult(
+        output=output,
+        imported=result.imported,
+        skipped=result.skipped,
     )

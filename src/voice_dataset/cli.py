@@ -44,6 +44,7 @@ from .voices import (
     set_voice_ignored,
 )
 from .detectors import (
+    detect_source_regions,
     import_detector_regions,
     load_detector_output,
 )
@@ -58,6 +59,7 @@ from .transcripts import (
 from .boundary_evidence import (
     refresh_source_boundary_evidence,
 )
+from .workers import WorkerError
 
 preload_cuda_libraries()
 
@@ -475,6 +477,97 @@ def voice_restore(
 
     typer.echo(
         f"{voice['id']} is no longer ignored."
+    )
+
+
+@region_app.command("detect")
+def region_detect(
+    source_id: str = typer.Argument(
+        ...,
+        help="Dataset source identifier.",
+    ),
+    representation: str = typer.Option(
+        ...,
+        help=(
+            "Source representation to analyze, "
+            "e.g. center."
+        ),
+    ),
+    num_speakers: int | None = typer.Option(
+        None,
+        help="Exact number of speakers.",
+    ),
+    min_speakers: int | None = typer.Option(
+        None,
+        help="Minimum number of speakers.",
+    ),
+    max_speakers: int | None = typer.Option(
+        None,
+        help="Maximum number of speakers.",
+    ),
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Detect candidate speech regions."""
+
+    storage = storage_for(dataset)
+
+    try:
+        result = detect_source_regions(
+            storage,
+            source_id,
+            representation,
+            num_speakers=num_speakers,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+        )
+    except (
+        ValueError,
+        KeyError,
+        OSError,
+        WorkerError,
+    ) as exc:
+        typer.echo(
+            f"Detection failed: {exc}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"Imported {len(result.imported)} "
+        f"candidate regions."
+    )
+
+    typer.echo(
+        f"Skipped {result.skipped} "
+        f"existing candidate regions."
+    )
+
+    typer.echo(
+        f"  detector:       "
+        f"{result.output.detector_name}"
+    )
+
+    typer.echo(
+        f"  model:          "
+        f"{result.output.detector_model or '-'}"
+    )
+
+    typer.echo(
+        f"  revision:       "
+        f"{result.output.detector_revision or '-'}"
+    )
+
+    typer.echo(
+        f"  representation: "
+        f"{representation}"
+    )
+
+    typer.echo(
+        f"  source:         "
+        f"{source_id}"
     )
 
 

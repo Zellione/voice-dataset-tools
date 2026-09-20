@@ -3,9 +3,15 @@ from pathlib import Path
 
 import pytest
 
+from voice_dataset import detectors
 from voice_dataset.detectors import (
+    detect_source_regions,
     import_detector_regions,
     load_detector_output,
+)
+from voice_dataset.schema import (
+    AudioRepresentation,
+    SourceRecord,
 )
 from voice_dataset.storage import DatasetStorage
 
@@ -17,6 +23,30 @@ def make_storage(
     dataset.mkdir()
 
     return DatasetStorage(dataset)
+
+
+def make_detector_storage(
+    tmp_path: Path,
+) -> tuple[DatasetStorage, Path]:
+    storage = make_storage(tmp_path)
+
+    audio = tmp_path / "detector.wav"
+    audio.touch()
+
+    storage.add_source(
+        SourceRecord(
+            id="source_001",
+            media_path="/media/source.mkv",
+            representations={
+                "center": AudioRepresentation(
+                    path=str(audio),
+                    kind="center",
+                ),
+            },
+        )
+    )
+
+    return storage, audio
 
 
 def write_detector_output(
@@ -485,3 +515,196 @@ def test_same_detector_parameters_are_idempotent(
 
     assert len(second.imported) == 0
     assert second.skipped == 1
+
+
+def test_detect_source_regions_runs_worker_and_imports(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage, audio = make_detector_storage(
+        tmp_path
+    )
+
+    def fake_run_worker(
+        item,
+        arguments,
+    ) -> None:
+        assert item.name == "community-1"
+
+        assert arguments[0] == audio.resolve()
+
+        assert arguments[2:] == [
+            "--min-speakers",
+            "2",
+        ]
+
+        output_path = Path(arguments[1])
+
+        output_path.write_text(
+            json.dumps({
+                "format": (
+                    "voice-dataset-detector-output"
+                ),
+                "version": 1,
+                "detector": {
+                    "name": "test-detector",
+                    "model": "test-model",
+                    "revision": "abc123",
+                    "parameters": {
+                        "min_speakers": 2,
+                    },
+                },
+                "source": {
+                    "path": str(audio.resolve()),
+                    "sample_rate": 48000,
+                    "channels": 1,
+                    "duration": 10.0,
+                },
+                "regions": [
+                    {
+                        "start": 1.0,
+                        "end": 2.0,
+                        "label": "SPEAKER_00",
+                    },
+                ],
+            }),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(
+        detectors,
+        "run_worker",
+        fake_run_worker,
+    )
+
+    result = detect_source_regions(
+        storage,
+        "source_001",
+        "center",
+        min_speakers=2,
+    )
+
+    assert len(result.imported) == 1
+    assert result.skipped == 0
+
+    region = storage.regions.load()[0]
+
+    assert region["source_id"] == "source_001"
+
+    assert region["metadata"][
+        "detector_parameters"
+    ] == {
+        "min_speakers": 2,
+    }
+
+
+def test_detect_source_regions_rejects_wrong_worker_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage, audio = make_detector_storage(
+        tmp_path
+    )
+
+    def fake_run_worker(
+        item,
+        arguments,
+    ) -> None:
+        output_path = Path(arguments[1])
+
+        output_path.write_text(
+            json.dumps({
+                "format": (
+                    "voice-dataset-detector-output"
+                ),
+                "version": 1,
+                "detector": {
+                    "name": "test-detector",
+                },
+                "source": {
+                    "path": "/tmp/wrong.wav",
+                    "sample_rate": 48000,
+                    "channels": 1,
+                    "duration": 10.0,
+                },
+                "regions": [
+                    {
+                        "start": 1.0,
+                        "end": 2.0,
+                    },
+                ],
+            }),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(
+        detectors,
+        "run_worker",
+        fake_run_worker,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Detector output source does not "
+            "match requested representation"
+        ),
+    ):
+        detect_source_regions(
+            storage,
+            "source_001",
+            "center",
+        )
+
+    assert storage.regions.load() == []
+
+
+@pytest.mark.parametrize(
+    (
+        "arguments",
+        "message",
+    ),
+    [
+        (
+            {"num_speakers": 0},
+            "num_speakers must be positive",
+        ),
+        (
+            {"min_speakers": 0},
+            "min_speakers must be positive",
+        ),
+        (
+            {"max_speakers": 0},
+            "max_speakers must be positive",
+        ),
+        (
+            {
+                "min_speakers": 3,
+                "max_speakers": 2,
+            },
+            (
+                "min_speakers cannot be greater "
+                "than max_speakers"
+            ),
+        ),
+    ],
+)
+def test_detect_source_regions_rejects_invalid_parameters(
+    tmp_path: Path,
+    arguments: dict[str, int],
+    message: str,
+) -> None:
+    storage, audio = make_detector_storage(
+        tmp_path
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=message,
+    ):
+        detect_source_regions(
+            storage,
+            "source_001",
+            "center",
+            **arguments,
+        )
