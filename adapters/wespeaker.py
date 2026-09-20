@@ -12,20 +12,23 @@ from pyannote.audio import Model, Inference
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-HF_CACHE_DIR = (
-    PROJECT_ROOT
-    / "tools"
-    / "pyannote"
-    / "cache"
-)
-
-MODEL_SOURCE = (
+MODEL_ID = (
     "pyannote/wespeaker-voxceleb-resnet34-LM"
 )
 
 MODEL_REVISION = (
     "837717ddb9ff5507820346191109dc79c958d614"
 )
+
+MODEL_DIR = (
+    PROJECT_ROOT
+    / "tools"
+    / "pyannote"
+    / "models"
+    / "wespeaker-voxceleb-resnet34-LM"
+)
+
+MODEL_PATH = MODEL_DIR / "pytorch_model.bin"
 
 DEVICE = torch.device("cuda:0")
 
@@ -332,15 +335,8 @@ def main() -> None:
         "Loading WeSpeaker ResNet34-LM..."
     )
 
-    HF_CACHE_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-    
     model = Model.from_pretrained(
-        MODEL_SOURCE,
-        revision=MODEL_REVISION,
-        cache_dir=HF_CACHE_DIR,
+        MODEL_PATH,
     )
 
     inference = Inference(
@@ -439,7 +435,7 @@ def main() -> None:
             "record_type": args.record_type,
             "encoder": {
                 "name": "pyannote-wespeaker",
-                "model": MODEL_SOURCE,
+                "model": MODEL_ID,
                 "revision": MODEL_REVISION,
             },
             "representation": (

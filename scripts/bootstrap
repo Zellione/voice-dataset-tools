@@ -30,6 +30,12 @@ ECAPA_MEAN_VAR_NORM_SHA256="cd70225b05b37be64fc5a95e24395d804231d43f74b2e1e5a513
 PYANNOTE_DIR="${TOOLS_DIR}/pyannote"
 PYANNOTE_VENV="${PYANNOTE_DIR}/.venv"
 
+WESPEAKER_MODEL_ID="pyannote/wespeaker-voxceleb-resnet34-LM"
+WESPEAKER_MODEL_REVISION="837717ddb9ff5507820346191109dc79c958d614"
+WESPEAKER_MODEL_DIR="${PYANNOTE_DIR}/models/wespeaker-voxceleb-resnet34-LM"
+WESPEAKER_MODEL_PATH="${WESPEAKER_MODEL_DIR}/pytorch_model.bin"
+WESPEAKER_MODEL_SHA256="366edf44f4c80889a3eb7a9d7bdf02c4aede3127f7dd15e274dcdb826b143c56"
+
 COMMUNITY_MODEL_ID="pyannote/speaker-diarization-community-1"
 COMMUNITY_MODEL_REVISION="3533c8cf8e369892e6b79ff1bf80f7b0286a54ee"
 COMMUNITY_MODEL_DIR="${PYANNOTE_DIR}/models/speaker-diarization-community-1"
@@ -202,6 +208,53 @@ echo "Installing locked Pyannote / WeSpeaker dependencies..."
 uv pip install \
     --python "${PYANNOTE_VENV}/bin/python" \
     --requirement "${PYANNOTE_LOCK}"
+
+echo "Checking WeSpeaker model..."
+
+wespeaker_model_valid=false
+
+if [[ -f "${WESPEAKER_MODEL_PATH}" ]]; then
+    wespeaker_actual_sha256="$(
+        sha256sum "${WESPEAKER_MODEL_PATH}" |
+        awk '{print $1}'
+    )"
+
+    if [[ "${wespeaker_actual_sha256}" == "${WESPEAKER_MODEL_SHA256}" ]]; then
+        wespeaker_model_valid=true
+    fi
+fi
+
+if [[ "${wespeaker_model_valid}" == true ]]; then
+    echo "WeSpeaker model already exists and is valid."
+else
+    echo "Downloading pinned WeSpeaker model..."
+
+    rm -rf "${WESPEAKER_MODEL_DIR}"
+    mkdir -p "${WESPEAKER_MODEL_DIR}"
+
+    "${PYANNOTE_VENV}/bin/hf" download \
+        "${WESPEAKER_MODEL_ID}" \
+        pytorch_model.bin \
+        --revision "${WESPEAKER_MODEL_REVISION}" \
+        --local-dir "${WESPEAKER_MODEL_DIR}"
+
+    if [[ ! -f "${WESPEAKER_MODEL_PATH}" ]]; then
+        echo "WeSpeaker model download failed." >&2
+        exit 1
+    fi
+
+    wespeaker_actual_sha256="$(
+        sha256sum "${WESPEAKER_MODEL_PATH}" |
+        awk '{print $1}'
+    )"
+
+    if [[ "${wespeaker_actual_sha256}" != "${WESPEAKER_MODEL_SHA256}" ]]; then
+        echo "WeSpeaker model verification failed." >&2
+        exit 1
+    fi
+
+    echo "WeSpeaker model downloaded and verified."
+fi
 
 echo
 echo "==> Pyannote Community-1"
