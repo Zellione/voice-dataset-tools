@@ -37,6 +37,7 @@ class EmbeddingOutput:
     record_type: RecordType
     encoder_name: str
     encoder_model: str | None
+    encoder_revision: str | None
     representation: str
     embeddings: list[ValidatedEmbedding]
 
@@ -169,6 +170,11 @@ def load_embedding_output(
     encoder_model = _optional_string(
         encoder.get("model"),
         "encoder.model",
+    )
+
+    encoder_revision = _optional_string(
+        encoder.get("revision"),
+        "encoder.revision",
     )
 
     representation = document.get(
@@ -330,6 +336,7 @@ def load_embedding_output(
         record_type=record_type,
         encoder_name=encoder_name,
         encoder_model=encoder_model,
+        encoder_revision=encoder_revision,
         representation=representation,
         embeddings=embeddings,
     )
@@ -354,6 +361,19 @@ def _expected_reference(
     embedding: ValidatedEmbedding,
     relative_path: Path,
 ) -> EmbeddingReference:
+    metadata = {
+        **embedding.metadata,
+        "model": output.encoder_model,
+        "sha256": _sha256_file(
+            embedding.path
+        ),
+    }
+
+    if output.encoder_revision is not None:
+        metadata["revision"] = (
+            output.encoder_revision
+        )
+
     return EmbeddingReference(
         encoder=output.encoder_name,
         representation=(
@@ -361,13 +381,7 @@ def _expected_reference(
         ),
         path=str(relative_path),
         dimension=embedding.dimension,
-        metadata={
-            **embedding.metadata,
-            "model": output.encoder_model,
-            "sha256": _sha256_file(
-                embedding.path
-            ),
-        },
+        metadata=metadata,
     )
 
 
