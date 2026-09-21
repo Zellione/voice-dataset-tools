@@ -12,11 +12,18 @@ from .reconciliation import (
     create_turn_from_regions,
     edit_turn,
     effective_region_reconciliation,
+    merge_turns,
     reject_region,
     split_turn,
 )
+from .automatic_reconciliation import (
+    analyze_continuous_reconciliation,
+    apply_continuous_merge_candidate,
+    reconcile_source_regions,
+)
 from .storage import DatasetStorage
 from .sources import set_representation_provenance
+from .separation import separate_source
 from .playback import (
     play_preferred_review_audio,
     play_representation,
@@ -49,6 +56,7 @@ from .detectors import (
     load_detector_output,
 )
 from .embeddings import (
+    embed_turns,
     import_embeddings,
     load_embedding_output,
 )
@@ -56,6 +64,7 @@ from .transcripts import (
     import_transcripts,
     load_transcript_output,
 )
+from .region_asr import transcribe_regions
 from .boundary_evidence import (
     refresh_source_boundary_evidence,
 )
@@ -123,6 +132,71 @@ def storage_for(dataset: Path) -> DatasetStorage:
 def main():
     """Build and manage speech datasets for voice model training."""
     pass
+
+
+@source_app.command("separate")
+def source_separate(
+    source_id: str,
+    representation: str = typer.Option(
+        "center",
+        help="Input source representation.",
+    ),
+    output_representation: str = typer.Option(
+        "speech",
+        help="Output speech representation name.",
+    ),
+    dataset: Path = typer.Option(
+        ...,
+        help="Dataset root directory.",
+    ),
+    chunk: float = typer.Option(
+        30.0,
+        min=0.001,
+        help="BandIt chunk size in seconds.",
+    ),
+    overlap: float = typer.Option(
+        2.0,
+        min=0.0,
+        help="BandIt chunk overlap in seconds.",
+    ),
+):
+    """Separate speech with BandIt v2."""
+
+    storage = storage_for(dataset)
+
+    try:
+        result = separate_source(
+            storage,
+            source_id,
+            input_representation=representation,
+            output_representation=(
+                output_representation
+            ),
+            chunk=chunk,
+            overlap=overlap,
+        )
+    except (
+        KeyError,
+        ValueError,
+        WorkerError,
+    ) as exc:
+        raise typer.BadParameter(
+            str(exc)
+        ) from exc
+
+    typer.echo(
+        "Speech representation ready:"
+    )
+    typer.echo(
+        f"  source:         {result.source_id}"
+    )
+    typer.echo(
+        "  representation: "
+        f"{result.representation_name}"
+    )
+    typer.echo(
+        f"  path:           {result.path}"
+    )
 
 
 @source_app.command(
@@ -250,17 +324,9 @@ def probe(
 @app.command()
 def ingest(
     source: Path,
-    speaker: str = typer.Option(
+    source_id: str = typer.Option(
         ...,
-        help="Unique speaker identifier.",
-    ),
-    character: str = typer.Option(
-        ...,
-        help="Character represented by the speaker.",
-    ),
-    language: str | None = typer.Option(
-        None,
-        help="ASR language override, e.g. en or de.",
+        help="Stable identifier for this source.",
     ),
     audio_stream: int = typer.Option(
         0,
@@ -303,16 +369,41 @@ def ingest(
             "auto, mono, or center"
         )
 
-    ingest_source(
-        source=source,
-        output=output,
-        speaker=speaker,
-        character=character,
-        language=language,
-        audio_stream=audio_stream,
-        channel=channel,
-        start=start,
-        duration=duration,
+    try:
+        record = ingest_source(
+            source=source,
+            output=output,
+            source_id=source_id,
+            audio_stream=audio_stream,
+            channel=channel,
+            start=start,
+            duration=duration,
+        )
+    except (
+        FileNotFoundError,
+        RuntimeError,
+        ValueError,
+    ) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    representation_name = next(
+        iter(record.representations)
+    )
+    representation = record.representations[
+        representation_name
+    ]
+
+    typer.echo()
+    typer.echo(f"Ingested source {record.id}")
+    typer.echo(
+        f"  representation: {representation_name}"
+    )
+    typer.echo(
+        f"  audio:          {representation.path}"
+    )
+    typer.echo(
+        f"  media start:    "
+        f"{representation.media_start:.3f}s"
     )
 
 
@@ -641,6 +732,76 @@ def region_import_detector(
     )
 
 
+@region_app.command("transcribe")
+def region_transcribe(
+    source_id: str,
+    representation: str = typer.Option(
+        "speech",
+        help="Source representation to transcribe.",
+    ),
+    name: str = typer.Option(
+        "whisper",
+        help="Transcript hypothesis name.",
+    ),
+    language: str | None = typer.Option(
+        None,
+        help=(
+            "Optional Whisper language override, "
+            "e.g. en or de. Omit for automatic detection."
+        ),
+    ),
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Transcribe candidate regions with Whisper."""
+
+    storage = storage_for(dataset)
+
+    try:
+        result = transcribe_regions(
+            storage,
+            source_id,
+            representation_name=representation,
+            transcript_name=name,
+            language=language,
+        )
+    except (
+        ValueError,
+        KeyError,
+        RuntimeError,
+        OSError,
+    ) as exc:
+        typer.echo(
+            f"Transcription failed: {exc}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"Transcribed {result.transcribed} "
+        f"candidate regions."
+    )
+    typer.echo(
+        f"Skipped {result.skipped} "
+        f"existing transcript hypotheses."
+    )
+    typer.echo(
+        f"  model:          large-v3"
+    )
+    typer.echo(
+        f"  representation: {representation}"
+    )
+    typer.echo(
+        f"  name:           {name}"
+    )
+    typer.echo(
+        f"  language:       "
+        f"{language or 'auto'}"
+    )
+
+
 @region_app.command("import-transcripts")
 def region_import_transcripts(
     transcript_output: Path,
@@ -868,6 +1029,80 @@ def turn_refresh_boundary_evidence(
     )
 
 
+@turn_app.command("embed")
+def turn_embed(
+    encoder: str = typer.Option(
+        ...,
+        help=(
+            "Speaker encoder: ecapa or wespeaker."
+        ),
+    ),
+    representation: str = typer.Option(
+        "center",
+        help=(
+            "Turn audio representation to embed."
+        ),
+    ),
+    name: str | None = typer.Option(
+        None,
+        help=(
+            "Embedding evidence name. "
+            "Defaults to <encoder>_<representation>."
+        ),
+    ),
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Generate and import speaker embeddings for turns."""
+
+    evidence_name = (
+        name
+        or f"{encoder}_{representation}"
+    )
+
+    storage = storage_for(dataset)
+
+    try:
+        result = embed_turns(
+            storage,
+            encoder=encoder,
+            representation=representation,
+            name=evidence_name,
+        )
+    except (
+        ValueError,
+        KeyError,
+        RuntimeError,
+        OSError,
+    ) as exc:
+        typer.echo(
+            f"Embedding failed: {exc}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"Imported {result.imported} "
+        "speaker embeddings."
+    )
+    typer.echo(
+        f"Skipped {result.skipped} "
+        "existing speaker embeddings."
+    )
+    typer.echo(
+        f"  encoder:        {result.encoder}"
+    )
+    typer.echo(
+        f"  representation: "
+        f"{result.representation}"
+    )
+    typer.echo(
+        f"  name:           {evidence_name}"
+    )
+
+
 @turn_app.command("import-embeddings")
 def turn_import_embeddings(
     embedding_output: Path,
@@ -1028,6 +1263,219 @@ def region_materialize_audio(
     typer.echo(
         f"Skipped {result.skipped} "
         f"existing audio representations."
+    )
+
+
+@region_app.command("analyze-continuous")
+def region_analyze_continuous(
+    source_id: str,
+    evidence: str = typer.Option(
+        "qwen3",
+        help="Continuous ASR evidence name.",
+    ),
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Analyze continuous ASR against detector regions."""
+
+    storage = storage_for(dataset)
+
+    try:
+        results = analyze_continuous_reconciliation(
+            storage,
+            source_id,
+            evidence_name=evidence,
+        )
+    except (
+        ValueError,
+        KeyError,
+        RuntimeError,
+        OSError,
+    ) as exc:
+        typer.echo(
+            f"Continuous reconciliation analysis failed: {exc}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    for result in results:
+        typer.echo(
+            f"{result.utterance_index + 1:02d}  "
+            f"{result.start:.3f}-"
+            f"{result.end:.3f}  "
+            f"{result.status}"
+        )
+
+        typer.echo(
+            "  regions:  "
+            + (
+                ", ".join(result.region_ids)
+                if result.region_ids
+                else "-"
+            )
+        )
+
+        typer.echo(
+            "  speakers: "
+            + (
+                ", ".join(result.speaker_labels)
+                if result.speaker_labels
+                else "-"
+            )
+        )
+
+        for boundary in result.boundaries:
+            same_speaker = (
+                boundary.left_speaker
+                == boundary.right_speaker
+            )
+
+            typer.echo(
+                "  boundary: "
+                f"{boundary.left_region_id} -> "
+                f"{boundary.right_region_id}  "
+                f"region_gap="
+                f"{boundary.region_gap:.3f}s  "
+                f"word_gap="
+                f"{boundary.word_gap:.3f}s  "
+                f"same_speaker="
+                f"{'yes' if same_speaker else 'no'}"
+            )
+
+            typer.echo(
+                "            "
+                f"{boundary.left_word!r} -> "
+                f"{boundary.right_word!r}"
+            )
+
+        typer.echo(
+            "  reasons:  "
+            + (
+                ", ".join(result.reasons)
+                if result.reasons
+                else "-"
+            )
+        )
+
+        typer.echo(
+            f"  text:     {result.text}"
+        )
+
+
+@region_app.command("apply-continuous-merge")
+def region_apply_continuous_merge(
+    source_id: str,
+    utterance: int = typer.Option(
+        ...,
+        min=1,
+        help="1-based continuous ASR utterance number.",
+    ),
+    evidence: str = typer.Option(
+        "qwen3",
+        help="Continuous ASR evidence name.",
+    ),
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Apply one continuous-ASR merge candidate."""
+
+    storage = storage_for(dataset)
+
+    try:
+        turn = apply_continuous_merge_candidate(
+            storage,
+            source_id,
+            utterance - 1,
+            evidence_name=evidence,
+        )
+    except (
+        ValueError,
+        KeyError,
+        RuntimeError,
+        OSError,
+    ) as exc:
+        typer.echo(
+            f"Continuous merge failed: {exc}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"Merged utterance {utterance:02d} "
+        f"-> {turn['id']}"
+    )
+
+    typer.echo(
+        "  regions: "
+        + ", ".join(turn["source_regions"])
+    )
+
+    typer.echo(
+        f"  range:   "
+        f"{turn['source_start']:.6f}-"
+        f"{turn['source_end']:.6f}"
+    )
+
+    typer.echo(
+        f"  language: "
+        f"{turn.get('language') or '-'}"
+    )
+
+    typer.echo(
+        f"  text:     "
+        f"{turn.get('transcript') or '-'}"
+    )
+
+
+@region_app.command("reconcile")
+def region_reconcile(
+    source_id: str,
+    transcript: str = typer.Option(
+        "whisper",
+        help="Transcript hypothesis used for reconciliation.",
+    ),
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Create canonical turns from candidate-region evidence."""
+
+    storage = storage_for(dataset)
+
+    try:
+        result = reconcile_source_regions(
+            storage,
+            source_id,
+            transcript_name=transcript,
+        )
+    except (
+        ValueError,
+        KeyError,
+        RuntimeError,
+        OSError,
+    ) as exc:
+        typer.echo(
+            f"Reconciliation failed: {exc}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"Created {result.created} canonical turns."
+    )
+    typer.echo(
+        f"Skipped {result.skipped} already resolved regions."
+    )
+    typer.echo(
+        f"Left {result.unresolved} regions unresolved."
+    )
+    typer.echo(
+        f"  transcript: {transcript}"
     )
 
 
@@ -1382,6 +1830,62 @@ def turn_edit(
     )
 
 
+@turn_app.command("merge")
+def turn_merge(
+    turn_ids: list[str] = typer.Argument(
+        ...,
+        help=(
+            "Turn IDs to merge, in source "
+            "timeline order."
+        ),
+    ),
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Merge reconciled speech turns into one turn."""
+
+    storage = storage_for(dataset)
+
+    try:
+        merged = merge_turns(
+            storage,
+            turn_ids,
+        )
+
+    except (
+        ValueError,
+        KeyError,
+        RuntimeError,
+        OSError,
+    ) as exc:
+        typer.echo(
+            f"Turn merge failed: {exc}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        "Merged "
+        + ", ".join(turn_ids)
+        + f" -> {merged['id']}"
+    )
+
+    typer.echo(
+        "  regions: "
+        + ", ".join(
+            merged["source_regions"]
+        )
+    )
+
+    typer.echo(
+        f"  range:   "
+        f"{merged['source_start']:.6f}-"
+        f"{merged['source_end']:.6f}"
+    )
+
+
 @turn_app.command("split")
 
 def turn_split(
@@ -1721,6 +2225,7 @@ def turn_review(
                     play_preferred_review_audio(
                         dataset,
                         current,
+                        blocking=True,
                     )
                 )
 
@@ -1736,6 +2241,7 @@ def turn_review(
                 path = play_representation(
                     dataset,
                     representation,
+                    blocking=True,
                 )
 
                 typer.echo(
@@ -1762,6 +2268,7 @@ def turn_review(
                     source,
                     current,
                     padding=context_padding,
+                    blocking=True,
                 )
 
                 typer.echo(

@@ -13,6 +13,7 @@ import numpy as np
 
 from .schema import EmbeddingReference
 from .storage import DatasetStorage
+from .workers import run_worker, worker
 
 
 EMBEDDING_OUTPUT_FORMAT = (
@@ -702,4 +703,86 @@ def import_embeddings(
     return EmbeddingImportResult(
         imported=imported,
         skipped=skipped,
+    )
+
+
+@dataclass(frozen=True)
+class EmbeddingRunResult:
+    encoder: str
+    representation: str
+    imported: int
+    skipped: int
+
+
+def embed_turns(
+    storage: DatasetStorage,
+    *,
+    encoder: str,
+    representation: str,
+    name: str,
+) -> EmbeddingRunResult:
+    if encoder not in {"ecapa", "wespeaker"}:
+        raise ValueError(
+            f"Unsupported speaker encoder: {encoder}"
+        )
+
+    if not representation:
+        raise ValueError(
+            "representation must not be empty"
+        )
+
+    if not name:
+        raise ValueError(
+            "embedding evidence name must not be empty"
+        )
+
+    with tempfile.TemporaryDirectory(
+        prefix=f"voice-dataset-{encoder}-"
+    ) as temporary_directory:
+        output_directory = (
+            Path(temporary_directory)
+            / "output"
+        )
+
+        run_worker(
+            worker(encoder),
+            [
+                storage.root,
+                output_directory,
+                "--record-type",
+                "turn",
+                "--representation",
+                representation,
+            ],
+        )
+
+        output = load_embedding_output(
+            output_directory / "embeddings.json"
+        )
+
+        if output.record_type != "turn":
+            raise ValueError(
+                "Embedding worker produced "
+                f"{output.record_type} records; "
+                "turn records are required"
+            )
+
+        if output.representation != representation:
+            raise ValueError(
+                "Embedding worker used unexpected "
+                "representation: "
+                f"{output.representation}"
+            )
+
+        result = import_embeddings(
+            storage,
+            output,
+            name=name,
+        )
+
+    return EmbeddingRunResult(
+        encoder=encoder,
+        representation=representation,
+        imported=result.imported,
+        skipped=result.skipped,
     )

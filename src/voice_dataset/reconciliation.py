@@ -307,6 +307,7 @@ def create_turn_from_regions(
     *,
     transcript: str | None = None,
     language: str | None = None,
+    creation_method: str = "manual_reconciliation",
 ) -> dict[str, Any]:
     if not region_ids:
         raise ValueError(
@@ -479,7 +480,7 @@ def create_turn_from_regions(
 
     metadata = {
         "creation": {
-            "method": "manual_reconciliation",
+            "method": creation_method,
         }
     }
 
@@ -561,6 +562,411 @@ def edit_turn(
         turn_id,
         update,
     )
+
+
+def _turn_derived_paths(
+    storage: DatasetStorage,
+    turn: dict[str, Any],
+) -> list[Path]:
+    turn_id = turn.get("id")
+
+    if not isinstance(turn_id, str):
+        raise ValueError(
+            "Turn has invalid id"
+        )
+
+    turn_directory = (
+        storage.root
+        / "turns"
+        / turn_id
+    ).resolve()
+
+    stale_paths: list[Path] = []
+
+    for field_name in (
+        "representations",
+        "embeddings",
+    ):
+        artifacts = turn.get(
+            field_name,
+            {},
+        )
+
+        if not isinstance(artifacts, dict):
+            raise ValueError(
+                f"{turn_id}: {field_name} "
+                "must be a dict"
+            )
+
+        for name, artifact in artifacts.items():
+            if not isinstance(artifact, dict):
+                raise ValueError(
+                    f"{turn_id}/{name}: "
+                    f"invalid {field_name} entry"
+                )
+
+            relative_path = artifact.get("path")
+
+            if (
+                relative_path is None
+                and field_name == "embeddings"
+            ):
+                continue
+
+            if not isinstance(
+                relative_path,
+                str,
+            ):
+                artifact_name = (
+                    "representation"
+                    if field_name == "representations"
+                    else "embedding"
+                )
+
+                raise ValueError(
+                    f"{turn_id}/{name}: "
+                    f"{artifact_name} has invalid path"
+                )
+
+            candidate = (
+                storage.root
+                / relative_path
+            ).resolve()
+
+            try:
+                candidate.relative_to(
+                    turn_directory
+                )
+            except ValueError as exc:
+                artifact_name = (
+                    "representation"
+                    if field_name == "representations"
+                    else "embedding"
+                )
+
+                raise ValueError(
+                    f"{turn_id}/{name}: "
+                    f"{artifact_name} path escapes "
+                    "turn directory"
+                ) from exc
+
+            stale_paths.append(candidate)
+
+    return stale_paths
+
+
+def merge_turns(
+    storage: DatasetStorage,
+    turn_ids: list[str],
+) -> dict[str, Any]:
+    if len(turn_ids) < 2:
+        raise ValueError(
+            "At least two turns are required to merge"
+        )
+
+    if len(set(turn_ids)) != len(turn_ids):
+        raise ValueError(
+            "Turn ids must be unique"
+        )
+
+    turns = storage.turns.load()
+
+    by_id = {
+        turn.get("id"): (index, turn)
+        for index, turn in enumerate(turns)
+    }
+
+    selected: list[
+        tuple[int, dict[str, Any]]
+    ] = []
+
+    for turn_id in turn_ids:
+        match = by_id.get(turn_id)
+
+        if match is None:
+            raise KeyError(
+                f"Turn does not exist: {turn_id}"
+            )
+
+        selected.append(match)
+
+    source_ids = {
+        turn.get("source_id")
+        for _, turn in selected
+    }
+
+    if len(source_ids) != 1:
+        raise ValueError(
+            "All turns must belong to the same source"
+        )
+
+    source_id = next(iter(source_ids))
+
+    if not isinstance(source_id, str):
+        raise ValueError(
+            "Turns contain an invalid source_id"
+        )
+
+    ordered = sorted(
+        selected,
+        key=lambda item: (
+            item[1]["source_start"],
+            item[1]["source_end"],
+            item[1]["id"],
+        ),
+    )
+
+    ordered_ids = [
+        turn["id"]
+        for _, turn in ordered
+    ]
+
+    if ordered_ids != turn_ids:
+        raise ValueError(
+            "Turns must be supplied in source "
+            "timeline order"
+        )
+
+    region_ids: list[str] = []
+    regions: dict[str, dict[str, Any]] = {}
+
+    previous_end: float | None = None
+
+    for _, turn in ordered:
+        start = turn.get("source_start")
+        end = turn.get("source_end")
+
+        if not isinstance(start, (int, float)):
+            raise ValueError(
+                f"{turn['id']}: invalid source_start"
+            )
+
+        if not isinstance(end, (int, float)):
+            raise ValueError(
+                f"{turn['id']}: invalid source_end"
+            )
+
+        if end <= start:
+            raise ValueError(
+                f"{turn['id']}: invalid source range"
+            )
+
+        if (
+            previous_end is not None
+            and start < previous_end
+        ):
+            raise ValueError(
+                "Turns to merge must not overlap"
+            )
+
+        previous_end = float(end)
+
+        source_regions = turn.get(
+            "source_regions"
+        )
+
+        if not isinstance(source_regions, list):
+            raise ValueError(
+                f"{turn['id']}: "
+                "source_regions must be a list"
+            )
+
+        if not source_regions:
+            raise ValueError(
+                f"{turn['id']}: "
+                "source_regions must not be empty"
+            )
+
+        for region_id in source_regions:
+            if region_id in regions:
+                raise ValueError(
+                    "Candidate region appears in "
+                    "multiple merged turns: "
+                    f"{region_id}"
+                )
+
+            region = storage.get_region(region_id)
+
+            if region is None:
+                raise KeyError(
+                    "Candidate region does not exist: "
+                    f"{region_id}"
+                )
+
+            if region.get("source_id") != source_id:
+                raise ValueError(
+                    f"{region_id}: source does not "
+                    "match merged turns"
+                )
+
+            effective = (
+                effective_region_reconciliation(
+                    storage,
+                    region,
+                )
+            )
+
+            if (
+                effective["status"] != "reconciled"
+                or effective["turn_id"]
+                != turn["id"]
+            ):
+                raise ValueError(
+                    f"{region_id} is not exclusively "
+                    f"reconciled to {turn['id']}"
+                )
+
+            regions[region_id] = region
+            region_ids.append(region_id)
+
+    ordered_regions = sorted(
+        regions.values(),
+        key=lambda region: (
+            region["source_start"],
+            region["source_end"],
+            region["id"],
+        ),
+    )
+
+    ordered_region_ids = [
+        region["id"]
+        for region in ordered_regions
+    ]
+
+    if ordered_region_ids != region_ids:
+        raise ValueError(
+            "Merged candidate regions are not in "
+            "source timeline order"
+        )
+
+    start = ordered_regions[0].get(
+        "source_start"
+    )
+    end = ordered_regions[-1].get(
+        "source_end"
+    )
+
+    if not isinstance(start, (int, float)):
+        raise ValueError(
+            f"{ordered_regions[0]['id']}: "
+            "invalid source_start"
+        )
+
+    if not isinstance(end, (int, float)):
+        raise ValueError(
+            f"{ordered_regions[-1]['id']}: "
+            "invalid source_end"
+        )
+
+    start = float(start)
+    end = float(end)
+
+    if end <= start:
+        raise ValueError(
+            "Invalid merged turn source range"
+        )
+
+    retained_id = turn_ids[0]
+
+    metadata = {
+        "creation": {
+            "method": "manual_merge",
+            "source_turn_ids": list(turn_ids),
+        }
+    }
+
+    boundary_evidence = (
+        _boundary_evidence_for_turn(
+            storage,
+            source_id=source_id,
+            start=start,
+            end=end,
+        )
+    )
+
+    if boundary_evidence is not None:
+        metadata["boundary_evidence"] = (
+            boundary_evidence
+        )
+
+    merged = TurnRecord(
+        id=retained_id,
+        source_id=source_id,
+        source_start=start,
+        source_end=end,
+        source_regions=region_ids,
+        metadata=metadata,
+    ).to_dict()
+
+    selected_ids = set(turn_ids)
+
+    final_turns: list[dict[str, Any]] = []
+
+    for turn in turns:
+        turn_id = turn.get("id")
+
+        if turn_id == retained_id:
+            final_turns.append(merged)
+        elif turn_id in selected_ids:
+            continue
+        else:
+            final_turns.append(turn)
+
+    seen_regions: dict[str, str] = {}
+
+    for turn in final_turns:
+        candidate_ids = turn.get(
+            "source_regions"
+        )
+
+        if not isinstance(candidate_ids, list):
+            raise ValueError(
+                f"{turn.get('id', '<unknown>')}: "
+                "source_regions must be a list"
+            )
+
+        for region_id in candidate_ids:
+            previous = seen_regions.get(
+                region_id
+            )
+
+            if previous is not None:
+                raise ValueError(
+                    "Candidate region would belong "
+                    "to multiple turns: "
+                    f"{region_id} -> "
+                    f"{previous}, {turn.get('id')}"
+                )
+
+            seen_regions[region_id] = (
+                turn.get("id")
+            )
+
+    stale_paths: list[Path] = []
+
+    for _, turn in selected:
+        stale_paths.extend(
+            _turn_derived_paths(
+                storage,
+                turn,
+            )
+        )
+
+    storage.turns.replace(final_turns)
+
+    for stale_path in stale_paths:
+        stale_path.unlink(
+            missing_ok=True
+        )
+
+    stored = storage.get_turn(retained_id)
+
+    if stored is None:
+        raise RuntimeError(
+            "Failed to read back merged turn"
+        )
+
+    return stored
 
 
 def split_turn(
@@ -780,54 +1186,10 @@ def split_turn(
 
             seen_regions[region_id] = turn.get("id")
 
-    old_representations = original.get(
-        "representations",
-        {},
+    stale_paths = _turn_derived_paths(
+        storage,
+        original,
     )
-
-    if not isinstance(old_representations, dict):
-        raise ValueError(
-            f"{turn_id}: representations must be a dict"
-        )
-
-    stale_paths: list[Path] = []
-
-    for name, representation in (
-        old_representations.items()
-    ):
-        if not isinstance(representation, dict):
-            raise ValueError(
-                f"{turn_id}/{name}: invalid representation"
-            )
-
-        relative_path = representation.get("path")
-
-        if not isinstance(relative_path, str):
-            raise ValueError(
-                f"{turn_id}/{name}: "
-                "representation has invalid path"
-            )
-
-        candidate = (
-            storage.root / relative_path
-        ).resolve()
-
-        turn_directory = (
-            storage.root
-            / "turns"
-            / turn_id
-        ).resolve()
-
-        try:
-            candidate.relative_to(turn_directory)
-        except ValueError as exc:
-            raise ValueError(
-                f"{turn_id}/{name}: "
-                "representation path escapes "
-                "turn directory"
-            ) from exc
-
-        stale_paths.append(candidate)
 
     storage.turns.replace(final_turns)
 

@@ -41,6 +41,70 @@ def worker(
                 / "diarize.py"
             ),
         ),
+        "ecapa": Worker(
+            name="ecapa",
+            python=(
+                root
+                / "tools"
+                / "ecapa"
+                / ".venv"
+                / "bin"
+                / "python"
+            ),
+            adapter=(
+                root
+                / "adapters"
+                / "ecapa.py"
+            ),
+        ),
+        "wespeaker": Worker(
+            name="wespeaker",
+            python=(
+                root
+                / "tools"
+                / "pyannote"
+                / ".venv"
+                / "bin"
+                / "python"
+            ),
+            adapter=(
+                root
+                / "adapters"
+                / "wespeaker.py"
+            ),
+        ),
+        "bandit": Worker(
+            name="bandit",
+            python=(
+                root
+                / "tools"
+                / "bandit"
+                / ".venv"
+                / "bin"
+                / "python"
+            ),
+            adapter=(
+                root
+                / "adapters"
+                / "bandit.py"
+            ),
+        ),
+        "qwen3-asr": Worker(
+            name="qwen3-asr",
+            python=(
+                root
+                / "tools"
+                / "qwen3-aligner"
+                / ".venv"
+                / "bin"
+                / "python"
+            ),
+            adapter=(
+                root
+                / "adapters"
+                / "qwen3_asr.py"
+            ),
+        ),
     }
 
     try:

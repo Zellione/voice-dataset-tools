@@ -112,6 +112,98 @@ def resolve_source_representation(
     return representation, path
 
 
+def register_derived_representation(
+    storage: DatasetStorage,
+    source_id: str,
+    representation_name: str,
+    *,
+    path: Path,
+    kind: str,
+    parent_representation_name: str,
+    processor: str,
+    processor_version: str | None = None,
+    purposes: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    parent, _ = resolve_source_representation(
+        storage,
+        source_id,
+        parent_representation_name,
+    )
+
+    path = path.resolve()
+    audio_info = probe_audio_representation(path)
+
+    dataset_root = storage.root.resolve()
+
+    try:
+        stored_path = path.relative_to(
+            dataset_root
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "Derived representation must be "
+            "stored inside the dataset: "
+            f"{path}"
+        ) from exc
+
+    representation = {
+        "path": str(stored_path),
+        "kind": kind,
+        "processor": processor,
+        "processor_version": processor_version,
+        "sample_rate": audio_info["sample_rate"],
+        "channels": audio_info["channels"],
+        "duration": audio_info["duration"],
+        "media_start": parent.get("media_start"),
+        "stream_index": parent.get("stream_index"),
+        "channel_mode": parent.get("channel_mode"),
+        "purposes": list(purposes or []),
+        "metadata": dict(metadata or {}),
+    }
+
+    def update(
+        record: dict[str, Any],
+    ) -> dict[str, Any]:
+        representations = record.get(
+            "representations",
+            {},
+        )
+
+        if not isinstance(representations, dict):
+            raise ValueError(
+                "Source has invalid representations: "
+                f"{source_id}"
+            )
+
+        existing = representations.get(
+            representation_name
+        )
+
+        if existing is not None:
+            if existing == representation:
+                return record
+
+            raise ValueError(
+                "Source representation already exists "
+                "with different provenance: "
+                f"{representation_name}"
+            )
+
+        representations[representation_name] = (
+            representation
+        )
+
+        record["representations"] = representations
+
+        return record
+
+    return storage.update_source(
+        source_id,
+        update,
+    )
+
+
 def set_representation_provenance(
     storage: DatasetStorage,
     source_id: str,

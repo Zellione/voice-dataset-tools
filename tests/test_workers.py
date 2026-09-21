@@ -44,6 +44,29 @@ def test_community_worker_paths() -> None:
     )
 
 
+def test_bandit_worker_paths() -> None:
+    item = workers.worker(
+        "bandit"
+    )
+
+    root = workers.project_root()
+
+    assert item.python == (
+        root
+        / "tools"
+        / "bandit"
+        / ".venv"
+        / "bin"
+        / "python"
+    )
+
+    assert item.adapter == (
+        root
+        / "adapters"
+        / "bandit.py"
+    )
+
+
 def test_unknown_worker_is_rejected() -> None:
     with pytest.raises(
         workers.WorkerError,
