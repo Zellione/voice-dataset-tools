@@ -24,6 +24,7 @@ MODEL_DIR = (
 
 DEVICE = "cuda:0"
 TARGET_SAMPLE_RATE = 16000
+MIN_AUDIO_DURATION_SECONDS = 0.1
 
 
 def parse_args() -> argparse.Namespace:
@@ -338,6 +339,7 @@ def main() -> None:
     )
 
     manifest_embeddings = []
+    skipped_short = []
 
     id_field = (
         "region_id"
@@ -367,6 +369,23 @@ def main() -> None:
                 waveform.shape[-1]
                 / TARGET_SAMPLE_RATE
             )
+
+            if duration < MIN_AUDIO_DURATION_SECONDS:
+                skipped_short.append(
+                    (
+                        record_id,
+                        duration,
+                    )
+                )
+
+                print(
+                    f"[{index:02d}/{len(inputs):02d}] "
+                    f"{record_id}  "
+                    f"{duration:.3f}s  SKIP "
+                    f"(minimum "
+                    f"{MIN_AUDIO_DURATION_SECONDS:.3f}s)"
+                )
+                continue
 
             vector = encode(
                 classifier,
@@ -458,6 +477,12 @@ def main() -> None:
         f"Wrote {len(manifest_embeddings)} "
         f"embeddings to {output}"
     )
+    if skipped_short:
+        print(
+            f"Skipped {len(skipped_short)} "
+            "audio records below the minimum "
+            "embedding duration."
+        )
 
 
 if __name__ == "__main__":

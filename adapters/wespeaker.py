@@ -31,6 +31,7 @@ MODEL_DIR = (
 MODEL_PATH = MODEL_DIR / "pytorch_model.bin"
 
 DEVICE = torch.device("cuda:0")
+MIN_AUDIO_DURATION_SECONDS = 0.1
 
 
 def parse_args() -> argparse.Namespace:
@@ -298,6 +299,7 @@ def main() -> None:
     # Validate every input before loading the
     # model or creating output files.
     inputs = []
+    skipped_short = []
     seen_ids = set()
 
     for record in records:
@@ -321,6 +323,15 @@ def main() -> None:
             get_audio_metadata(audio_path)
         )
 
+        if duration < MIN_AUDIO_DURATION_SECONDS:
+            skipped_short.append(
+                (
+                    record_id,
+                    duration,
+                )
+            )
+            continue
+
         inputs.append(
             (
                 record_id,
@@ -329,6 +340,21 @@ def main() -> None:
                 sample_rate,
                 channels,
             )
+        )
+
+    for record_id, duration in skipped_short:
+        print(
+            f"Skipping {record_id}: "
+            f"audio too short for speaker "
+            f"embedding "
+            f"({duration:.3f}s < "
+            f"{MIN_AUDIO_DURATION_SECONDS:.3f}s)"
+        )
+
+    if not inputs:
+        raise ValueError(
+            "No audio records are long enough "
+            "for speaker embedding"
         )
 
     print(
@@ -473,6 +499,12 @@ def main() -> None:
         f"Wrote {len(manifest_embeddings)} "
         f"embeddings to {output}"
     )
+    if skipped_short:
+        print(
+            f"Skipped {len(skipped_short)} "
+            "audio records below the minimum "
+            "embedding duration."
+        )
 
 
 if __name__ == "__main__":
