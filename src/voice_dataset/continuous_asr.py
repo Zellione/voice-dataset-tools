@@ -43,56 +43,77 @@ def _derive_utterances(
         if match.group(0).strip()
     ]
 
-    aligned_tokens = [
-        token
+    def lexical_text(value: str) -> str:
+        return "".join(_tokens(value))
+
+    text_lexical = lexical_text(text)
+    aligned_lexical = "".join(
+        lexical_text(word["text"])
         for word in words
-        for token in _tokens(word["text"])
-    ]
+    )
 
-    text_tokens = _tokens(text)
+    if text_lexical != aligned_lexical:
+        mismatch = next(
+            (
+                index
+                for index, (text_char, aligned_char)
+                in enumerate(
+                    zip(text_lexical, aligned_lexical)
+                )
+                if text_char != aligned_char
+            ),
+            min(
+                len(text_lexical),
+                len(aligned_lexical),
+            ),
+        )
 
-    if text_tokens != aligned_tokens:
+        start = max(0, mismatch - 30)
+        end = mismatch + 31
+
         raise ValueError(
             "Continuous ASR text does not match "
-            "aligned word sequence"
+            "aligned word sequence at lexical character "
+            f"{mismatch}: "
+            f"text={text_lexical[start:end]!r}, "
+            f"aligned={aligned_lexical[start:end]!r}; "
+            f"character counts: "
+            f"text={len(text_lexical)}, "
+            f"aligned={len(aligned_lexical)}"
         )
 
     utterances: list[dict[str, Any]] = []
     word_index = 0
 
     for sentence in sentences:
-        sentence_tokens = _tokens(sentence)
+        sentence_lexical = lexical_text(sentence)
 
-        if not sentence_tokens:
+        if not sentence_lexical:
             continue
 
         start_index = word_index
-        consumed_tokens = 0
+        aligned_sentence = ""
 
         while (
             word_index < len(words)
-            and consumed_tokens < len(sentence_tokens)
+            and len(aligned_sentence)
+            < len(sentence_lexical)
         ):
-            word_tokens = _tokens(
+            aligned_sentence += lexical_text(
                 words[word_index]["text"]
             )
+            word_index += 1
 
-            expected = sentence_tokens[
-                consumed_tokens:
-                consumed_tokens + len(word_tokens)
-            ]
-
-            if word_tokens != expected:
+            if not sentence_lexical.startswith(
+                aligned_sentence
+            ):
                 raise ValueError(
                     "Continuous ASR sentence does not "
                     "match aligned word sequence: "
                     f"{sentence!r}"
                 )
 
-            consumed_tokens += len(word_tokens)
-            word_index += 1
-
-        if consumed_tokens != len(sentence_tokens):
+        if aligned_sentence != sentence_lexical:
             raise ValueError(
                 "Continuous ASR sentence has incomplete "
                 f"word alignment: {sentence!r}"

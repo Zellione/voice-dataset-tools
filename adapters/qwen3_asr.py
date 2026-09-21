@@ -7,6 +7,10 @@ from pathlib import Path
 
 MODEL_ID = "Qwen/Qwen3-ASR-0.6B"
 ALIGNER_ID = "Qwen/Qwen3-ForcedAligner-0.6B"
+LANGUAGE_ALIASES = {
+    "en": "English",
+    "de": "German",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -53,9 +57,17 @@ def main() -> None:
         dtype="bfloat16",
     )
 
+    language = args.language
+
+    if language is not None:
+        language = LANGUAGE_ALIASES.get(
+            language.casefold(),
+            language,
+        )
+
     result = model.transcribe(
         audio=str(args.input),
-        language=args.language,
+        language=language,
         return_time_stamps=True,
     )[0]
 

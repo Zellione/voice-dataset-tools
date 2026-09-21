@@ -524,7 +524,7 @@ def reconcile_source_regions(
             )
         )
 
-        if reconciliation["state"] in {
+        if reconciliation["status"] in {
             "reconciled",
             "rejected",
         }:
@@ -543,9 +543,13 @@ def reconcile_source_regions(
             unresolved += 1
             continue
 
-        text = str(
-            transcript.get("text", "")
-        ).strip()
+        raw_text = transcript.get("text")
+
+        if not isinstance(raw_text, str):
+            unresolved += 1
+            continue
+
+        text = raw_text.strip()
 
         if not text:
             unresolved += 1
@@ -562,17 +566,9 @@ def reconcile_source_regions(
                 else None
             ),
             transcript=text,
-            metadata={
-                "creation": {
-                    "method": (
-                        "automatic_transcript_"
-                        "reconciliation"
-                    ),
-                    "transcript_name": (
-                        transcript_name
-                    ),
-                },
-            },
+            creation_method=(
+                "automatic_transcript_reconciliation"
+            ),
         )
 
         created += 1

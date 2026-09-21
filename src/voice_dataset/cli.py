@@ -74,6 +74,7 @@ preload_cuda_libraries()
 
 from .ingest import ingest as ingest_source
 from .speaker_similarity import rank_voice_matches
+from .continuous_asr import transcribe_source_qwen3
 
 
 app = typer.Typer(
@@ -1264,6 +1265,62 @@ def region_materialize_audio(
         f"Skipped {result.skipped} "
         f"existing audio representations."
     )
+
+
+@region_app.command("transcribe-continuous")
+def region_transcribe_continuous(
+    source_id: str,
+    representation: str = typer.Option(
+        "speech",
+        help="Source representation to transcribe.",
+    ),
+    evidence: str = typer.Option(
+        "qwen3",
+        help="Continuous ASR evidence name.",
+    ),
+    language: str | None = typer.Option(
+        None,
+        help="Optional ASR language hint.",
+    ),
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Transcribe a source continuously with Qwen3 ASR."""
+
+    storage = storage_for(dataset)
+
+    try:
+        result = transcribe_source_qwen3(
+            storage,
+            source_id,
+            representation_name=representation,
+            evidence_name=evidence,
+            language=language,
+        )
+    except (
+        ValueError,
+        KeyError,
+        RuntimeError,
+        OSError,
+    ) as exc:
+        typer.echo(
+            f"Continuous ASR failed: {exc}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"Continuous ASR: {len(result.words)} words, "
+        f"{len(result.utterances)} utterances."
+    )
+
+    if result.language is not None:
+        typer.echo(f"  language: {result.language}")
+
+    typer.echo(f"  evidence: {evidence}")
+    typer.echo(f"  representation: {representation}")
 
 
 @region_app.command("analyze-continuous")
