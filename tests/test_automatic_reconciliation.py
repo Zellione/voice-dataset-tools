@@ -96,6 +96,14 @@ def test_reconcile_source_regions_handles_real_region_states(
         reconciliation_status="rejected",
     )
 
+    add_region(
+        storage,
+        region_id="region_000004",
+        start=7.0,
+        end=7.03375,
+        text="Thank you.",
+    )
+
     result = reconcile_source_regions(
         storage,
         "source_001",
@@ -103,7 +111,7 @@ def test_reconcile_source_regions_handles_real_region_states(
 
     assert result.created == 1
     assert result.skipped == 1
-    assert result.unresolved == 1
+    assert result.unresolved == 2
 
     turns = storage.turns.load()
 

@@ -13,6 +13,7 @@ from .storage import DatasetStorage
 
 
 MERGE_CANDIDATE_MAX_WORD_GAP = 0.75
+MIN_AUTOMATIC_REGION_DURATION = 0.1
 
 
 @dataclass(frozen=True)
@@ -529,6 +530,15 @@ def reconcile_source_regions(
             "rejected",
         }:
             skipped += 1
+            continue
+
+        region_duration = (
+            float(region["source_end"])
+            - float(region["source_start"])
+        )
+
+        if region_duration < MIN_AUTOMATIC_REGION_DURATION:
+            unresolved += 1
             continue
 
         transcripts = region.get(
