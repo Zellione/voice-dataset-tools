@@ -10,6 +10,10 @@ from .reconciliation import (
     merge_turns,
 )
 from .storage import DatasetStorage
+from .diarization_conflicts import (
+    analyze_continuous_word_region_conflicts,
+    group_continuous_word_region_conflicts,
+)
 
 
 MERGE_CANDIDATE_MAX_WORD_GAP = 0.75
@@ -498,6 +502,7 @@ def reconcile_source_regions(
     source_id: str,
     *,
     transcript_name: str = "whisper",
+    continuous_asr_evidence_name: str = "qwen3",
 ) -> AutomaticReconciliationResult:
     regions = [
         region
@@ -516,6 +521,113 @@ def reconcile_source_regions(
     created = 0
     skipped = 0
     unresolved = 0
+
+    source = storage.get_source(source_id)
+
+    if source is None:
+        raise KeyError(
+            f"Source does not exist: {source_id}"
+        )
+
+    metadata = source.get("metadata", {})
+
+    if not isinstance(metadata, dict):
+        raise ValueError(
+            f"Source has invalid metadata: {source_id}"
+        )
+
+    continuous_asr = metadata.get(
+        "continuous_asr",
+        {},
+    )
+
+    if not isinstance(continuous_asr, dict):
+        raise ValueError(
+            "Source has invalid continuous_asr metadata: "
+            f"{source_id}"
+        )
+
+    continuous_evidence = continuous_asr.get(
+        continuous_asr_evidence_name
+    )
+
+    if isinstance(continuous_evidence, dict):
+        word_conflicts = (
+            analyze_continuous_word_region_conflicts(
+                storage,
+                source_id,
+                asr_evidence_name=(
+                    continuous_asr_evidence_name
+                ),
+            )
+        )
+
+        fragmentation_runs = (
+            group_continuous_word_region_conflicts(
+                word_conflicts
+            )
+        )
+
+        for run in fragmentation_runs:
+            states = []
+
+            for region_id in run.region_ids:
+                region = storage.get_region(region_id)
+
+                if region is None:
+                    raise KeyError(
+                        "Candidate region does not exist: "
+                        f"{region_id}"
+                    )
+
+                states.append(
+                    effective_region_reconciliation(
+                        storage,
+                        region,
+                    )
+                )
+
+            if all(
+                state["status"] == "reconciled"
+                for state in states
+            ):
+                turn_ids = {
+                    state.get("turn_id")
+                    for state in states
+                }
+
+                if len(turn_ids) != 1:
+                    raise ValueError(
+                        "Continuous-word fragmentation "
+                        "regions are already reconciled "
+                        "to different turns: "
+                        f"{run.region_ids}"
+                    )
+
+                continue
+
+            if any(
+                state["status"] != "pending"
+                for state in states
+            ):
+                raise ValueError(
+                    "Continuous-word fragmentation run "
+                    "contains a region that is not "
+                    "pending: "
+                    f"{run.region_ids}"
+                )
+
+            create_turn_from_regions(
+                storage,
+                list(run.region_ids),
+                transcript=None,
+                language=None,
+                creation_method=(
+                    "automatic_continuous_word_fragmentation"
+                ),
+            )
+
+            created += 1
 
     for region in regions:
         reconciliation = (
@@ -537,7 +649,10 @@ def reconcile_source_regions(
             - float(region["source_start"])
         )
 
-        if region_duration < MIN_AUTOMATIC_REGION_DURATION:
+        if (
+            region_duration
+            < MIN_AUTOMATIC_REGION_DURATION
+        ):
             unresolved += 1
             continue
 
