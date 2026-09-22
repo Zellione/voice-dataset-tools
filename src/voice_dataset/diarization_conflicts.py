@@ -397,3 +397,203 @@ def analyze_diarization_boundary_conflicts(
             )
 
     return results
+
+
+@dataclass(frozen=True)
+class ContinuousWordRegionConflict:
+    word: str
+    word_start: float
+    word_end: float
+    region_ids: tuple[str, ...]
+    region_speakers: tuple[str | None, ...]
+
+
+@dataclass(frozen=True)
+class ContinuousWordRegionConflictRun:
+    region_ids: tuple[str, ...]
+    conflicts: tuple[
+        ContinuousWordRegionConflict,
+        ...,
+    ]
+
+
+def analyze_continuous_word_region_conflicts(
+    storage: DatasetStorage,
+    source_id: str,
+    *,
+    asr_evidence_name: str = "qwen3",
+) -> list[ContinuousWordRegionConflict]:
+    source = storage.get_source(source_id)
+
+    if source is None:
+        raise KeyError(
+            f"Source does not exist: {source_id}"
+        )
+
+    metadata = source.get("metadata", {})
+
+    if not isinstance(metadata, dict):
+        raise ValueError(
+            f"Source has invalid metadata: {source_id}"
+        )
+
+    continuous_asr = metadata.get(
+        "continuous_asr",
+        {},
+    )
+
+    if not isinstance(continuous_asr, dict):
+        raise ValueError(
+            "Source has invalid continuous_asr metadata: "
+            f"{source_id}"
+        )
+
+    asr_evidence = continuous_asr.get(
+        asr_evidence_name
+    )
+
+    if not isinstance(asr_evidence, dict):
+        raise ValueError(
+            "Continuous ASR evidence does not exist: "
+            f"{source_id}/{asr_evidence_name}"
+        )
+
+    words = asr_evidence.get("words")
+
+    if not isinstance(words, list):
+        raise ValueError(
+            "Continuous ASR words must be a list"
+        )
+
+    regions = [
+        region
+        for region in storage.regions.load()
+        if region.get("source_id") == source_id
+    ]
+
+    regions.sort(
+        key=lambda region: (
+            float(region["source_start"]),
+            float(region["source_end"]),
+            region["id"],
+        )
+    )
+
+    results: list[
+        ContinuousWordRegionConflict
+    ] = []
+
+    for word in words:
+        word_start = float(word["start"])
+        word_end = float(word["end"])
+
+        if word_end <= word_start:
+            continue
+
+        overlapping = [
+            region
+            for region in regions
+            if (
+                min(
+                    word_end,
+                    float(region["source_end"]),
+                )
+                > max(
+                    word_start,
+                    float(region["source_start"]),
+                )
+            )
+        ]
+
+        if len(overlapping) < 2:
+            continue
+
+        contiguous = all(
+            float(left["source_end"])
+            == float(right["source_start"])
+            for left, right in zip(
+                overlapping,
+                overlapping[1:],
+            )
+        )
+
+        if not contiguous:
+            continue
+
+        speakers = tuple(
+            region.get("detector_label")
+            for region in overlapping
+        )
+
+        if len(set(speakers)) < 2:
+            continue
+
+        results.append(
+            ContinuousWordRegionConflict(
+                word=str(word["text"]),
+                word_start=word_start,
+                word_end=word_end,
+                region_ids=tuple(
+                    region["id"]
+                    for region in overlapping
+                ),
+                region_speakers=speakers,
+            )
+        )
+
+    return results
+
+
+def group_continuous_word_region_conflicts(
+    conflicts: list[
+        ContinuousWordRegionConflict
+    ],
+) -> list[ContinuousWordRegionConflictRun]:
+    if not conflicts:
+        return []
+
+    runs: list[
+        ContinuousWordRegionConflictRun
+    ] = []
+
+    current: list[
+        ContinuousWordRegionConflict
+    ] = []
+    current_region_ids: list[str] = []
+
+    def append_current() -> None:
+        if not current:
+            return
+
+        runs.append(
+            ContinuousWordRegionConflictRun(
+                region_ids=tuple(
+                    current_region_ids
+                ),
+                conflicts=tuple(current),
+            )
+        )
+
+    for conflict in conflicts:
+        if (
+            current
+            and not (
+                set(current_region_ids)
+                & set(conflict.region_ids)
+            )
+        ):
+            append_current()
+            current = []
+            current_region_ids = []
+
+        current.append(conflict)
+
+        for region_id in conflict.region_ids:
+            if region_id not in current_region_ids:
+                current_region_ids.append(
+                    region_id
+                )
+
+    append_current()
+
+    return runs
