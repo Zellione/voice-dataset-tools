@@ -13,6 +13,13 @@ from .schema import AudioRepresentation
 from .storage import DatasetStorage
 
 
+TURN_CONTEXT_PADDING_SECONDS = 0.250
+PADDED_TURN_PURPOSES = {
+    "review",
+    "tts_candidate",
+}
+
+
 @dataclass
 class MaterializeRegionsResult:
     created: int
@@ -391,6 +398,8 @@ def materialize_turn_audio(
     purposes: list[str],
     sample_rate: int | None = None,
     channels: int | None = None,
+    clip_start: float | None = None,
+    clip_end: float | None = None,
 ) -> AudioRepresentation:
     source = source.resolve()
 
@@ -465,10 +474,40 @@ def materialize_turn_audio(
             f"Invalid source_end for {turn_id}"
         )
 
-    if start < 0 or end <= start:
+    canonical_start = float(start)
+    canonical_end = float(end)
+
+    if (
+        canonical_start < 0
+        or canonical_end <= canonical_start
+    ):
         raise ValueError(
             f"Invalid source range for {turn_id}: "
-            f"{start}-{end}"
+            f"{canonical_start}-{canonical_end}"
+        )
+
+    actual_start = (
+        canonical_start
+        if clip_start is None
+        else float(clip_start)
+    )
+    actual_end = (
+        canonical_end
+        if clip_end is None
+        else float(clip_end)
+    )
+
+    if (
+        actual_start < 0
+        or actual_start > canonical_start
+        or actual_end < canonical_end
+        or actual_end <= actual_start
+    ):
+        raise ValueError(
+            f"Invalid clip range for {turn_id}: "
+            f"{actual_start}-{actual_end}; "
+            f"canonical range is "
+            f"{canonical_start}-{canonical_end}"
         )
 
     relative_path = (
@@ -500,8 +539,8 @@ def materialize_turn_audio(
         extract_audio_region(
             source=source,
             destination=temporary,
-            start=float(start),
-            end=float(end),
+            start=actual_start,
+            end=actual_end,
         )
 
         os.replace(
@@ -517,6 +556,16 @@ def materialize_turn_audio(
             purposes=list(purposes),
             metadata={
                 "source": str(source),
+                "canonical_start": canonical_start,
+                "canonical_end": canonical_end,
+                "clip_start": actual_start,
+                "clip_end": actual_end,
+                "padding_before": (
+                    canonical_start - actual_start
+                ),
+                "padding_after": (
+                    actual_end - canonical_end
+                ),
             },
         )
 
@@ -592,13 +641,30 @@ def materialize_turns(
 
     turns = storage.turns.load()
 
+    source_turns = [
+        turn
+        for turn in turns
+        if turn.get("source_id") == source_id
+    ]
+
+    source_turns.sort(
+        key=lambda turn: (
+            float(turn.get("source_start", 0.0)),
+            float(turn.get("source_end", 0.0)),
+            str(turn.get("id", "")),
+        )
+    )
+
+    use_context_padding = bool(
+        PADDED_TURN_PURPOSES.intersection(
+            purposes
+        )
+    )
+
     created = 0
     skipped = 0
 
-    for turn in turns:
-        if turn.get("source_id") != source_id:
-            continue
-
+    for index, turn in enumerate(source_turns):
         turn_id = turn.get("id")
 
         if not isinstance(
@@ -607,6 +673,37 @@ def materialize_turns(
         ) or not turn_id:
             raise ValueError(
                 "Turn has invalid id"
+            )
+
+        start = turn.get("source_start")
+        end = turn.get("source_end")
+
+        if not isinstance(
+            start,
+            (int, float),
+        ):
+            raise ValueError(
+                f"Invalid source_start for {turn_id}"
+            )
+
+        if not isinstance(
+            end,
+            (int, float),
+        ):
+            raise ValueError(
+                f"Invalid source_end for {turn_id}"
+            )
+
+        canonical_start = float(start)
+        canonical_end = float(end)
+
+        if (
+            canonical_start < 0
+            or canonical_end <= canonical_start
+        ):
+            raise ValueError(
+                f"Invalid source range for {turn_id}: "
+                f"{canonical_start}-{canonical_end}"
             )
 
         representations = turn.get(
@@ -680,6 +777,42 @@ def materialize_turns(
                 f"{expected_destination}"
             )
 
+        clip_start = canonical_start
+        clip_end = canonical_end
+
+        if use_context_padding:
+            clip_start = max(
+                0.0,
+                canonical_start
+                - TURN_CONTEXT_PADDING_SECONDS,
+            )
+            clip_end = (
+                canonical_end
+                + TURN_CONTEXT_PADDING_SECONDS
+            )
+
+            if index > 0:
+                previous_end = float(
+                    source_turns[index - 1][
+                        "source_end"
+                    ]
+                )
+                clip_start = max(
+                    clip_start,
+                    previous_end,
+                )
+
+            if index + 1 < len(source_turns):
+                next_start = float(
+                    source_turns[index + 1][
+                        "source_start"
+                    ]
+                )
+                clip_end = min(
+                    clip_end,
+                    next_start,
+                )
+
         materialize_turn_audio(
             storage=storage,
             turn_id=turn_id,
@@ -691,6 +824,8 @@ def materialize_turns(
             purposes=purposes,
             sample_rate=sample_rate,
             channels=channels,
+            clip_start=clip_start,
+            clip_end=clip_end,
         )
 
         created += 1
