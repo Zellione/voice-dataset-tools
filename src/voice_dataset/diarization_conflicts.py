@@ -40,6 +40,64 @@ class DiarizationBoundaryConflict:
     after: DiarizationActivityWindow
 
 
+@dataclass(frozen=True)
+class DiarizationBoundaryConflictRun:
+    region_ids: tuple[str, ...]
+    conflicts: tuple[
+        DiarizationBoundaryConflict,
+        ...,
+    ]
+
+
+def group_diarization_boundary_conflicts(
+    conflicts: list[DiarizationBoundaryConflict],
+) -> list[DiarizationBoundaryConflictRun]:
+    if not conflicts:
+        return []
+
+    runs: list[
+        DiarizationBoundaryConflictRun
+    ] = []
+
+    current: list[
+        DiarizationBoundaryConflict
+    ] = []
+
+    def append_current() -> None:
+        if not current:
+            return
+
+        region_ids = (
+            current[0].left_region_id,
+            *(
+                conflict.right_region_id
+                for conflict in current
+            ),
+        )
+
+        runs.append(
+            DiarizationBoundaryConflictRun(
+                region_ids=region_ids,
+                conflicts=tuple(current),
+            )
+        )
+
+    for conflict in conflicts:
+        if (
+            current
+            and current[-1].right_region_id
+            != conflict.left_region_id
+        ):
+            append_current()
+            current = []
+
+        current.append(conflict)
+
+    append_current()
+
+    return runs
+
+
 def _activity_window(
     activity: np.ndarray,
     *,

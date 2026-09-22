@@ -7,6 +7,7 @@ import pytest
 
 from voice_dataset.diarization_conflicts import (
     analyze_diarization_boundary_conflicts,
+    group_diarization_boundary_conflicts,
 )
 from voice_dataset.schema import (
     AudioRepresentation,
@@ -204,3 +205,24 @@ def test_analyze_diarization_boundary_conflicts(
     # as permission to merge the right region.
     assert second.region_gap == pytest.approx(0.5)
     assert second.crossing_word == "world"
+
+    touching = [
+        conflict
+        for conflict in conflicts
+        if conflict.region_gap == 0.0
+    ]
+
+    runs = group_diarization_boundary_conflicts(
+        touching
+    )
+
+    assert len(runs) == 1
+
+    assert runs[0].region_ids == (
+        "region_001",
+        "region_002",
+    )
+
+    assert runs[0].conflicts == (
+        conflicts[0],
+    )
