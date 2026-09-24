@@ -797,10 +797,12 @@ def materialize_turns(
                         "source_end"
                     ]
                 )
-                clip_start = max(
-                    clip_start,
-                    previous_end,
-                )
+
+                if previous_end <= canonical_start:
+                    clip_start = max(
+                        clip_start,
+                        previous_end,
+                    )
 
             if index + 1 < len(source_turns):
                 next_start = float(
@@ -808,10 +810,12 @@ def materialize_turns(
                         "source_start"
                     ]
                 )
-                clip_end = min(
-                    clip_end,
-                    next_start,
-                )
+
+                if next_start >= canonical_end:
+                    clip_end = min(
+                        clip_end,
+                        next_start,
+                    )
 
         materialize_turn_audio(
             storage=storage,

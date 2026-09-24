@@ -105,6 +105,22 @@ def worker(
                 / "qwen3_asr.py"
             ),
         ),
+        "sat": Worker(
+            name="sat",
+            python=(
+                root
+                / "tools"
+                / "sat"
+                / ".venv"
+                / "bin"
+                / "python"
+            ),
+            adapter=(
+                root
+                / "adapters"
+                / "sat.py"
+            ),
+        ),
     }
 
     try:

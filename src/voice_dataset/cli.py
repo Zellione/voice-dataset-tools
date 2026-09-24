@@ -19,7 +19,6 @@ from .reconciliation import (
 from .automatic_reconciliation import (
     analyze_continuous_reconciliation,
     apply_continuous_merge_candidate,
-    reconcile_source_regions,
 )
 from .storage import DatasetStorage
 from .sources import set_representation_provenance
@@ -31,6 +30,8 @@ from .playback import (
     stop,
 )
 from .review import (
+    accept_alignment_recovery,
+    accept_edge_recovery,
     mark_turn_boundary_clipped,
     mark_turn_boundary_complete,
     mark_turn_pending,
@@ -75,6 +76,11 @@ preload_cuda_libraries()
 from .ingest import ingest as ingest_source
 from .speaker_similarity import rank_voice_matches
 from .continuous_asr import transcribe_source_qwen3
+from .utterance_pipeline import (
+    apply_source_utterance_turns,
+    build_source_utterances,
+    prepare_source_speaker_evidence,
+)
 
 
 app = typer.Typer(
@@ -1491,25 +1497,38 @@ def region_apply_continuous_merge(
 @region_app.command("reconcile")
 def region_reconcile(
     source_id: str,
-    transcript: str = typer.Option(
-        "whisper",
-        help="Transcript hypothesis used for reconciliation.",
+    language: str | None = typer.Option(
+        None,
+        help="Language stored on generated turns.",
+    ),
+    asr: str = typer.Option(
+        "qwen3",
+        help="Continuous ASR evidence used for utterances.",
     ),
     dataset: Path = typer.Option(
         Path("datasets/output"),
         help="Dataset directory.",
     ),
 ):
-    """Create canonical turns from candidate-region evidence."""
+    """Create turns from continuous ASR and utterance evidence."""
 
     storage = storage_for(dataset)
 
     try:
-        result = reconcile_source_regions(
+        pipeline = build_source_utterances(
             storage,
             source_id,
-            transcript_name=transcript,
+            asr_evidence_name=asr,
         )
+
+        result = apply_source_utterance_turns(
+            storage,
+            source_id,
+            pipeline,
+            language=language,
+            asr_evidence_name=asr,
+        )
+
     except (
         ValueError,
         KeyError,
@@ -1526,13 +1545,62 @@ def region_reconcile(
         f"Created {result.created} canonical turns."
     )
     typer.echo(
-        f"Skipped {result.skipped} already resolved regions."
+        f"Skipped {result.skipped} existing turns."
     )
     typer.echo(
-        f"Left {result.unresolved} regions unresolved."
+        f"Flagged {result.review} turns for review."
     )
     typer.echo(
-        f"  transcript: {transcript}"
+        f"  ASR: {asr}"
+    )
+
+
+@region_app.command("prepare-speakers")
+def region_prepare_speakers(
+    source_id: str = typer.Argument(
+        ...,
+        help="Source whose turns should receive speaker evidence.",
+    ),
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Prepare speaker audio and embeddings for source turns."""
+
+    storage = storage_for(dataset)
+
+    try:
+        result = prepare_source_speaker_evidence(
+            storage,
+            source_id,
+        )
+    except (
+        ValueError,
+        KeyError,
+        RuntimeError,
+        OSError,
+    ) as exc:
+        typer.echo(
+            f"Speaker preparation failed: {exc}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(
+        "Speaker representations: "
+        f"{result.representation.created} created, "
+        f"{result.representation.skipped} skipped."
+    )
+    typer.echo(
+        "ECAPA embeddings: "
+        f"{result.ecapa.imported} imported, "
+        f"{result.ecapa.skipped} skipped."
+    )
+    typer.echo(
+        "WeSpeaker embeddings: "
+        f"{result.wespeaker.imported} imported, "
+        f"{result.wespeaker.skipped} skipped."
     )
 
 
@@ -2189,6 +2257,14 @@ def turn_review(
             "May be specified multiple times."
         ),
     ),
+    auto_review_only: bool = typer.Option(
+        False,
+        "--auto-review-only",
+        help=(
+            "Review only turns flagged for review "
+            "by the automatic utterance pipeline."
+        ),
+    ),
 ):
     """Interactively review reconciled speech turns."""
 
@@ -2199,6 +2275,18 @@ def turn_review(
         storage,
         source_id=source_id,
     )
+
+    if auto_review_only:
+        turns = [
+            turn
+            for turn in turns
+            if (
+                turn.get("metadata", {})
+                .get("automatic_pipeline", {})
+                .get("status")
+                == "review"
+            )
+        ]
 
     if not turns:
         typer.echo("No speech turns to review.")
@@ -2269,7 +2357,7 @@ def turn_review(
 
         try:
             command = input(
-                "[p/r/c/s/t/l/v/u/i/a/x/k/d/n/b/h/q] > "
+                "[p/r/c/g/f/s/t/l/v/u/i/a/x/k/d/n/b/h/q] > "
             ).strip().lower()
         except (EOFError, KeyboardInterrupt):
             stop()
@@ -2334,6 +2422,259 @@ def turn_review(
                     f"from {path}"
                 )
 
+            elif command == "g":
+                metadata = (
+                    current.get("metadata")
+                    or {}
+                )
+                alignment = (
+                    metadata.get(
+                        "alignment_evidence"
+                    )
+                    or {}
+                )
+                recovery = (
+                    alignment.get("recovery")
+                    or {}
+                )
+
+                recovery_start = recovery.get(
+                    "source_start"
+                )
+                recovery_end = recovery.get(
+                    "source_end"
+                )
+
+                if not isinstance(
+                    recovery_start,
+                    (int, float),
+                ) or not isinstance(
+                    recovery_end,
+                    (int, float),
+                ):
+                    raise ValueError(
+                        "Turn has no alignment "
+                        "recovery suggestion"
+                    )
+
+                source = storage.get_source(
+                    current["source_id"]
+                )
+
+                if source is None:
+                    raise KeyError(
+                        "Source does not exist: "
+                        f"{current['source_id']}"
+                    )
+
+                recovery_turn = {
+                    **current,
+                    "source_start": float(
+                        recovery_start
+                    ),
+                    "source_end": float(
+                        recovery_end
+                    ),
+                }
+
+                (
+                    name,
+                    path,
+                    start,
+                    end,
+                ) = play_turn_context(
+                    source,
+                    recovery_turn,
+                    padding=context_padding,
+                    blocking=True,
+                )
+
+                typer.echo(
+                    f"Playing recovery {name}: "
+                    f"{start:.3f}-{end:.3f} "
+                    f"from {path}"
+                )
+            elif command == "f":
+                metadata = (
+                    current.get("metadata")
+                    or {}
+                )
+                alignment = (
+                    metadata.get(
+                        "alignment_evidence"
+                    )
+                    or {}
+                )
+                recovery = (
+                    alignment.get("recovery")
+                    or {}
+                )
+
+                if recovery.get("status") != "suggested":
+                    raise ValueError(
+                        "Turn has no suggested "
+                        "alignment recovery"
+                    )
+
+                recovery_start = recovery.get(
+                    "source_start"
+                )
+                recovery_end = recovery.get(
+                    "source_end"
+                )
+                recovery_regions = (
+                    recovery.get("region_ids")
+                    or []
+                )
+
+                typer.echo(
+                    "Accept alignment recovery:"
+                )
+                typer.echo(
+                    "  range: "
+                    f"{float(recovery_start):.3f}-"
+                    f"{float(recovery_end):.3f}"
+                )
+                typer.echo(
+                    "  regions: "
+                    + ", ".join(recovery_regions)
+                )
+                typer.echo(
+                    "  turn representations and "
+                    "embeddings will be invalidated"
+                )
+
+                confirmation = input(
+                    "Apply recovery? [y/N] "
+                ).strip().lower()
+
+                if confirmation == "y":
+                    accept_alignment_recovery(
+                        storage,
+                        turn_id,
+                    )
+
+                    typer.echo(
+                        "Alignment recovery accepted."
+                    )
+            elif command == "e":
+                metadata = (
+                    current.get("metadata")
+                    or {}
+                )
+                edge = (
+                    metadata.get("edge_evidence")
+                    or {}
+                )
+
+                if edge.get("status") != "suggested":
+                    raise ValueError(
+                        "Turn has no suggested "
+                        "edge recovery"
+                    )
+
+                edge_kind = edge.get("edge")
+                candidate_text = edge.get(
+                    "candidate_text"
+                )
+                whisper_text = edge.get(
+                    "whisper_text"
+                )
+
+                typer.echo(
+                    "Accept edge recovery:"
+                )
+
+                if edge_kind == "end":
+                    edge_end = edge.get(
+                        "source_end"
+                    )
+
+                    if not isinstance(
+                        edge_end,
+                        (int, float),
+                    ):
+                        raise ValueError(
+                            "Edge recovery has "
+                            "invalid source_end"
+                        )
+
+                    typer.echo(
+                        "  end: "
+                        f"{float(current['source_end']):.3f}"
+                        " -> "
+                        f"{float(edge_end):.3f}"
+                    )
+                    typer.echo(
+                        "  transcript:"
+                    )
+                    typer.echo(
+                        f"    {candidate_text}"
+                    )
+                    typer.echo(
+                        "  ->"
+                    )
+                    typer.echo(
+                        f"    {whisper_text}"
+                    )
+
+                elif edge_kind == "start":
+                    edge_start = edge.get(
+                        "source_start"
+                    )
+
+                    if not isinstance(
+                        edge_start,
+                        (int, float),
+                    ):
+                        raise ValueError(
+                            "Edge recovery has "
+                            "invalid source_start"
+                        )
+
+                    typer.echo(
+                        "  start: "
+                        f"{float(current['source_start']):.3f}"
+                        " -> "
+                        f"{float(edge_start):.3f}"
+                    )
+                    typer.echo(
+                        "  transcript unchanged:"
+                    )
+                    typer.echo(
+                        f"    {current.get('transcript')}"
+                    )
+                    typer.echo(
+                        "  boundary evidence:"
+                    )
+                    typer.echo(
+                        f"    {whisper_text}"
+                    )
+
+                else:
+                    raise ValueError(
+                        "Edge recovery has "
+                        "invalid edge"
+                    )
+
+                typer.echo(
+                    "  turn representations and "
+                    "embeddings will be invalidated"
+                )
+
+                confirmation = input(
+                    "Apply recovery? [y/N] "
+                ).strip().lower()
+
+                if confirmation == "y":
+                    accept_edge_recovery(
+                        storage,
+                        turn_id,
+                    )
+
+                    typer.echo(
+                        "Edge recovery accepted."
+                    )
             elif command == "s":
                 stop()
                 typer.echo("Playback stopped.")

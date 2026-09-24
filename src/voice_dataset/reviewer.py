@@ -183,6 +183,15 @@ def format_turn(
         else "-"
     )
 
+    metadata = turn.get("metadata") or {}
+
+    automatic_pipeline = metadata.get(
+        "automatic_pipeline"
+    )
+    speaker_evidence = metadata.get(
+        "speaker_evidence"
+    )
+
     lines = [
         (
             f"[{position}/{total}] "
@@ -212,8 +221,192 @@ def format_turn(
             "representations: "
             f"{representation_text}"
         ),
-        f"transcript:      {transcript}",
     ]
+
+    if isinstance(
+        automatic_pipeline,
+        dict,
+    ):
+        status = (
+            automatic_pipeline.get("status")
+            or "-"
+        )
+
+        reasons = (
+            automatic_pipeline.get(
+                "review_reasons"
+            )
+            or []
+        )
+
+        reason_text = (
+            ", ".join(reasons)
+            if reasons
+            else "-"
+        )
+
+        lines.extend([
+            f"auto:            {status}",
+            f"auto reasons:    {reason_text}",
+        ])
+
+    if isinstance(
+        speaker_evidence,
+        dict,
+    ):
+        speaker = (
+            speaker_evidence.get("speaker")
+            or "-"
+        )
+
+        known_speakers = (
+            speaker_evidence.get(
+                "known_speakers"
+            )
+            or []
+        )
+
+        unresolved_words = (
+            speaker_evidence.get(
+                "unresolved_word_indices"
+            )
+            or []
+        )
+
+        known_text = (
+            ", ".join(known_speakers)
+            if known_speakers
+            else "-"
+        )
+
+        unresolved_text = (
+            ", ".join(
+                str(index)
+                for index in unresolved_words
+            )
+            if unresolved_words
+            else "-"
+        )
+
+        lines.extend([
+            f"auto speaker:    {speaker}",
+            f"speaker evidence:{known_text}",
+            f"unresolved words:{unresolved_text}",
+        ])
+
+    alignment_evidence = metadata.get(
+        "alignment_evidence"
+    )
+
+    if isinstance(alignment_evidence, dict):
+        alignment_status = (
+            alignment_evidence.get("status")
+            or "-"
+        )
+
+        alignment_words = (
+            alignment_evidence.get(
+                "issue_word_indices"
+            )
+            or []
+        )
+
+        alignment_words_text = (
+            ", ".join(
+                str(index)
+                for index in alignment_words
+            )
+            if alignment_words
+            else "-"
+        )
+
+        lines.extend([
+            f"alignment:       {alignment_status}",
+            f"alignment words: {alignment_words_text}",
+        ])
+
+        recovery = alignment_evidence.get(
+            "recovery"
+        )
+
+        if isinstance(recovery, dict):
+            recovery_start = recovery.get(
+                "source_start"
+            )
+            recovery_end = recovery.get(
+                "source_end"
+            )
+            recovery_regions = (
+                recovery.get("region_ids")
+                or []
+            )
+            matched_count = recovery.get(
+                "matched_token_count"
+            )
+            candidate_count = recovery.get(
+                "candidate_token_count"
+            )
+
+            if (
+                isinstance(
+                    recovery_start,
+                    (int, float),
+                )
+                and isinstance(
+                    recovery_end,
+                    (int, float),
+                )
+            ):
+                recovery_range = (
+                    f"{recovery_start:.3f}-"
+                    f"{recovery_end:.3f} "
+                    f"({recovery_end - recovery_start:.3f}s)"
+                )
+            else:
+                recovery_range = "-"
+
+            recovery_match = (
+                f"{matched_count}/{candidate_count} words"
+                if (
+                    isinstance(matched_count, int)
+                    and isinstance(
+                        candidate_count,
+                        int,
+                    )
+                )
+                else "-"
+            )
+
+            lines.extend([
+                (
+                    "recovery:        "
+                    f"{recovery.get('status') or '-'}"
+                ),
+                (
+                    "recovery range:  "
+                    f"{recovery_range}"
+                ),
+                (
+                    "recovery speaker:"
+                    f"{recovery.get('speaker') or '-'}"
+                ),
+                (
+                    "recovery regions:"
+                    + (
+                        ", ".join(recovery_regions)
+                        if recovery_regions
+                        else "-"
+                    )
+                ),
+                (
+                    "recovery match:  "
+                    f"{recovery_match}"
+                ),
+            ])
+
+    lines.append(
+        f"transcript:      {transcript}"
+    )
 
     return "\n".join(lines)
 
@@ -223,6 +416,9 @@ def reviewer_help() -> str:
         "  p  play preferred review audio",
         "  r  play raw representation",
         "  c  play source context",
+        "  g  play alignment recovery suggestion",
+        "  f  accept alignment recovery",
+        "  e  accept turn edge recovery",
         "  s  stop playback",
         "  t  edit transcript",
         "  l  set language",
