@@ -1,17 +1,19 @@
 from __future__ import annotations
-from pathlib import Path
 
+from pathlib import Path
 from typing import Any
 
-from .schema import (
-    REJECTION_REASONS,
-    TurnRecord,
-)
-from .storage import DatasetStorage
 from .boundary_evidence import (
     calculate_boundary_evidence,
     find_boundary_representation,
 )
+from .schema import (
+    REJECTION_REASONS,
+    TurnRecord,
+    VoiceAssignment,
+)
+from .storage import DatasetStorage
+
 
 def region_reconciliation(
     region: dict[str, Any],
@@ -732,35 +734,9 @@ def merge_turns(
 
     previous_end: float | None = None
 
+    selected_ids = set(turn_ids)
+
     for _, turn in ordered:
-        start = turn.get("source_start")
-        end = turn.get("source_end")
-
-        if not isinstance(start, (int, float)):
-            raise ValueError(
-                f"{turn['id']}: invalid source_start"
-            )
-
-        if not isinstance(end, (int, float)):
-            raise ValueError(
-                f"{turn['id']}: invalid source_end"
-            )
-
-        if end <= start:
-            raise ValueError(
-                f"{turn['id']}: invalid source range"
-            )
-
-        if (
-            previous_end is not None
-            and start < previous_end
-        ):
-            raise ValueError(
-                "Turns to merge must not overlap"
-            )
-
-        previous_end = float(end)
-
         source_regions = turn.get(
             "source_regions"
         )
@@ -779,11 +755,7 @@ def merge_turns(
 
         for region_id in source_regions:
             if region_id in regions:
-                raise ValueError(
-                    "Candidate region appears in "
-                    "multiple merged turns: "
-                    f"{region_id}"
-                )
+                continue
 
             region = storage.get_region(region_id)
 
@@ -799,21 +771,35 @@ def merge_turns(
                     "match merged turns"
                 )
 
-            effective = (
-                effective_region_reconciliation(
-                    storage,
-                    region,
-                )
+            using_turns = _turns_using_region(
+                storage,
+                region_id,
             )
 
-            if (
-                effective["status"] != "reconciled"
-                or effective["turn_id"]
-                != turn["id"]
-            ):
+            using_turn_ids = {
+                using_turn.get("id")
+                for using_turn in using_turns
+            }
+
+            if not using_turn_ids:
                 raise ValueError(
-                    f"{region_id} is not exclusively "
-                    f"reconciled to {turn['id']}"
+                    f"{region_id} is not reconciled "
+                    "to any turn"
+                )
+
+            if not using_turn_ids.issubset(
+                selected_ids
+            ):
+                outside_turn_ids = sorted(
+                    turn_id
+                    for turn_id in using_turn_ids
+                    if turn_id not in selected_ids
+                )
+
+                raise ValueError(
+                    f"{region_id} also belongs to "
+                    "turns outside the merge: "
+                    f"{', '.join(outside_turn_ids)}"
                 )
 
             regions[region_id] = region
@@ -839,27 +825,12 @@ def merge_turns(
             "source timeline order"
         )
 
-    start = ordered_regions[0].get(
-        "source_start"
+    start = float(
+        ordered[0][1]["source_start"]
     )
-    end = ordered_regions[-1].get(
-        "source_end"
+    end = float(
+        ordered[-1][1]["source_end"]
     )
-
-    if not isinstance(start, (int, float)):
-        raise ValueError(
-            f"{ordered_regions[0]['id']}: "
-            "invalid source_start"
-        )
-
-    if not isinstance(end, (int, float)):
-        raise ValueError(
-            f"{ordered_regions[-1]['id']}: "
-            "invalid source_end"
-        )
-
-    start = float(start)
-    end = float(end)
 
     if end <= start:
         raise ValueError(
@@ -867,6 +838,72 @@ def merge_turns(
         )
 
     retained_id = turn_ids[0]
+
+    assignments = [
+        turn.get("assignment") or {}
+        for _, turn in ordered
+    ]
+    
+    assigned_voice_ids = {
+        assignment.get("voice_id")
+        for assignment in assignments
+        if assignment.get("status") == "assigned"
+    }
+    
+    if len(assigned_voice_ids) > 1:
+        raise ValueError(
+            "Turns have conflicting voice assignments"
+        )
+    
+    statuses = {
+        assignment.get("status", "unknown")
+        for assignment in assignments
+    }
+
+    if "ignore" in statuses and statuses != {"ignore"}:
+        raise ValueError(
+            "Ignored and non-ignored turns cannot "
+            "be merged"
+        )
+    
+    if statuses == {"ignore"}:
+        assignment = VoiceAssignment(
+            status="ignore",
+            method="manual_merge",
+        )
+    elif assigned_voice_ids:
+        assignment = VoiceAssignment(
+            status="assigned",
+            voice_id=next(iter(assigned_voice_ids)),
+            method="manual_merge",
+        )
+    else:
+        assignment = VoiceAssignment()
+
+    languages = {
+        turn.get("language")
+        for _, turn in ordered
+        if turn.get("language")
+    }
+    
+    language = (
+        next(iter(languages))
+        if len(languages) == 1
+        else None
+    )
+    
+    transcript_parts = [
+        turn["transcript"].strip()
+        for _, turn in ordered
+        if isinstance(turn.get("transcript"), str)
+        and turn["transcript"].strip()
+    ]
+    
+    transcript = (
+        " ".join(transcript_parts)
+        if transcript_parts
+        else None
+    )
 
     metadata = {
         "creation": {
@@ -895,10 +932,11 @@ def merge_turns(
         source_start=start,
         source_end=end,
         source_regions=region_ids,
+        language=language,
+        transcript=transcript,
+        assignment=assignment,
         metadata=metadata,
     ).to_dict()
-
-    selected_ids = set(turn_ids)
 
     final_turns: list[dict[str, Any]] = []
 
@@ -911,36 +949,6 @@ def merge_turns(
             continue
         else:
             final_turns.append(turn)
-
-    seen_regions: dict[str, str] = {}
-
-    for turn in final_turns:
-        candidate_ids = turn.get(
-            "source_regions"
-        )
-
-        if not isinstance(candidate_ids, list):
-            raise ValueError(
-                f"{turn.get('id', '<unknown>')}: "
-                "source_regions must be a list"
-            )
-
-        for region_id in candidate_ids:
-            previous = seen_regions.get(
-                region_id
-            )
-
-            if previous is not None:
-                raise ValueError(
-                    "Candidate region would belong "
-                    "to multiple turns: "
-                    f"{region_id} -> "
-                    f"{previous}, {turn.get('id')}"
-                )
-
-            seen_regions[region_id] = (
-                turn.get("id")
-            )
 
     stale_paths: list[Path] = []
 
