@@ -33,7 +33,42 @@ def parse_args() -> argparse.Namespace:
         default=None,
     )
 
-    return parser.parse_args()
+    parser.add_argument(
+        "--mode",
+        choices=("transcribe", "align"),
+        default="transcribe",
+    )
+
+    parser.add_argument(
+        "--text",
+        default=None,
+    )
+
+    args = parser.parse_args()
+
+    if args.mode == "align" and not args.text:
+        parser.error(
+            "--text is required when --mode=align"
+        )
+
+    return args
+
+
+def _alignment_words(
+    alignment,
+) -> list[dict]:
+    words = []
+
+    for item in alignment.items:
+        words.append(
+            {
+                "text": item.text,
+                "start": float(item.start_time),
+                "end": float(item.end_time),
+            }
+        )
+
+    return words
 
 
 def main() -> None:
@@ -65,48 +100,68 @@ def main() -> None:
             language,
         )
 
-    result = model.transcribe(
-        audio=str(args.input),
-        language=language,
-        return_time_stamps=True,
-    )[0]
-
-    alignment = result.time_stamps
-
-    if alignment is None:
-        raise RuntimeError(
-            "Qwen returned no forced alignment"
+    if args.mode == "align":
+        alignments = model.forced_aligner.align(
+            audio=str(args.input),
+            text=args.text,
+            language=language,
         )
 
-    words = []
+        if len(alignments) != 1:
+            raise RuntimeError(
+                "Qwen returned unexpected forced alignment "
+                f"batch size: {len(alignments)}"
+            )
 
-    for item in alignment.items:
-        start = float(item.start_time)
-        end = float(item.end_time)
+        alignment = alignments[0]
 
-        words.append(
-            {
-                "text": item.text,
-                "start": start,
-                "end": end,
-            }
-        )
+        document = {
+            "format": "voice-dataset-forced-alignment-output",
+            "version": 1,
+            "aligner": {
+                "name": "qwen3-forced-aligner",
+                "model": ALIGNER_ID,
+            },
+            "language": language,
+            "text": args.text,
+            "words": _alignment_words(
+                alignment
+            ),
+        }
 
-    document = {
-        "format": "voice-dataset-continuous-asr-output",
-        "version": 1,
-        "transcriber": {
-            "name": "qwen3-asr",
-            "model": MODEL_ID,
-        },
-        "aligner": {
-            "name": "qwen3-forced-aligner",
-            "model": ALIGNER_ID,
-        },
-        "language": result.language,
-        "text": result.text,
-        "words": words,
-    }
+    else:
+        result = model.transcribe(
+            audio=str(args.input),
+            language=language,
+            return_time_stamps=True,
+        )[0]
+
+        alignment = result.time_stamps
+
+        if alignment is None:
+            raise RuntimeError(
+                "Qwen returned no forced alignment"
+            )
+
+        document = {
+            "format": (
+                "voice-dataset-continuous-asr-output"
+            ),
+            "version": 1,
+            "transcriber": {
+                "name": "qwen3-asr",
+                "model": MODEL_ID,
+            },
+            "aligner": {
+                "name": "qwen3-forced-aligner",
+                "model": ALIGNER_ID,
+            },
+            "language": result.language,
+            "text": result.text,
+            "words": _alignment_words(
+                alignment
+            ),
+        }
 
     args.output.parent.mkdir(
         parents=True,

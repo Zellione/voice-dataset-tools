@@ -143,14 +143,15 @@ def attribute_speakers_to_words(
     source_id: str,
     *,
     evidence_name: str = "qwen3",
+    words: list[dict[str, Any]] | None = None,
 ) -> list[SpeakerAttributedWord]:
-    evidence = _load_continuous_asr(
-        storage,
-        source_id,
-        evidence_name,
-    )
-
-    words = evidence["words"]
+    if words is None:
+        evidence = _load_continuous_asr(
+            storage,
+            source_id,
+            evidence_name,
+        )
+        words = evidence["words"]
     regions = _source_regions(
         storage,
         source_id,
@@ -415,13 +416,19 @@ def resolve_fragmented_speaker_words(
     words: list[SpeakerAttributedWord],
     *,
     evidence_name: str = "qwen3",
+    geometry_words: list[dict[str, Any]] | None = None,
+    boundary_after_word_indices: set[int] | None = None,
 ) -> list[SpeakerAttributedWord]:
     resolved = list(words)
+
+    if boundary_after_word_indices is None:
+        boundary_after_word_indices = set()
 
     conflicts = analyze_continuous_word_region_conflicts(
         storage,
         source_id,
         asr_evidence_name=evidence_name,
+        words=geometry_words,
     )
 
     conflicts_by_span = {
@@ -534,5 +541,138 @@ def resolve_fragmented_speaker_words(
                 assignment_method=assignment_method,
             )
         )
+
+    for conflict in conflicts:
+        conflict_position = next(
+            (
+                position
+                for position, word in enumerate(resolved)
+                if (
+                    word.text == conflict.word
+                    and word.start == conflict.word_start
+                    and word.end == conflict.word_end
+                )
+            ),
+            None,
+        )
+
+        if conflict_position is None:
+            continue
+
+        conflict_speakers = {
+            speaker
+            for speaker in conflict.region_speakers
+            if speaker is not None
+        }
+
+        if len(conflict_speakers) != 2:
+            continue
+
+        span_start = conflict_position
+
+        while span_start > 0:
+            previous = resolved[span_start - 1]
+
+            if (
+                previous.index
+                in boundary_after_word_indices
+            ):
+                break
+
+            span_start -= 1
+
+        span_end = conflict_position
+
+        while span_end + 1 < len(resolved):
+            current = resolved[span_end]
+
+            if (
+                current.index
+                in boundary_after_word_indices
+            ):
+                break
+
+            span_end += 1
+
+        span = resolved[
+            span_start : span_end + 1
+        ]
+
+        speakers_before = {
+            word.speaker
+            for word in span[
+                : conflict_position - span_start
+            ]
+            if word.speaker is not None
+        }
+
+        speakers_after = {
+            word.speaker
+            for word in span[
+                conflict_position - span_start + 1 :
+            ]
+            if word.speaker is not None
+        }
+
+        if len(speakers_before) != 1:
+            continue
+
+        if len(speakers_after) != 1:
+            continue
+
+        before_speaker = next(
+            iter(speakers_before)
+        )
+        after_speaker = next(
+            iter(speakers_after)
+        )
+
+        if before_speaker == after_speaker:
+            continue
+
+        if before_speaker not in conflict_speakers:
+            continue
+
+        if after_speaker not in conflict_speakers:
+            continue
+
+        next_speaker = next(
+            (
+                word.speaker
+                for word in resolved[span_end + 1 :]
+                if word.speaker is not None
+            ),
+            None,
+        )
+
+        if next_speaker != before_speaker:
+            continue
+
+        for position in range(
+            conflict_position,
+            span_end + 1,
+        ):
+            word = resolved[position]
+
+            if (
+                word.speaker is not None
+                and word.speaker
+                not in conflict_speakers
+            ):
+                continue
+
+            resolved[position] = (
+                SpeakerAttributedWord(
+                    index=word.index,
+                    text=word.text,
+                    start=word.start,
+                    end=word.end,
+                    overlaps=word.overlaps,
+                    speaker=before_speaker,
+                    assignment_method=(
+                        "fragmentation_sat_context"
+                    ),
+                )
+            )
 
     return resolved

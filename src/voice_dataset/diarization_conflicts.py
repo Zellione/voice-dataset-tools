@@ -422,48 +422,50 @@ def analyze_continuous_word_region_conflicts(
     source_id: str,
     *,
     asr_evidence_name: str = "qwen3",
+    words: list[dict[str, Any]] | None = None,
 ) -> list[ContinuousWordRegionConflict]:
-    source = storage.get_source(source_id)
+    if words is None:
+        source = storage.get_source(source_id)
 
-    if source is None:
-        raise KeyError(
-            f"Source does not exist: {source_id}"
+        if source is None:
+            raise KeyError(
+                f"Source does not exist: {source_id}"
+            )
+
+        metadata = source.get("metadata", {})
+
+        if not isinstance(metadata, dict):
+            raise ValueError(
+                f"Source has invalid metadata: {source_id}"
+            )
+
+        continuous_asr = metadata.get(
+            "continuous_asr",
+            {},
         )
 
-    metadata = source.get("metadata", {})
+        if not isinstance(continuous_asr, dict):
+            raise ValueError(
+                "Source has invalid continuous_asr metadata: "
+                f"{source_id}"
+            )
 
-    if not isinstance(metadata, dict):
-        raise ValueError(
-            f"Source has invalid metadata: {source_id}"
+        asr_evidence = continuous_asr.get(
+            asr_evidence_name
         )
 
-    continuous_asr = metadata.get(
-        "continuous_asr",
-        {},
-    )
+        if not isinstance(asr_evidence, dict):
+            raise ValueError(
+                "Continuous ASR evidence does not exist: "
+                f"{source_id}/{asr_evidence_name}"
+            )
 
-    if not isinstance(continuous_asr, dict):
-        raise ValueError(
-            "Source has invalid continuous_asr metadata: "
-            f"{source_id}"
-        )
+        words = asr_evidence.get("words")
 
-    asr_evidence = continuous_asr.get(
-        asr_evidence_name
-    )
-
-    if not isinstance(asr_evidence, dict):
-        raise ValueError(
-            "Continuous ASR evidence does not exist: "
-            f"{source_id}/{asr_evidence_name}"
-        )
-
-    words = asr_evidence.get("words")
-
-    if not isinstance(words, list):
-        raise ValueError(
-            "Continuous ASR words must be a list"
-        )
+        if not isinstance(words, list):
+            raise ValueError(
+                "Continuous ASR words must be a list"
+            )
 
     regions = [
         region

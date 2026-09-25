@@ -4,6 +4,7 @@ import pytest
 
 from voice_dataset.continuous_asr import (
     _derive_utterances,
+    _load_qwen_alignment_output,
 )
 
 
@@ -79,3 +80,76 @@ def test_derive_utterances_rejects_lexical_mismatch(
             "You want peace.",
             words,
         )
+
+
+def test_load_qwen_alignment_output(
+    tmp_path,
+) -> None:
+    path = tmp_path / "alignment.json"
+
+    path.write_text(
+        """
+{
+  "format": "voice-dataset-forced-alignment-output",
+  "version": 1,
+  "language": "English",
+  "text": "Bravo, sis.",
+  "words": [
+    {
+      "text": "Bravo",
+      "start": 2.24,
+      "end": 2.88
+    },
+    {
+      "text": "sis",
+      "start": 2.88,
+      "end": 3.44
+    }
+  ]
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = _load_qwen_alignment_output(path)
+
+    assert result.language == "English"
+    assert result.text == "Bravo, sis."
+    assert result.words == [
+        word("Bravo", 2.24, 2.88),
+        word("sis", 2.88, 3.44),
+    ]
+
+
+def test_load_qwen_alignment_output_rejects_text_mismatch(
+    tmp_path,
+) -> None:
+    path = tmp_path / "alignment.json"
+
+    path.write_text(
+        """
+{
+  "format": "voice-dataset-forced-alignment-output",
+  "version": 1,
+  "language": "English",
+  "text": "Bravo, sis.",
+  "words": [
+    {
+      "text": "Wrong",
+      "start": 2.24,
+      "end": 2.88
+    }
+  ]
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "forced alignment text does not match "
+            "aligned word sequence"
+        ),
+    ):
+        _load_qwen_alignment_output(path)

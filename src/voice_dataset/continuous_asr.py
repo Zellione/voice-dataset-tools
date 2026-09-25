@@ -26,6 +26,13 @@ class ContinuousAsrResult:
     utterances: list[dict[str, Any]]
 
 
+@dataclass(frozen=True)
+class ForcedAlignmentResult:
+    language: str | None
+    text: str
+    words: list[dict[str, Any]]
+
+
 def _tokens(text: str) -> list[str]:
     return [
         match.group(0).casefold().replace("’", "'")
@@ -367,6 +374,157 @@ def _load_qwen_output(
         words=words,
         utterances=utterances,
     )
+
+
+def _load_qwen_alignment_output(
+    path: Path,
+) -> ForcedAlignmentResult:
+    document = json.loads(
+        path.read_text(encoding="utf-8")
+    )
+
+    if (
+        document.get("format")
+        != "voice-dataset-forced-alignment-output"
+    ):
+        raise ValueError(
+            "Unexpected Qwen forced alignment "
+            "output format"
+        )
+
+    if document.get("version") != 1:
+        raise ValueError(
+            "Unsupported Qwen forced alignment "
+            "output version"
+        )
+
+    language = document.get("language")
+
+    if (
+        language is not None
+        and not isinstance(language, str)
+    ):
+        raise ValueError(
+            "Qwen forced alignment has invalid language"
+        )
+
+    text = document.get("text")
+
+    if not isinstance(text, str):
+        raise ValueError(
+            "Qwen forced alignment has invalid text"
+        )
+
+    raw_words = document.get("words")
+
+    if not isinstance(raw_words, list):
+        raise ValueError(
+            "Qwen forced alignment has invalid words"
+        )
+
+    words: list[dict[str, Any]] = []
+
+    for index, raw_word in enumerate(raw_words):
+        if not isinstance(raw_word, dict):
+            raise ValueError(
+                "Qwen forced alignment word "
+                f"{index} is invalid"
+            )
+
+        word_text = raw_word.get("text")
+        start = raw_word.get("start")
+        end = raw_word.get("end")
+
+        if not isinstance(word_text, str):
+            raise ValueError(
+                "Qwen forced alignment word "
+                f"{index} has invalid text"
+            )
+
+        if not isinstance(start, (int, float)):
+            raise ValueError(
+                "Qwen forced alignment word "
+                f"{index} has invalid start"
+            )
+
+        if not isinstance(end, (int, float)):
+            raise ValueError(
+                "Qwen forced alignment word "
+                f"{index} has invalid end"
+            )
+
+        start = float(start)
+        end = float(end)
+
+        if start < 0 or end < start:
+            raise ValueError(
+                "Qwen forced alignment word "
+                f"{index} has invalid range: "
+                f"{start}-{end}"
+            )
+
+        words.append(
+            {
+                "text": word_text,
+                "start": start,
+                "end": end,
+            }
+        )
+
+    if "".join(_tokens(text)) != "".join(
+        "".join(_tokens(word["text"]))
+        for word in words
+    ):
+        raise ValueError(
+            "Qwen forced alignment text does not match "
+            "aligned word sequence"
+        )
+
+    return ForcedAlignmentResult(
+        language=language,
+        text=text,
+        words=words,
+    )
+
+
+def align_text_qwen3(
+    audio_path: Path,
+    *,
+    text: str,
+    language: str,
+) -> ForcedAlignmentResult:
+    if not text.strip():
+        raise ValueError(
+            "Forced alignment text must not be empty"
+        )
+
+    with tempfile.TemporaryDirectory(
+        prefix="voice-dataset-qwen3-align-"
+    ) as temporary_directory:
+        output_path = (
+            Path(temporary_directory)
+            / "forced-alignment.json"
+        )
+
+        run_worker(
+            worker("qwen3-asr"),
+            [
+                "--mode",
+                "align",
+                "--input",
+                audio_path,
+                "--output",
+                output_path,
+                "--language",
+                language,
+                "--text",
+                text,
+            ],
+        )
+
+        return _load_qwen_alignment_output(
+            output_path
+        )
 
 
 def transcribe_source_qwen3(

@@ -25,12 +25,18 @@ from .representations import (
     MaterializeTurnsResult,
     materialize_turns,
 )
+from .word_alignment import (
+    EffectiveWordAlignment,
+    build_effective_word_alignment,
+)
+
 
 @dataclass(frozen=True)
 class UtterancePipelineResult:
     words: tuple[SpeakerAttributedWord, ...]
     candidates: tuple[UtteranceCandidate, ...]
     sat_boundary_after_word_indices: tuple[int, ...]
+    alignment: EffectiveWordAlignment
 
 
 def _continuous_asr_evidence(
@@ -156,6 +162,27 @@ def build_source_utterances(
 
     raw_words = evidence["words"]
 
+    language = evidence.get("language")
+
+    if not isinstance(language, str) or not language:
+        raise ValueError(
+            "Continuous ASR evidence has invalid language"
+        )
+
+    alignment = build_effective_word_alignment(
+        storage,
+        source_id,
+        raw_words,
+        representation_name="center",
+        language=language,
+    )
+
+    effective_words = list(alignment.words)
+
+    sat_boundaries = _run_sat(
+        raw_words
+    )
+
     attributed = (
         attribute_speakers_to_words(
             storage,
@@ -163,6 +190,7 @@ def build_source_utterances(
             evidence_name=(
                 asr_evidence_name
             ),
+            words=effective_words,
         )
     )
 
@@ -180,12 +208,13 @@ def build_source_utterances(
             evidence_name=(
                 asr_evidence_name
             ),
+            geometry_words=effective_words,
+            boundary_after_word_indices=(
+                sat_boundaries
+            ),
         )
     )
 
-    sat_boundaries = _run_sat(
-        raw_words
-    )
 
     candidates = build_utterance_candidates(
         resolved,
@@ -200,6 +229,7 @@ def build_source_utterances(
         sat_boundary_after_word_indices=tuple(
             sorted(sat_boundaries)
         ),
+        alignment=alignment,
     )
 
 

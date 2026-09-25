@@ -411,3 +411,89 @@ def test_analyze_and_group_continuous_word_region_conflicts(
         "second",
         "third",
     )
+
+
+def test_continuous_word_region_conflicts_use_injected_words(
+    tmp_path: Path,
+) -> None:
+    storage = DatasetStorage(tmp_path / "dataset")
+
+    storage.sources.append(
+        SourceRecord(
+            id="source_001",
+            representations={
+                "center": AudioRepresentation(
+                    path="audio/source_001/center.wav",
+                    kind="center",
+                    processor="test",
+                    sample_rate=48000,
+                    channels=1,
+                    duration=4.0,
+                ),
+            },
+            metadata={
+                "continuous_asr": {
+                    "qwen3": {
+                        "words": [
+                            {
+                                "text": "raw",
+                                "start": 2.0,
+                                "end": 2.5,
+                            },
+                        ],
+                        "utterances": [],
+                    },
+                },
+            },
+        ).to_dict()
+    )
+
+    for region in (
+        CandidateRegion(
+            id="region_001",
+            source_id="source_001",
+            source_start=0.0,
+            source_end=1.0,
+            detector="test",
+            detector_label="SPEAKER_00",
+        ),
+        CandidateRegion(
+            id="region_002",
+            source_id="source_001",
+            source_start=1.0,
+            source_end=2.0,
+            detector="test",
+            detector_label="SPEAKER_01",
+        ),
+    ):
+        storage.regions.append(
+            region.to_dict()
+        )
+
+    conflicts = analyze_continuous_word_region_conflicts(
+        storage,
+        "source_001",
+        words=[
+            {
+                "text": "effective",
+                "start": 0.8,
+                "end": 1.2,
+            },
+        ],
+    )
+
+    assert len(conflicts) == 1
+
+    conflict = conflicts[0]
+
+    assert conflict.word == "effective"
+    assert conflict.word_start == pytest.approx(0.8)
+    assert conflict.word_end == pytest.approx(1.2)
+    assert conflict.region_ids == (
+        "region_001",
+        "region_002",
+    )
+    assert conflict.region_speakers == (
+        "SPEAKER_00",
+        "SPEAKER_01",
+    )
