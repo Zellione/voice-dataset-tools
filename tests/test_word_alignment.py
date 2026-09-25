@@ -26,6 +26,7 @@ from voice_dataset.word_alignment import (
     recover_candidate_alignment,
     alignment_recovery_is_valid,
     find_post_recovery_word_conflicts,
+    validate_sat_boundaries,
 )
 import pytest
 
@@ -1648,6 +1649,214 @@ def test_sat_boundary_candidate_skips_exact_match_across_boundary() -> None:
     )
 
     assert candidates == []
+
+
+@pytest.mark.parametrize(
+    (
+        "words",
+        "region_start",
+        "region_end",
+        "whisper_text",
+        "boundary_index",
+    ),
+    [
+        (
+            [
+                word("They're", 207.426, 207.506),
+                word("right", 207.506, 207.826),
+                word("not", 207.906, 208.146),
+                word("to", 208.146, 208.226),
+                word("trust", 208.226, 208.546),
+                word("us", 208.546, 208.786),
+            ],
+            207.390969,
+            208.774719,
+            "They're right not to trust us.",
+            1,
+        ),
+        (
+            [
+                word("You're", 209.506, 209.746),
+                word("walking", 209.746, 210.066),
+                word("a", 210.066, 210.146),
+                word("fine", 210.146, 210.626),
+                word("line", 210.626, 211.186),
+                word("Jace", 211.186, 211.506),
+            ],
+            209.533719,
+            211.710969,
+            "You're walking a fine line, Jace.",
+            4,
+        ),
+        (
+            [
+                word("With", 213.186, 213.426),
+                word("respect", 213.426, 213.826),
+                word("I", 213.826, 213.906),
+                word("don't", 213.906, 214.146),
+                word("give", 214.146, 214.306),
+                word("a", 214.306, 214.386),
+                word("shit", 214.386, 214.626),
+                word("what", 214.626, 214.786),
+                word("any", 214.786, 214.946),
+                word("of", 214.946, 215.026),
+                word("you", 215.026, 215.186),
+                word("think", 215.186, 215.426),
+                word("of", 215.426, 215.506),
+                word("me", 215.506, 215.666),
+                word("anymore", 215.666, 216.146),
+            ],
+            213.127969,
+            216.217344,
+            (
+                "With respect, I don't give a shit "
+                "what any of you think of me anymore."
+            ),
+            1,
+        ),
+    ],
+)
+def test_validate_sat_boundaries_rejects_exact_region_match(
+    words,
+    region_start,
+    region_end,
+    whisper_text,
+    boundary_index,
+):
+    matches = find_text_matches(
+        words,
+        whisper_text,
+    )
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region",
+            start=region_start,
+            end=region_end,
+            speaker="SPEAKER",
+            whisper_text=whisper_text,
+            whisper_tokens=(),
+            text_matches=tuple(matches),
+        ),
+    ]
+
+    validated = validate_sat_boundaries(
+        words,
+        evidence,
+        {boundary_index},
+    )
+
+    assert validated == set()
+
+
+def test_validate_sat_boundaries_keeps_boundary_without_exact_match():
+    words = [
+        word("hello", 10.000, 10.400),
+        word("world", 10.400, 10.800),
+    ]
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_001",
+            start=9.900,
+            end=11.000,
+            speaker="SPEAKER_00",
+            whisper_text="different text",
+            whisper_tokens=(
+                "different",
+                "text",
+            ),
+            text_matches=(),
+        ),
+    ]
+
+    validated = validate_sat_boundaries(
+        words,
+        evidence,
+        {0},
+    )
+
+    assert validated == {0}
+
+
+def test_validate_sat_boundaries_keeps_boundary_at_region_end():
+    words = [
+        word("hello", 10.000, 10.500),
+        word("world", 10.500, 11.000),
+    ]
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_001",
+            start=9.900,
+            end=10.500,
+            speaker="SPEAKER_00",
+            whisper_text="hello world",
+            whisper_tokens=(
+                "hello",
+                "world",
+            ),
+            text_matches=(
+                AlignmentTextMatch(
+                    start_word_index=0,
+                    end_word_index=1,
+                    word_indices=(0, 1),
+                    tokens=("hello", "world"),
+                ),
+            ),
+        ),
+    ]
+
+    validated = validate_sat_boundaries(
+        words,
+        evidence,
+        {0},
+    )
+
+    assert validated == {0}
+
+
+def test_validate_sat_boundaries_keeps_boundary_with_ambiguous_regions():
+    words = [
+        word("hello", 10.000, 10.400),
+        word("world", 10.400, 10.800),
+    ]
+
+    match = AlignmentTextMatch(
+        start_word_index=0,
+        end_word_index=1,
+        word_indices=(0, 1),
+        tokens=("hello", "world"),
+    )
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_001",
+            start=9.900,
+            end=11.000,
+            speaker="SPEAKER_00",
+            whisper_text="hello world",
+            whisper_tokens=("hello", "world"),
+            text_matches=(match,),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_002",
+            start=9.950,
+            end=10.900,
+            speaker="SPEAKER_01",
+            whisper_text="hello world",
+            whisper_tokens=("hello", "world"),
+            text_matches=(match,),
+        ),
+    ]
+
+    validated = validate_sat_boundaries(
+        words,
+        evidence,
+        {0},
+    )
+
+    assert validated == {0}
 
 
 def test_sat_boundary_recovery_skips_boundary_at_region_end():

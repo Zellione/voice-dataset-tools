@@ -711,6 +711,61 @@ def recover_stranded_alignment(
     )
 
 
+def validate_sat_boundaries(
+    words: list[dict[str, Any]],
+    region_evidence: list[AlignmentRegionEvidence],
+    boundary_after_word_indices: set[int],
+) -> set[int]:
+    validated = set(boundary_after_word_indices)
+
+    for boundary_index in boundary_after_word_indices:
+        if (
+            boundary_index < 0
+            or boundary_index + 1 >= len(words)
+        ):
+            continue
+
+        boundary_end = float(
+            words[boundary_index]["end"]
+        )
+
+        containing_regions = [
+            evidence
+            for evidence in region_evidence
+            if (
+                evidence.start
+                < boundary_end
+                < evidence.end
+            )
+        ]
+
+        if len(containing_regions) != 1:
+            continue
+
+        evidence = containing_regions[0]
+
+        next_word = words[boundary_index + 1]
+        next_start = float(next_word["start"])
+        next_end = float(next_word["end"])
+
+        if not (
+            next_start < evidence.end
+            and next_end > evidence.start
+        ):
+            continue
+
+        boundary_is_spanned = any(
+            match.start_word_index <= boundary_index
+            and match.end_word_index > boundary_index
+            for match in evidence.text_matches
+        )
+
+        if boundary_is_spanned:
+            validated.discard(boundary_index)
+
+    return validated
+
+
 def build_sat_boundary_recovery_candidates(
     words: list[dict[str, Any]],
     region_evidence: list[AlignmentRegionEvidence],

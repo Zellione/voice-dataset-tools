@@ -28,7 +28,9 @@ from .representations import (
 from .word_alignment import (
     EffectiveWordAlignment,
     build_effective_word_alignment,
+    collect_region_evidence,
     recover_sat_boundary_alignments,
+    validate_sat_boundaries,
 )
 
 
@@ -189,6 +191,18 @@ def build_source_utterances(
         sat_boundaries,
         representation_name="center",
         language=language,
+    )
+
+    region_evidence = collect_region_evidence(
+        storage,
+        source_id,
+        list(alignment.words),
+    )
+
+    sat_boundaries = validate_sat_boundaries(
+        list(alignment.words),
+        region_evidence,
+        sat_boundaries,
     )
     
     suppressed_word_indices = set(

@@ -7,6 +7,8 @@ from voice_dataset.utterance_pipeline import (
     build_source_utterances,
 )
 from voice_dataset.word_alignment import (
+    AlignmentRegionEvidence,
+    AlignmentTextMatch,
     EffectiveWordAlignment,
 )
 
@@ -106,6 +108,11 @@ def test_pipeline_suppresses_word_without_renumbering():
         ),
         patch(
             "voice_dataset.utterance_pipeline."
+            "collect_region_evidence",
+            return_value=[],
+        ),
+        patch(
+            "voice_dataset.utterance_pipeline."
             "attribute_speakers_to_words",
             side_effect=(
                 fake_attribute_speakers_to_words
@@ -159,3 +166,149 @@ def test_pipeline_suppresses_word_without_renumbering():
         result.alignment.suppressed_word_indices
         == (1,)
     )
+
+
+def test_pipeline_rejects_sat_boundary_spanned_by_exact_region_match():
+    raw_words = [
+        {
+            "text": "They're",
+            "start": 207.426,
+            "end": 207.506,
+        },
+        {
+            "text": "right",
+            "start": 207.506,
+            "end": 207.826,
+        },
+        {
+            "text": "not",
+            "start": 207.906,
+            "end": 208.146,
+        },
+        {
+            "text": "to",
+            "start": 208.146,
+            "end": 208.226,
+        },
+        {
+            "text": "trust",
+            "start": 208.226,
+            "end": 208.546,
+        },
+        {
+            "text": "us",
+            "start": 208.546,
+            "end": 208.786,
+        },
+    ]
+
+    alignment = EffectiveWordAlignment(
+        words=tuple(raw_words),
+        recoveries=(),
+    )
+
+    attributed = [
+        SpeakerAttributedWord(
+            index=index,
+            text=word["text"],
+            start=word["start"],
+            end=word["end"],
+            overlaps=(),
+            speaker="SPEAKER_04",
+            assignment_method="detector_overlap",
+        )
+        for index, word in enumerate(raw_words)
+    ]
+
+    with (
+        patch(
+            "voice_dataset.utterance_pipeline."
+            "_continuous_asr_evidence",
+            return_value={
+                "words": raw_words,
+                "language": "English",
+            },
+        ),
+        patch(
+            "voice_dataset.utterance_pipeline."
+            "build_effective_word_alignment",
+            return_value=alignment,
+        ),
+        patch(
+            "voice_dataset.utterance_pipeline."
+            "_run_sat",
+            return_value={1},
+        ),
+        patch(
+            "voice_dataset.utterance_pipeline."
+            "recover_sat_boundary_alignments",
+            return_value=alignment,
+        ),
+        patch(
+            "voice_dataset.utterance_pipeline."
+            "attribute_speakers_to_words",
+            return_value=attributed,
+        ),
+        patch(
+            "voice_dataset.utterance_pipeline."
+            "resolve_consistent_speaker_context",
+            return_value=attributed,
+        ),
+        patch(
+            "voice_dataset.utterance_pipeline."
+            "resolve_fragmented_speaker_words",
+            return_value=attributed,
+        ),
+        patch(
+            "voice_dataset.utterance_pipeline."
+            "collect_region_evidence",
+            return_value=[
+                AlignmentRegionEvidence(
+                    region_id="region_000020",
+                    start=207.390969,
+                    end=208.774719,
+                    speaker="SPEAKER_04",
+                    whisper_text=(
+                        "They're right not to trust us."
+                    ),
+                    whisper_tokens=(
+                        "they're",
+                        "right",
+                        "not",
+                        "to",
+                        "trust",
+                        "us",
+                    ),
+                    text_matches=(
+                        AlignmentTextMatch(
+                            start_word_index=0,
+                            end_word_index=5,
+                            word_indices=tuple(
+                                range(6)
+                            ),
+                            tokens=(
+                                "they're",
+                                "right",
+                                "not",
+                                "to",
+                                "trust",
+                                "us",
+                            ),
+                        ),
+                    ),
+                ),
+            ],
+        ),
+    ):
+        result = build_source_utterances(
+            storage=None,
+            source_id="source",
+        )
+
+    assert result.sat_boundary_after_word_indices == ()
+    assert [
+        candidate.text
+        for candidate in result.candidates
+    ] == [
+        "They're right not to trust us",
+    ]
