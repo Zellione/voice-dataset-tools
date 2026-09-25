@@ -13,6 +13,7 @@ from voice_dataset.sources import (
     register_derived_representation,
     resolve_source_representation,
     set_representation_provenance,
+    resolve_source_representation_for_purpose,
 )
 from voice_dataset.storage import DatasetStorage
 
@@ -196,6 +197,74 @@ def test_resolve_source_representation(
     assert path == (
         tmp_path / "center.wav"
     ).resolve()
+
+
+def test_resolve_source_representation_for_purpose(
+    tmp_path: Path,
+) -> None:
+    storage = make_storage(tmp_path)
+
+    name, representation, path = (
+        resolve_source_representation_for_purpose(
+            storage,
+            "source-1",
+            "context",
+        )
+    )
+
+    assert name == "center"
+    assert representation["kind"] == "center"
+    assert path == (
+        tmp_path / "center.wav"
+    ).resolve()
+
+
+def test_resolve_source_representation_for_purpose_rejects_missing_purpose(
+    tmp_path: Path,
+) -> None:
+    storage = make_storage(tmp_path)
+
+    with pytest.raises(
+        ValueError,
+        match="No source representation supports",
+    ):
+        resolve_source_representation_for_purpose(
+            storage,
+            "source-1",
+            "asr",
+        )
+
+
+def test_resolve_source_representation_for_purpose_rejects_ambiguous_purpose(
+    tmp_path: Path,
+) -> None:
+    storage = make_storage(tmp_path)
+
+    storage.update_source(
+        "source-1",
+        lambda record: {
+            **record,
+            "representations": {
+                **record["representations"],
+                "other": {
+                    **record["representations"]["center"],
+                },
+            },
+        },
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Multiple source representations support "
+            "purpose 'context'"
+        ),
+    ):
+        resolve_source_representation_for_purpose(
+            storage,
+            "source-1",
+            "context",
+        )
 
 
 def test_resolve_relative_source_representation(

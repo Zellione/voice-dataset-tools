@@ -25,6 +25,9 @@ from .representations import (
     MaterializeTurnsResult,
     materialize_turns,
 )
+from .sources import (
+    resolve_source_representation_for_purpose,
+)
 from .word_alignment import (
     EffectiveWordAlignment,
     build_effective_word_alignment,
@@ -172,11 +175,19 @@ def build_source_utterances(
             "Continuous ASR evidence has invalid language"
         )
 
+    boundary_representation_name, _, _ = (
+        resolve_source_representation_for_purpose(
+            storage,
+            source_id,
+            "boundary_analysis",
+        )
+    )
+
     alignment = build_effective_word_alignment(
         storage,
         source_id,
         raw_words,
-        representation_name="center",
+        representation_name=boundary_representation_name,
         language=language,
     )
 
@@ -189,7 +200,7 @@ def build_source_utterances(
         source_id,
         alignment,
         sat_boundaries,
-        representation_name="center",
+        representation_name=boundary_representation_name,
         language=language,
     )
 
@@ -294,90 +305,25 @@ class PrepareSpeakerEvidenceResult:
     wespeaker: EmbeddingRunResult
 
 
-def _source_representation_for_purpose(
-    storage: DatasetStorage,
-    source_id: str,
-    *,
-    purpose: str,
-) -> tuple[Path, str]:
-    source = storage.get_source(source_id)
-
-    if source is None:
-        raise KeyError(
-            f"Source does not exist: {source_id}"
-        )
-
-    representations = source.get(
-        "representations"
-    )
-
-    if not isinstance(representations, dict):
-        raise ValueError(
-            f"Source has invalid representations: "
-            f"{source_id}"
-        )
-
-    matches: list[tuple[Path, str]] = []
-
-    for representation in representations.values():
-        if not isinstance(representation, dict):
-            continue
-
-        purposes = representation.get("purposes")
-
-        if (
-            not isinstance(purposes, list)
-            or purpose not in purposes
-        ):
-            continue
-
-        path = representation.get("path")
-        kind = representation.get("kind")
-
-        if (
-            not isinstance(path, str)
-            or not path
-            or not isinstance(kind, str)
-            or not kind
-        ):
-            raise ValueError(
-                "Source representation for "
-                f"{purpose!r} is invalid"
-            )
-
-        matches.append(
-            (
-                storage.root / path,
-                kind,
-            )
-        )
-
-    if not matches:
-        raise ValueError(
-            "No source representation supports "
-            f"purpose {purpose!r}: {source_id}"
-        )
-
-    if len(matches) != 1:
-        raise ValueError(
-            "Multiple source representations support "
-            f"purpose {purpose!r}: {source_id}"
-        )
-
-    return matches[0]
-
-
 def prepare_source_speaker_evidence(
     storage: DatasetStorage,
     source_id: str,
 ) -> PrepareSpeakerEvidenceResult:
-    source_path, source_kind = (
-        _source_representation_for_purpose(
+    _, source_representation, source_path = (
+        resolve_source_representation_for_purpose(
             storage,
             source_id,
-            purpose="speaker_embedding",
+            "speaker_embedding",
         )
     )
+
+    source_kind = source_representation.get("kind")
+
+    if not isinstance(source_kind, str) or not source_kind:
+        raise ValueError(
+            "Source representation for "
+            "'speaker_embedding' has invalid kind"
+        )
 
     representation = materialize_turns(
         storage=storage,

@@ -112,6 +112,76 @@ def resolve_source_representation(
     return representation, path
 
 
+def resolve_source_representation_for_purpose(
+    storage: DatasetStorage,
+    source_id: str,
+    purpose: str,
+) -> tuple[str, dict[str, Any], Path]:
+    source = storage.get_source(source_id)
+
+    if source is None:
+        raise KeyError(
+            f"Source does not exist: {source_id}"
+        )
+
+    representations = source.get(
+        "representations",
+        {},
+    )
+
+    if not isinstance(representations, dict):
+        raise ValueError(
+            "Source has invalid representations: "
+            f"{source_id}"
+        )
+
+    matches: list[
+        tuple[str, dict[str, Any]]
+    ] = []
+
+    for name, representation in representations.items():
+        if not isinstance(representation, dict):
+            continue
+
+        purposes = representation.get(
+            "purposes",
+            [],
+        )
+
+        if (
+            isinstance(purposes, list)
+            and purpose in purposes
+        ):
+            matches.append(
+                (name, representation)
+            )
+
+    if not matches:
+        raise ValueError(
+            "No source representation supports "
+            f"purpose {purpose!r}: {source_id}"
+        )
+
+    if len(matches) != 1:
+        names = ", ".join(
+            name for name, _ in matches
+        )
+        raise ValueError(
+            "Multiple source representations support "
+            f"purpose {purpose!r}: {source_id}: {names}"
+        )
+
+    name, representation = matches[0]
+
+    resolved, path = resolve_source_representation(
+        storage,
+        source_id,
+        name,
+    )
+
+    return name, resolved, path
+
+
 def register_derived_representation(
     storage: DatasetStorage,
     source_id: str,

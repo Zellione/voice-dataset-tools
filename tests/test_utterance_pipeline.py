@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from unittest.mock import patch
 
 from voice_dataset.speaker_words import (
@@ -95,7 +97,7 @@ def test_pipeline_suppresses_word_without_renumbering():
             "voice_dataset.utterance_pipeline."
             "build_effective_word_alignment",
             return_value=alignment,
-        ),
+        ) as build_alignment,
         patch(
             "voice_dataset.utterance_pipeline."
             "_run_sat",
@@ -105,7 +107,7 @@ def test_pipeline_suppresses_word_without_renumbering():
             "voice_dataset.utterance_pipeline."
             "recover_sat_boundary_alignments",
             return_value=alignment,
-        ),
+        ) as recover_boundaries,
         patch(
             "voice_dataset.utterance_pipeline."
             "collect_region_evidence",
@@ -123,11 +125,37 @@ def test_pipeline_suppresses_word_without_renumbering():
             "resolve_fragmented_speaker_words",
             side_effect=lambda *args, **kwargs: args[2],
         ),
+        patch(
+            "voice_dataset.utterance_pipeline."
+            "resolve_source_representation_for_purpose",
+            return_value=(
+                "analysis_audio",
+                {
+                    "kind": "analysis",
+                    "purposes": ["boundary_analysis"],
+                },
+                Path("/unused/analysis.wav"),
+            ),
+        ),
     ):
         result = build_source_utterances(
             storage=None,
             source_id="source",
         )
+
+    assert (
+        build_alignment.call_args.kwargs[
+            "representation_name"
+        ]
+        == "analysis_audio"
+    )
+
+    assert (
+        recover_boundaries.call_args.kwargs[
+            "representation_name"
+        ]
+        == "analysis_audio"
+    )
 
     assert [
         word["text"]
@@ -298,6 +326,18 @@ def test_pipeline_rejects_sat_boundary_spanned_by_exact_region_match():
                     ),
                 ),
             ],
+        ),
+        patch(
+            "voice_dataset.utterance_pipeline."
+            "resolve_source_representation_for_purpose",
+            return_value=(
+                "analysis_audio",
+                {
+                    "kind": "analysis",
+                    "purposes": ["boundary_analysis"],
+                },
+                Path("/unused/analysis.wav"),
+            ),
         ),
     ):
         result = build_source_utterances(
