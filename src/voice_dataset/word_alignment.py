@@ -86,6 +86,10 @@ def build_effective_word_alignment(
         LocalAlignmentRecovery
     ] = []
 
+    boundary_recoveries: list[
+        LocalAlignmentRecovery
+    ] = []
+
     word_candidates = build_recovery_candidates(
         issues,
         region_evidence,
@@ -148,6 +152,29 @@ def build_effective_word_alignment(
                 continue
 
             recoveries.append(recovery)
+            boundary_recoveries.append(recovery)
+
+    stranded_candidates = (
+        find_stranded_alignment_candidates(
+            words,
+            region_evidence,
+            boundary_recoveries,
+        )
+    )
+
+    for candidate in stranded_candidates:
+        recovery = recover_stranded_alignment(
+            storage,
+            source_id,
+            candidate,
+            words,
+            representation_name=(
+                representation_name
+            ),
+            language=language,
+        )
+
+        recoveries.append(recovery)
 
     effective_words = apply_alignment_recoveries(
         words,
@@ -285,6 +312,135 @@ class AlignmentRecoveryCandidate:
 
 
 @dataclass(frozen=True)
+class StrandedAlignmentCandidate:
+    word_indices: tuple[int, ...]
+    region_id: str
+    region_start: float
+    region_end: float
+    speaker: str | None
+
+
+def find_stranded_alignment_candidates(
+    words: list[dict[str, Any]],
+    region_evidence: list[AlignmentRegionEvidence],
+    recoveries: list[LocalAlignmentRecovery],
+) -> list[StrandedAlignmentCandidate]:
+    candidates: list[
+        StrandedAlignmentCandidate
+    ] = []
+
+    recovered_by_region = {
+        recovery.region_id: recovery
+        for recovery in recoveries
+    }
+
+    matched_word_indices = {
+        word_index
+        for evidence in region_evidence
+        if evidence.unique_text_match is not None
+        for word_index in (
+            evidence.unique_text_match.word_indices
+        )
+    }
+
+    for recovery in recoveries:
+        recovered_start_index = min(
+            recovery.word_indices
+        )
+
+        earlier_matches = [
+            (
+                evidence,
+                evidence.unique_text_match,
+            )
+            for evidence in region_evidence
+            if evidence.unique_text_match is not None
+            and (
+                evidence.unique_text_match.end_word_index
+                < recovered_start_index
+            )
+            and (
+                float(
+                    words[
+                        evidence.unique_text_match.start_word_index
+                    ]["start"]
+                )
+                < evidence.end
+            )
+            and (
+                float(
+                    words[
+                        evidence.unique_text_match.end_word_index
+                    ]["end"]
+                )
+                > evidence.start
+            )
+        ]
+
+        if not earlier_matches:
+            continue
+
+        _, previous_match = max(
+            earlier_matches,
+            key=lambda item: (
+                item[1].end_word_index
+            ),
+        )
+
+        between_indices = tuple(
+            range(
+                previous_match.end_word_index + 1,
+                recovered_start_index,
+            )
+        )
+        if not between_indices:
+            continue
+
+        if any(
+            word_index in matched_word_indices
+            for word_index in between_indices
+        ):
+            continue
+
+        stranded_indices = between_indices
+
+        previous_word_end = float(
+            words[
+                previous_match.end_word_index
+            ]["end"]
+        )
+
+        unclaimed_regions = [
+            evidence
+            for evidence in region_evidence
+            if (
+                evidence.region_id
+                not in recovered_by_region
+            )
+            and evidence.unique_text_match is None
+            and evidence.start > previous_word_end
+            and evidence.end < recovery.region_start
+        ]
+
+        if len(unclaimed_regions) != 1:
+            continue
+
+        evidence = unclaimed_regions[0]
+
+        candidates.append(
+            StrandedAlignmentCandidate(
+                word_indices=stranded_indices,
+                region_id=evidence.region_id,
+                region_start=evidence.start,
+                region_end=evidence.end,
+                speaker=evidence.speaker,
+            )
+        )
+
+    return candidates
+
+
+@dataclass(frozen=True)
 class LocalAlignmentRecovery:
     word_indices: tuple[int, ...]
     region_id: str
@@ -292,6 +448,67 @@ class LocalAlignmentRecovery:
     region_end: float
     text: str
     words: tuple[dict[str, Any], ...]
+
+
+def recover_stranded_alignment(
+    storage: DatasetStorage,
+    source_id: str,
+    candidate: StrandedAlignmentCandidate,
+    words: list[dict[str, Any]],
+    *,
+    representation_name: str,
+    language: str,
+) -> LocalAlignmentRecovery:
+    _, source_path = resolve_source_representation(
+        storage,
+        source_id,
+        representation_name,
+    )
+
+    text = " ".join(
+        str(words[word_index]["text"])
+        for word_index in candidate.word_indices
+    )
+
+    with TemporaryDirectory() as temp_dir:
+        audio_path = Path(temp_dir) / "region.wav"
+
+        extract_audio_region(
+            source=source_path,
+            destination=audio_path,
+            start=candidate.region_start,
+            end=candidate.region_end,
+        )
+
+        alignment = align_text_qwen3(
+            audio_path,
+            text=text,
+            language=language,
+        )
+
+    recovered_words = tuple(
+        {
+            **aligned_word,
+            "start": (
+                float(aligned_word["start"])
+                + candidate.region_start
+            ),
+            "end": (
+                float(aligned_word["end"])
+                + candidate.region_start
+            ),
+        }
+        for aligned_word in alignment.words
+    )
+
+    return LocalAlignmentRecovery(
+        word_indices=candidate.word_indices,
+        region_id=candidate.region_id,
+        region_start=candidate.region_start,
+        region_end=candidate.region_end,
+        text=text,
+        words=recovered_words,
+    )
 
 
 def build_recovery_candidates(
