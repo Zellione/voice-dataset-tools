@@ -191,6 +191,75 @@ def build_effective_word_alignment(
     )
 
 
+def recover_sat_boundary_alignments(
+    storage: DatasetStorage,
+    source_id: str,
+    alignment: EffectiveWordAlignment,
+    boundary_after_word_indices: set[int],
+    *,
+    representation_name: str,
+    language: str,
+) -> EffectiveWordAlignment:
+    words = [
+        dict(word)
+        for word in alignment.words
+    ]
+
+    region_evidence = collect_region_evidence(
+        storage,
+        source_id,
+        words,
+    )
+
+    candidates = (
+        build_sat_boundary_recovery_candidates(
+            words,
+            region_evidence,
+            boundary_after_word_indices,
+        )
+    )
+
+    recoveries: list[
+        LocalAlignmentRecovery
+    ] = []
+
+    for candidate in candidates:
+        recovery = recover_candidate_alignment(
+            storage,
+            source_id,
+            candidate,
+            words,
+            representation_name=(
+                representation_name
+            ),
+            language=language,
+        )
+
+        if (
+            alignment_recovery_is_valid(words, recovery)
+            and recovery.words
+            and float(recovery.words[-1]["end"])
+            == recovery.region_end
+        ):
+            recoveries.append(recovery)
+
+    if not recoveries:
+        return alignment
+
+    effective_words = apply_alignment_recoveries(
+        words,
+        recoveries,
+    )
+
+    return EffectiveWordAlignment(
+        words=tuple(effective_words),
+        recoveries=(
+            *alignment.recoveries,
+            *recoveries,
+        ),
+    )
+
+
 def compare_alignment_recovery(
     words: list[dict[str, Any]],
     recovery: LocalAlignmentRecovery,
@@ -513,6 +582,122 @@ def recover_stranded_alignment(
         text=text,
         words=recovered_words,
     )
+
+
+def build_sat_boundary_recovery_candidates(
+    words: list[dict[str, Any]],
+    region_evidence: list[AlignmentRegionEvidence],
+    boundary_after_word_indices: set[int],
+) -> list[AlignmentRecoveryCandidate]:
+    candidates: list[AlignmentRecoveryCandidate] = []
+
+    for boundary_index in sorted(
+        boundary_after_word_indices
+    ):
+        if (
+            boundary_index < 0
+            or boundary_index >= len(words)
+        ):
+            continue
+
+        boundary_end = float(
+            words[boundary_index]["end"]
+        )
+
+        containing_regions = [
+            evidence
+            for evidence in region_evidence
+            if (
+                evidence.start
+                < boundary_end
+                < evidence.end
+            )
+        ]
+
+        if len(containing_regions) != 1:
+            continue
+
+        evidence = containing_regions[0]
+
+        next_word_index = boundary_index + 1
+
+        if next_word_index >= len(words):
+            continue
+
+        next_word = words[next_word_index]
+        next_start = float(next_word["start"])
+        next_end = float(next_word["end"])
+
+        if not (
+            next_start < evidence.end
+            and next_end > evidence.start
+        ):
+            continue
+
+        boundary_is_explained = any(
+            match.start_word_index <= boundary_index
+            and match.end_word_index > boundary_index
+            for match in evidence.text_matches
+        )
+
+        if boundary_is_explained:
+            continue
+
+        previous_boundaries = [
+            index
+            for index in boundary_after_word_indices
+            if index < boundary_index
+        ]
+        
+        minimum_start_index = (
+            max(previous_boundaries) + 1
+            if previous_boundaries
+            else 0
+        )
+
+        start_index = boundary_index
+        
+        while start_index > minimum_start_index:
+            previous_index = start_index - 1
+            previous = words[previous_index]
+            previous_start = float(previous["start"])
+            previous_end = float(previous["end"])
+        
+            if (
+                previous_start < evidence.start
+                or previous_end > evidence.end
+            ):
+                break
+        
+            start_index = previous_index
+
+        word_indices = tuple(
+            range(
+                start_index,
+                boundary_index + 1,
+            )
+        )
+
+        candidates.append(
+            AlignmentRecoveryCandidate(
+                word_indices=word_indices,
+                start_word_index=start_index,
+                end_word_index=boundary_index,
+                region_id=evidence.region_id,
+                region_start=evidence.start,
+                region_end=evidence.end,
+                whisper_text=evidence.whisper_text,
+                speaker=evidence.speaker,
+                issue_word_indices=(
+                    boundary_index,
+                ),
+                issue_reasons=(
+                    "sat_boundary_inside_region",
+                ),
+            )
+        )
+
+    return candidates
 
 
 def build_recovery_candidates(
@@ -860,20 +1045,28 @@ def recover_candidate_alignment(
             language=language,
         )
 
-    recovered_words = tuple(
-        {
-            "text": word["text"],
-            "start": (
-                float(word["start"])
-                + candidate.region_start
-            ),
-            "end": (
-                float(word["end"])
-                + candidate.region_start
-            ),
-        }
-        for word in alignment.words
-    )
+        recovered_words = tuple(
+            {
+                "text": word["text"],
+                "start": max(
+                    candidate.region_start,
+                    min(
+                        float(word["start"])
+                        + candidate.region_start,
+                        candidate.region_end,
+                    ),
+                ),
+                "end": max(
+                    candidate.region_start,
+                    min(
+                        float(word["end"])
+                        + candidate.region_start,
+                        candidate.region_end,
+                    ),
+                ),
+            }
+            for word in alignment.words
+        )
 
     return LocalAlignmentRecovery(
         word_indices=candidate.word_indices,

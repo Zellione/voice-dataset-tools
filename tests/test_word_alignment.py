@@ -6,9 +6,11 @@ from voice_dataset.storage import DatasetStorage
 from voice_dataset.word_alignment import (
     AlignmentRegionEvidence,
     AlignmentTextMatch,
+    AlignmentRecoveryCandidate,
     LocalAlignmentRecovery,
     AlignmentComparison,
     StrandedAlignmentCandidate,
+    EffectiveWordAlignment,
     compare_alignment_recovery,
     collect_boundary_text_evidence,
     detect_alignment_issues,
@@ -17,6 +19,10 @@ from voice_dataset.word_alignment import (
     alignment_spans_overlap,
     find_stranded_alignment_candidates,
     recover_stranded_alignment,
+    build_sat_boundary_recovery_candidates,
+    recover_sat_boundary_alignments,
+    recover_candidate_alignment,
+    alignment_recovery_is_valid,
 )
 import pytest
 
@@ -793,6 +799,33 @@ def test_apply_alignment_recoveries_rejects_words_outside_region(
         )
 
 
+def test_sat_boundary_at_region_end_does_not_create_candidate() -> None:
+    words = [
+        word("One", 10.0, 10.2),
+        word("two", 10.2, 10.4),
+        word("three", 10.4, 10.6),
+        word("Four", 10.7, 10.9),
+    ]
+
+    evidence = AlignmentRegionEvidence(
+        region_id="region_000001",
+        start=9.9,
+        end=10.6,
+        whisper_text=None,
+        whisper_tokens=(),
+        speaker="SPEAKER_00",
+        text_matches=(),
+    )
+
+    candidates = build_sat_boundary_recovery_candidates(
+        words,
+        [evidence],
+        {2},
+    )
+
+    assert candidates == []
+
+
 def test_find_stranded_alignment_candidate_between_confirmed_anchors(
 ) -> None:
     words = [
@@ -1495,3 +1528,521 @@ def test_effective_alignment_propagates_stranded_recovery_failure(
             representation_name="center",
             language="English",
         )
+
+
+def test_build_sat_boundary_recovery_candidate_for_boundary_inside_region():
+    words = [
+        word("I", 71.760, 71.840),
+        word("wish", 71.840, 72.080),
+        word("I", 72.080, 72.160),
+        word("could", 72.160, 72.320),
+        word("say", 72.320, 72.640),
+        word("it's", 72.640, 72.880),
+        word("easier", 72.880, 73.280),
+        word("kid", 73.280, 73.440),
+        word("Out", 73.440, 73.680),
+        word("but", 74.720, 74.880),
+    ]
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_000003",
+            start=71.73284375,
+            end=73.63971875,
+            speaker="SPEAKER_00",
+            whisper_text=(
+                "I wish I could say it gets easier, kiddo."
+            ),
+            whisper_tokens=(
+                "i",
+                "wish",
+                "i",
+                "could",
+                "say",
+                "it",
+                "gets",
+                "easier",
+                "kiddo",
+            ),
+            text_matches=(),
+        ),
+    ]
+
+    candidates = build_sat_boundary_recovery_candidates(
+        words,
+        evidence,
+        {7},
+    )
+
+    assert len(candidates) == 1
+
+    candidate = candidates[0]
+
+    assert candidate.region_id == "region_000003"
+    assert candidate.word_indices == tuple(range(8))
+    assert candidate.start_word_index == 0
+    assert candidate.end_word_index == 7
+
+    assert candidate.region_start == pytest.approx(
+        71.73284375
+    )
+    assert candidate.region_end == pytest.approx(
+        73.63971875
+    )
+
+    assert 8 not in candidate.word_indices
+
+
+def test_sat_boundary_candidate_skips_exact_match_across_boundary() -> None:
+    words = [
+        word("They're", 207.426, 207.506),
+        word("right", 207.506, 207.826),
+        word("not", 207.906, 208.146),
+        word("to", 208.146, 208.226),
+        word("trust", 208.226, 208.546),
+        word("us", 208.546, 208.786),
+    ]
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_000020",
+            start=207.390969,
+            end=208.774719,
+            speaker="SPEAKER_04",
+            whisper_text=(
+                "They're right not to trust us."
+            ),
+            whisper_tokens=(
+                "they're",
+                "right",
+                "not",
+                "to",
+                "trust",
+                "us",
+            ),
+            text_matches=(
+                AlignmentTextMatch(
+                    start_word_index=0,
+                    end_word_index=5,
+                    word_indices=tuple(range(6)),
+                    tokens=(
+                        "they're",
+                        "right",
+                        "not",
+                        "to",
+                        "trust",
+                        "us",
+                    ),
+                ),
+            ),
+        ),
+    ]
+
+    candidates = build_sat_boundary_recovery_candidates(
+        words,
+        evidence,
+        {1},
+    )
+
+    assert candidates == []
+
+
+def test_sat_boundary_recovery_skips_boundary_at_region_end():
+    words = [
+        word("hello", 10.000, 10.500),
+        word("next", 11.000, 11.400),
+    ]
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_001",
+            start=9.900,
+            end=10.500,
+            speaker="SPEAKER_00",
+            whisper_text="hello",
+            whisper_tokens=("hello",),
+            text_matches=(),
+        ),
+    ]
+
+    candidates = build_sat_boundary_recovery_candidates(
+        words,
+        evidence,
+        {0},
+    )
+
+    assert candidates == []
+
+
+def test_sat_boundary_recovery_skips_boundary_without_unique_region():
+    words = [
+        word("hello", 10.000, 10.500),
+        word("next", 10.500, 10.800),
+    ]
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_001",
+            start=9.900,
+            end=10.700,
+            speaker="SPEAKER_00",
+            whisper_text="hello",
+            whisper_tokens=("hello",),
+            text_matches=(),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_002",
+            start=10.400,
+            end=10.900,
+            speaker="SPEAKER_01",
+            whisper_text="something",
+            whisper_tokens=("something",),
+            text_matches=(),
+        ),
+    ]
+
+    candidates = build_sat_boundary_recovery_candidates(
+        words,
+        evidence,
+        {0},
+    )
+
+    assert candidates == []
+
+
+def test_sat_boundary_candidate_stops_at_previous_sat_boundary() -> None:
+    words = [
+        word("One", 10.0, 10.2),
+        word("two", 10.2, 10.4),
+        word("three", 10.4, 10.6),
+        word("Four", 10.7, 10.9),
+        word("five", 10.9, 11.1),
+        word("six", 11.1, 11.3),
+        word("seven", 11.3, 11.5),
+        word("eight", 11.5, 11.7),
+        word("nine", 11.7, 11.9),
+    ]
+
+    evidence = AlignmentRegionEvidence(
+        region_id="region_000001",
+        start=9.9,
+        end=12.0,
+        whisper_text=None,
+        whisper_tokens=(),
+        speaker="SPEAKER_00",
+        text_matches=(),
+    )
+
+    candidates = build_sat_boundary_recovery_candidates(
+        words,
+        [evidence],
+        {2, 7},
+    )
+
+    later = next(
+        candidate
+        for candidate in candidates
+        if candidate.end_word_index == 7
+    )
+
+    assert later.word_indices == tuple(
+        range(3, 8)
+    )
+    assert later.start_word_index == 3
+
+
+def test_recovers_effective_geometry_at_sat_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = DatasetStorage(
+        tmp_path / "dataset"
+    )
+
+    words = [
+        word("I", 71.760, 71.840),
+        word("wish", 71.840, 72.080),
+        word("I", 72.080, 72.160),
+        word("could", 72.160, 72.320),
+        word("say", 72.320, 72.640),
+        word("it's", 72.640, 72.880),
+        word("easier", 72.880, 73.280),
+        word("kid", 73.280, 73.440),
+        word("Out", 73.440, 73.680),
+        word("but", 74.720, 74.880),
+    ]
+
+    alignment = EffectiveWordAlignment(
+        words=tuple(words),
+        recoveries=(),
+    )
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_000003",
+            start=71.73284375,
+            end=73.63971875,
+            speaker="SPEAKER_00",
+            whisper_text=(
+                "I wish I could say it gets easier, kiddo."
+            ),
+            whisper_tokens=(
+                "i",
+                "wish",
+                "i",
+                "could",
+                "say",
+                "it",
+                "gets",
+                "easier",
+                "kiddo",
+            ),
+            text_matches=(),
+        ),
+    ]
+
+    monkeypatch.setattr(
+        word_alignment,
+        "collect_region_evidence",
+        lambda *args, **kwargs: evidence,
+    )
+
+    def fake_recover_candidate_alignment(
+        storage: DatasetStorage,
+        source_id: str,
+        candidate: AlignmentRecoveryCandidate,
+        words: list[dict],
+        *,
+        representation_name: str,
+        language: str,
+    ) -> LocalAlignmentRecovery:
+        assert candidate.word_indices == tuple(
+            range(8)
+        )
+
+        assert candidate.end_word_index == 7
+
+        return LocalAlignmentRecovery(
+            word_indices=candidate.word_indices,
+            region_id=candidate.region_id,
+            region_start=candidate.region_start,
+            region_end=candidate.region_end,
+            text=(
+                "I wish I could say it's easier kid"
+            ),
+            words=(
+                word("I", 71.733, 71.813),
+                word("wish", 71.813, 72.133),
+                word("I", 72.133, 72.133),
+                word("could", 72.213, 72.293),
+                word("say", 72.293, 72.613),
+                word("it's", 72.613, 72.933),
+                word("easier", 72.933, 73.253),
+                word("kid", 73.253, 73.63971875),
+            ),
+        )
+
+    monkeypatch.setattr(
+        word_alignment,
+        "recover_candidate_alignment",
+        fake_recover_candidate_alignment,
+    )
+
+    result = recover_sat_boundary_alignments(
+        storage,
+        "source_001",
+        alignment,
+        {7},
+        representation_name="center",
+        language="English",
+    )
+
+    assert result.words[7]["text"] == "kid"
+    assert result.words[7]["end"] == 73.63971875
+
+    assert result.words[8]["text"] == "Out"
+    assert result.words[8]["start"] == pytest.approx(
+        73.440
+    )
+    assert result.words[8]["end"] == pytest.approx(
+        73.680
+    )
+
+    assert len(result.recoveries) == 1
+    assert result.recoveries[0].word_indices == tuple(
+        range(8)
+    )
+
+
+def test_rejects_sat_boundary_recovery_that_does_not_reach_region_end(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = DatasetStorage(
+        tmp_path / "dataset"
+    )
+
+    words = [
+        word("One", 10.0, 10.2),
+        word("two", 10.2, 10.4),
+        word("three", 10.4, 10.6),
+        word("Four", 10.7, 10.9),
+    ]
+
+    alignment = EffectiveWordAlignment(
+        words=tuple(words),
+        recoveries=(),
+    )
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_000001",
+            start=9.9,
+            end=15.0,
+            speaker="SPEAKER_00",
+            whisper_text=None,
+            whisper_tokens=(),
+            text_matches=(),
+        ),
+    ]
+
+    monkeypatch.setattr(
+        word_alignment,
+        "collect_region_evidence",
+        lambda *args, **kwargs: evidence,
+    )
+
+    def fake_recover_candidate_alignment(
+        storage: DatasetStorage,
+        source_id: str,
+        candidate: AlignmentRecoveryCandidate,
+        words: list[dict],
+        *,
+        representation_name: str,
+        language: str,
+    ) -> LocalAlignmentRecovery:
+        assert candidate.word_indices == tuple(
+            range(3)
+        )
+        assert candidate.end_word_index == 2
+
+        return LocalAlignmentRecovery(
+            word_indices=candidate.word_indices,
+            region_id=candidate.region_id,
+            region_start=candidate.region_start,
+            region_end=candidate.region_end,
+            text="One two three",
+            words=(
+                word("One", 10.0, 10.2),
+                word("two", 10.2, 10.4),
+                word("three", 10.4, 10.62),
+            ),
+        )
+
+    monkeypatch.setattr(
+        word_alignment,
+        "recover_candidate_alignment",
+        fake_recover_candidate_alignment,
+    )
+
+    result = recover_sat_boundary_alignments(
+        storage,
+        "source_001",
+        alignment,
+        {2},
+        representation_name="center",
+        language="English",
+    )
+
+    assert result == alignment
+
+
+def test_recover_candidate_alignment_clamps_quantized_times_to_region(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = DatasetStorage(
+        tmp_path / "dataset"
+    )
+
+    words = [
+        word("I", 71.760, 71.840),
+        word("wish", 71.840, 72.080),
+        word("I", 72.080, 72.160),
+        word("could", 72.160, 72.320),
+        word("say", 72.320, 72.640),
+        word("it's", 72.640, 72.880),
+        word("easier", 72.880, 73.280),
+        word("kid", 73.280, 73.440),
+    ]
+
+    candidate = AlignmentRecoveryCandidate(
+        word_indices=tuple(range(8)),
+        start_word_index=0,
+        end_word_index=7,
+        region_id="region_000003",
+        region_start=71.73284375,
+        region_end=73.63971875,
+        whisper_text=(
+            "I wish I could say it gets easier, kiddo."
+        ),
+        speaker="SPEAKER_00",
+        issue_word_indices=(7,),
+        issue_reasons=(
+            "sat_boundary_inside_region",
+        ),
+    )
+
+    monkeypatch.setattr(
+        word_alignment,
+        "resolve_source_representation",
+        lambda *args, **kwargs: (
+            None,
+            tmp_path / "center.wav",
+        ),
+    )
+
+    monkeypatch.setattr(
+        word_alignment,
+        "extract_audio_region",
+        lambda **kwargs: None,
+    )
+
+    monkeypatch.setattr(
+        word_alignment,
+        "align_text_qwen3",
+        lambda *args, **kwargs: ForcedAlignmentResult(
+            language="English",
+            text=(
+                "I wish I could say it's easier kid"
+            ),
+            words=(
+                word("I", 0.000, 0.080),
+                word("wish", 0.080, 0.400),
+                word("I", 0.400, 0.400),
+                word("could", 0.480, 0.560),
+                word("say", 0.560, 0.880),
+                word("it's", 0.880, 1.200),
+                word("easier", 1.200, 1.520),
+                word("kid", 1.520, 1.920),
+            ),
+        ),
+    )
+
+    recovery = recover_candidate_alignment(
+        storage,
+        "source_001",
+        candidate,
+        words,
+        representation_name="center",
+        language="English",
+    )
+
+    assert recovery.words[-1]["end"] == pytest.approx(
+        73.63971875
+    )
+
+    assert alignment_recovery_is_valid(
+        words,
+        recovery,
+    )

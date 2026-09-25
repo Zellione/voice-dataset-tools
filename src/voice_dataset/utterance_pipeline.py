@@ -28,6 +28,7 @@ from .representations import (
 from .word_alignment import (
     EffectiveWordAlignment,
     build_effective_word_alignment,
+    recover_sat_boundary_alignments,
 )
 
 
@@ -177,12 +178,21 @@ def build_source_utterances(
         language=language,
     )
 
-    effective_words = list(alignment.words)
-
     sat_boundaries = _run_sat(
         raw_words
     )
-
+    
+    alignment = recover_sat_boundary_alignments(
+        storage,
+        source_id,
+        alignment,
+        sat_boundaries,
+        representation_name="center",
+        language=language,
+    )
+    
+    effective_words = list(alignment.words)
+    
     attributed = (
         attribute_speakers_to_words(
             storage,
