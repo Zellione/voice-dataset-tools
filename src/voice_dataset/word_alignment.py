@@ -174,7 +174,11 @@ def build_effective_word_alignment(
             language=language,
         )
 
-        recoveries.append(recovery)
+        if alignment_recovery_is_valid(
+            words,
+            recovery,
+        ):
+            recoveries.append(recovery)
 
     effective_words = apply_alignment_recoveries(
         words,
@@ -921,6 +925,46 @@ def recover_region_alignment(
         representation_name=representation_name,
         language=language,
     )
+
+
+def alignment_recovery_is_valid(
+    words: list[dict[str, Any]],
+    recovery: LocalAlignmentRecovery,
+) -> bool:
+    if len(recovery.word_indices) != len(
+        recovery.words
+    ):
+        return False
+
+    for index, recovered in zip(
+        recovery.word_indices,
+        recovery.words,
+        strict=True,
+    ):
+        if index < 0 or index >= len(words):
+            return False
+
+        recovered_start = float(
+            recovered["start"]
+        )
+        recovered_end = float(
+            recovered["end"]
+        )
+
+        if (
+            recovered_start < recovery.region_start
+            or recovered_end > recovery.region_end
+        ):
+            return False
+
+        if _lexical_tokens(
+            str(words[index]["text"])
+        ) != _lexical_tokens(
+            str(recovered["text"])
+        ):
+            return False
+
+    return True
 
 
 def apply_alignment_recoveries(

@@ -1321,3 +1321,177 @@ def test_recover_stranded_alignment_uses_local_forced_alignment(
     assert recovery.words[1]["end"] == pytest.approx(
         164.177
     )
+
+
+def test_effective_alignment_skips_invalid_stranded_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = DatasetStorage(tmp_path / "dataset")
+
+    words = [
+        word("left", 10.000, 10.400),
+        word("stranded", 10.400, 10.500),
+        word("right", 10.500, 10.500),
+    ]
+
+    region_evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_left",
+            start=9.900,
+            end=10.500,
+            speaker="SPEAKER_00",
+            whisper_text="left",
+            whisper_tokens=("left",),
+            text_matches=(
+                AlignmentTextMatch(
+                    start_word_index=0,
+                    end_word_index=0,
+                    word_indices=(0,),
+                    tokens=("left",),
+                ),
+            ),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_stranded",
+            start=20.000,
+            end=21.000,
+            speaker="SPEAKER_01",
+            whisper_text="something else",
+            whisper_tokens=("something", "else"),
+            text_matches=(),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_right",
+            start=30.000,
+            end=31.000,
+            speaker="SPEAKER_02",
+            whisper_text="right",
+            whisper_tokens=("right",),
+            text_matches=(
+                AlignmentTextMatch(
+                    start_word_index=2,
+                    end_word_index=2,
+                    word_indices=(2,),
+                    tokens=("right",),
+                ),
+            ),
+        ),
+    ]
+
+    invalid_stranded_recovery = LocalAlignmentRecovery(
+        word_indices=(1,),
+        region_id="region_stranded",
+        region_start=20.000,
+        region_end=21.000,
+        text="stranded",
+        words=(word("stranded", 20.100, 22.000),),
+    )
+
+    monkeypatch.setattr(
+        word_alignment,
+        "collect_region_evidence",
+        lambda *args, **kwargs: region_evidence,
+    )
+    monkeypatch.setattr(
+        word_alignment,
+        "detect_alignment_issues",
+        lambda words: [],
+    )
+    monkeypatch.setattr(
+        word_alignment,
+        "build_recovery_candidates",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        word_alignment,
+        "find_stranded_alignment_candidates",
+        lambda *args, **kwargs: [
+            StrandedAlignmentCandidate(
+                word_indices=(1,),
+                region_id="region_stranded",
+                region_start=20.000,
+                region_end=21.000,
+                speaker="SPEAKER_01",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        word_alignment,
+        "recover_stranded_alignment",
+        lambda *args, **kwargs: invalid_stranded_recovery,
+    )
+
+    result = word_alignment.build_effective_word_alignment(
+        storage,
+        "source_001",
+        words,
+        representation_name="center",
+        language="English",
+    )
+
+    assert result.words[1]["start"] == pytest.approx(10.400)
+    assert result.words[1]["end"] == pytest.approx(10.500)
+    assert result.recoveries == ()
+
+
+def test_effective_alignment_propagates_stranded_recovery_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = DatasetStorage(tmp_path / "dataset")
+
+    words = [
+        word("left", 10.000, 10.400),
+        word("stranded", 10.400, 10.500),
+    ]
+
+    monkeypatch.setattr(
+        word_alignment,
+        "collect_region_evidence",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        word_alignment,
+        "detect_alignment_issues",
+        lambda words: [],
+    )
+    monkeypatch.setattr(
+        word_alignment,
+        "build_recovery_candidates",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        word_alignment,
+        "find_stranded_alignment_candidates",
+        lambda *args, **kwargs: [
+            StrandedAlignmentCandidate(
+                word_indices=(1,),
+                region_id="region_stranded",
+                region_start=20.000,
+                region_end=21.000,
+                speaker="SPEAKER_01",
+            )
+        ],
+    )
+
+    def fail_recovery(*args, **kwargs):
+        raise RuntimeError("forced aligner failed")
+
+    monkeypatch.setattr(
+        word_alignment,
+        "recover_stranded_alignment",
+        fail_recovery,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="forced aligner failed",
+    ):
+        word_alignment.build_effective_word_alignment(
+            storage,
+            "source_001",
+            words,
+            representation_name="center",
+            language="English",
+        )
