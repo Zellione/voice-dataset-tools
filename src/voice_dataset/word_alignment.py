@@ -64,6 +64,7 @@ class AlignmentComparison:
 class EffectiveWordAlignment:
     words: tuple[dict[str, Any], ...]
     recoveries: tuple[LocalAlignmentRecovery, ...]
+    suppressed_word_indices: tuple[int, ...] = ()
 
 
 def build_effective_word_alignment(
@@ -251,11 +252,36 @@ def recover_sat_boundary_alignments(
         recoveries,
     )
 
+    conflicts = find_post_recovery_word_conflicts(
+        effective_words,
+        recoveries,
+    )
+
+    newly_suppressed = (
+        find_unclaimed_post_recovery_words(
+            effective_words,
+            conflicts,
+            region_evidence,
+        )
+    )
+
+    suppressed_word_indices = tuple(
+        dict.fromkeys(
+            (
+                *alignment.suppressed_word_indices,
+                *newly_suppressed,
+            )
+        )
+    )
+
     return EffectiveWordAlignment(
         words=tuple(effective_words),
         recoveries=(
             *alignment.recoveries,
             *recoveries,
+        ),
+        suppressed_word_indices=(
+            suppressed_word_indices
         ),
     )
 
@@ -521,6 +547,107 @@ class LocalAlignmentRecovery:
     region_end: float
     text: str
     words: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class PostRecoveryWordConflict:
+    recovered_word_index: int
+    conflicting_word_index: int
+    recovery_region_id: str
+    reason: str
+
+
+def find_post_recovery_word_conflicts(
+    words: list[dict[str, Any]],
+    recoveries: list[LocalAlignmentRecovery],
+) -> list[PostRecoveryWordConflict]:
+    conflicts: list[PostRecoveryWordConflict] = []
+
+    recovered_indices = {
+        word_index
+        for recovery in recoveries
+        for word_index in recovery.word_indices
+    }
+
+    for recovery in recoveries:
+        if not recovery.word_indices:
+            continue
+
+        recovered_word_index = max(
+            recovery.word_indices
+        )
+        conflicting_word_index = (
+            recovered_word_index + 1
+        )
+
+        if conflicting_word_index >= len(words):
+            continue
+
+        if conflicting_word_index in recovered_indices:
+            continue
+
+        recovered_word = words[
+            recovered_word_index
+        ]
+        conflicting_word = words[
+            conflicting_word_index
+        ]
+
+        if (
+            float(conflicting_word["start"])
+            >= float(recovered_word["end"])
+        ):
+            continue
+
+        conflicts.append(
+            PostRecoveryWordConflict(
+                recovered_word_index=(
+                    recovered_word_index
+                ),
+                conflicting_word_index=(
+                    conflicting_word_index
+                ),
+                recovery_region_id=(
+                    recovery.region_id
+                ),
+                reason=(
+                    "overlaps_recovered_word"
+                ),
+            )
+        )
+
+    return conflicts
+
+
+def find_unclaimed_post_recovery_words(
+    words: list[dict[str, Any]],
+    conflicts: list[PostRecoveryWordConflict],
+    region_evidence: list[AlignmentRegionEvidence],
+) -> tuple[int, ...]:
+    unclaimed_indices: list[int] = []
+
+    for conflict in conflicts:
+        word_index = conflict.conflicting_word_index
+        word = words[word_index]
+
+        word_start = float(word["start"])
+        word_end = float(word["end"])
+
+        claimed_by_other_region = any(
+            evidence.region_id
+            != conflict.recovery_region_id
+            and word_start < evidence.end
+            and word_end > evidence.start
+            for evidence in region_evidence
+        )
+
+        if claimed_by_other_region:
+            continue
+
+        if word_index not in unclaimed_indices:
+            unclaimed_indices.append(word_index)
+
+    return tuple(unclaimed_indices)
 
 
 def recover_stranded_alignment(

@@ -1,3 +1,5 @@
+import pytest
+
 from unittest.mock import patch
 
 from voice_dataset.diarization_conflicts import (
@@ -5,7 +7,9 @@ from voice_dataset.diarization_conflicts import (
 )
 from voice_dataset.speaker_words import (
     SpeakerAttributedWord,
+    attribute_speakers_to_words,
     resolve_fragmented_speaker_words,
+    resolve_consistent_speaker_context,
 )
 
 
@@ -26,6 +30,72 @@ def _word(
         speaker=speaker,
         assignment_method=assignment_method,
     )
+
+
+def test_attribute_speakers_preserves_explicit_word_indices():
+    words = [
+        {
+            "text": "kid",
+            "start": 73.253,
+            "end": 73.63971875,
+        },
+        {
+            "text": "but",
+            "start": 74.720,
+            "end": 74.880,
+        },
+    ]
+
+    with patch(
+        "voice_dataset.speaker_words._source_regions",
+        return_value=[],
+    ):
+        attributed = attribute_speakers_to_words(
+            storage=None,
+            source_id="source",
+            words=words,
+            word_indices=[7, 9],
+        )
+
+    assert [
+        word.index
+        for word in attributed
+    ] == [7, 9]
+
+    assert [
+        word.text
+        for word in attributed
+    ] == ["kid", "but"]
+
+
+def test_attribute_speakers_rejects_mismatched_word_indices():
+    words = [
+        {
+            "text": "kid",
+            "start": 73.253,
+            "end": 73.63971875,
+        },
+        {
+            "text": "but",
+            "start": 74.720,
+            "end": 74.880,
+        },
+    ]
+
+    with patch(
+        "voice_dataset.speaker_words._source_regions",
+        return_value=[],
+    ):
+        with pytest.raises(
+            ValueError,
+            match="word_indices must match words length",
+        ):
+            attribute_speakers_to_words(
+                storage=None,
+                source_id="source",
+                words=words,
+                word_indices=[7],
+            )
 
 
 def test_fragmented_speaker_tail_inside_sat_utterance_is_resolved():
@@ -242,3 +312,47 @@ def test_fragmented_speaker_resolution_does_not_cross_sat_boundary():
 
     assert resolved[1].speaker is None
     assert resolved[2].speaker == "SPEAKER_B"
+
+
+def test_consistent_speaker_context_preserves_sparse_word_indices():
+    words = [
+        _word(
+            7,
+            "kid",
+            73.253,
+            73.63971875,
+            "SPEAKER_00",
+            "single_speaker",
+        ),
+        _word(
+            9,
+            "but",
+            74.720,
+            74.880,
+            None,
+            "no_speaker_overlap",
+        ),
+        _word(
+            10,
+            "I'll",
+            74.880,
+            74.960,
+            "SPEAKER_00",
+            "single_speaker",
+        ),
+    ]
+
+    resolved = resolve_consistent_speaker_context(
+        words
+    )
+
+    assert [word.index for word in resolved] == [
+        7,
+        9,
+        10,
+    ]
+    assert resolved[1].speaker == "SPEAKER_00"
+    assert (
+        resolved[1].assignment_method
+        == "consistent_speaker_context"
+    )

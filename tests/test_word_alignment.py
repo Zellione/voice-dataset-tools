@@ -11,6 +11,8 @@ from voice_dataset.word_alignment import (
     AlignmentComparison,
     StrandedAlignmentCandidate,
     EffectiveWordAlignment,
+    PostRecoveryWordConflict,
+    find_unclaimed_post_recovery_words,
     compare_alignment_recovery,
     collect_boundary_text_evidence,
     detect_alignment_issues,
@@ -23,6 +25,7 @@ from voice_dataset.word_alignment import (
     recover_sat_boundary_alignments,
     recover_candidate_alignment,
     alignment_recovery_is_valid,
+    find_post_recovery_word_conflicts,
 )
 import pytest
 
@@ -1868,10 +1871,133 @@ def test_recovers_effective_geometry_at_sat_boundary(
         73.680
     )
 
+    assert result.suppressed_word_indices == (8,)
+
     assert len(result.recoveries) == 1
     assert result.recoveries[0].word_indices == tuple(
         range(8)
     )
+
+
+def test_finds_word_overlapping_accepted_recovery() -> None:
+    words = [
+        word("kid", 73.253, 73.63971875),
+        word("Out", 73.440, 73.680),
+        word("but", 74.720, 74.880),
+    ]
+
+    recovery = LocalAlignmentRecovery(
+        word_indices=(0,),
+        region_id="region_000003",
+        region_start=71.73284375,
+        region_end=73.63971875,
+        text="kid",
+        words=(
+            word("kid", 73.253, 73.63971875),
+        ),
+    )
+
+    conflicts = find_post_recovery_word_conflicts(
+        words,
+        [recovery],
+    )
+
+    assert len(conflicts) == 1
+
+    conflict = conflicts[0]
+
+    assert conflict.recovered_word_index == 0
+    assert conflict.conflicting_word_index == 1
+    assert conflict.recovery_region_id == "region_000003"
+    assert conflict.reason == "overlaps_recovered_word"
+
+
+def test_post_recovery_conflict_allows_non_overlapping_next_word() -> None:
+    words = [
+        word("kid", 73.253, 73.63971875),
+        word("but", 74.720, 74.880),
+    ]
+
+    recovery = LocalAlignmentRecovery(
+        word_indices=(0,),
+        region_id="region_000003",
+        region_start=71.73284375,
+        region_end=73.63971875,
+        text="kid",
+        words=(
+            word("kid", 73.253, 73.63971875),
+        ),
+    )
+
+    conflicts = find_post_recovery_word_conflicts(
+        words,
+        [recovery],
+    )
+
+    assert conflicts == []
+
+
+def test_post_recovery_conflict_ignores_words_in_same_recovery() -> None:
+    words = [
+        word("easier", 72.933, 73.253),
+        word("kid", 73.253, 73.63971875),
+        word("but", 74.720, 74.880),
+    ]
+
+    recovery = LocalAlignmentRecovery(
+        word_indices=(0, 1),
+        region_id="region_000003",
+        region_start=71.73284375,
+        region_end=73.63971875,
+        text="easier kid",
+        words=(
+            word("easier", 72.933, 73.253),
+            word("kid", 73.253, 73.63971875),
+        ),
+    )
+
+    conflicts = find_post_recovery_word_conflicts(
+        words,
+        [recovery],
+    )
+
+    assert conflicts == []
+
+
+def test_post_recovery_conflict_ignores_next_recovered_word() -> None:
+    words = [
+        word("left", 10.000, 10.600),
+        word("right", 10.500, 11.000),
+    ]
+
+    left_recovery = LocalAlignmentRecovery(
+        word_indices=(0,),
+        region_id="region_left",
+        region_start=10.000,
+        region_end=10.600,
+        text="left",
+        words=(
+            word("left", 10.000, 10.600),
+        ),
+    )
+
+    right_recovery = LocalAlignmentRecovery(
+        word_indices=(1,),
+        region_id="region_right",
+        region_start=10.500,
+        region_end=11.000,
+        text="right",
+        words=(
+            word("right", 10.500, 11.000),
+        ),
+    )
+
+    conflicts = find_post_recovery_word_conflicts(
+        words,
+        [left_recovery, right_recovery],
+    )
+
+    assert conflicts == []
 
 
 def test_rejects_sat_boundary_recovery_that_does_not_reach_region_end(
@@ -2046,3 +2172,101 @@ def test_recover_candidate_alignment_clamps_quantized_times_to_region(
         words,
         recovery,
     )
+
+
+def test_finds_unclaimed_word_after_recovery() -> None:
+    words = [
+        word("kid", 73.253, 73.63971875),
+        word("Out", 73.440, 73.680),
+    ]
+
+    conflicts = [
+        PostRecoveryWordConflict(
+            recovered_word_index=0,
+            conflicting_word_index=1,
+            recovery_region_id="region_000003",
+            reason="overlaps_recovered_word",
+        ),
+    ]
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_000003",
+            start=71.73284375,
+            end=73.63971875,
+            speaker="SPEAKER_00",
+            whisper_text=(
+                "I wish I could say it gets easier, kiddo."
+            ),
+            whisper_tokens=(
+                "i",
+                "wish",
+                "i",
+                "could",
+                "say",
+                "it",
+                "gets",
+                "easier",
+                "kiddo",
+            ),
+            text_matches=(),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_000004",
+            start=74.73659375,
+            end=75.52971875,
+            speaker="SPEAKER_00",
+            whisper_text="But I'll be lying.",
+            whisper_tokens=("but", "i'll", "be", "lying"),
+            text_matches=(),
+        ),
+    ]
+
+    assert find_unclaimed_post_recovery_words(
+        words,
+        conflicts,
+        evidence,
+    ) == (1,)
+
+
+def test_post_recovery_word_is_claimed_by_other_region() -> None:
+    words = [
+        word("left", 10.000, 10.600),
+        word("right", 10.500, 10.900),
+    ]
+
+    conflicts = [
+        PostRecoveryWordConflict(
+            recovered_word_index=0,
+            conflicting_word_index=1,
+            recovery_region_id="region_left",
+            reason="overlaps_recovered_word",
+        ),
+    ]
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_left",
+            start=10.000,
+            end=10.600,
+            speaker="SPEAKER_00",
+            whisper_text="left",
+            whisper_tokens=("left",),
+            text_matches=(),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_right",
+            start=10.500,
+            end=11.000,
+            speaker="SPEAKER_01",
+            whisper_text="right",
+            whisper_tokens=("right",),
+            text_matches=(),
+        ),
+    ]
+
+    assert find_unclaimed_post_recovery_words(
+        words,
+        conflicts,
+        evidence,
+    ) == ()

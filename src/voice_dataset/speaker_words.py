@@ -144,6 +144,7 @@ def attribute_speakers_to_words(
     *,
     evidence_name: str = "qwen3",
     words: list[dict[str, Any]] | None = None,
+    word_indices: list[int] | None = None,
 ) -> list[SpeakerAttributedWord]:
     if words is None:
         evidence = _load_continuous_asr(
@@ -152,6 +153,15 @@ def attribute_speakers_to_words(
             evidence_name,
         )
         words = evidence["words"]
+
+    if word_indices is None:
+        word_indices = list(range(len(words)))
+
+    if len(word_indices) != len(words):
+        raise ValueError(
+            "word_indices must match words length"
+        )
+
     regions = _source_regions(
         storage,
         source_id,
@@ -159,7 +169,11 @@ def attribute_speakers_to_words(
 
     results: list[SpeakerAttributedWord] = []
 
-    for index, word in enumerate(words):
+    for index, word in zip(
+        word_indices,
+        words,
+        strict=True,
+    ):
         text = word["text"]
         start = float(word["start"])
         end = float(word["end"])
@@ -376,6 +390,11 @@ def resolve_consistent_speaker_context(
 ) -> list[SpeakerAttributedWord]:
     resolved = list(words)
 
+    positions_by_word_index = {
+        word.index: position
+        for position, word in enumerate(words)
+    }
+
     runs = collect_unresolved_word_runs(words)
 
     for run in runs:
@@ -391,9 +410,12 @@ def resolve_consistent_speaker_context(
         speaker = run.left_speaker
 
         for word_index in run.word_indices:
-            word = resolved[word_index]
+            position = positions_by_word_index[
+                word_index
+            ]
+            word = resolved[position]
 
-            resolved[word_index] = (
+            resolved[position] = (
                 SpeakerAttributedWord(
                     index=word.index,
                     text=word.text,

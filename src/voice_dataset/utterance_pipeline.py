@@ -191,8 +191,23 @@ def build_source_utterances(
         language=language,
     )
     
-    effective_words = list(alignment.words)
-    
+    suppressed_word_indices = set(
+        alignment.suppressed_word_indices
+    )
+
+    effective_word_indices = [
+        index
+        for index in range(
+            len(alignment.words)
+        )
+        if index not in suppressed_word_indices
+    ]
+
+    effective_words = [
+        dict(alignment.words[index])
+        for index in effective_word_indices
+    ]
+
     attributed = (
         attribute_speakers_to_words(
             storage,
@@ -201,6 +216,7 @@ def build_source_utterances(
                 asr_evidence_name
             ),
             words=effective_words,
+            word_indices=effective_word_indices,
         )
     )
 
