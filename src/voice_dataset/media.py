@@ -16,6 +16,7 @@ class AudioStream:
     channel_layout: str | None
     language: str | None
     title: str | None
+    is_default: bool
 
 
 def probe_audio_streams(source: Path) -> list[AudioStream]:
@@ -26,7 +27,7 @@ def probe_audio_streams(source: Path) -> list[AudioStream]:
         "-select_streams",
         "a",
         "-show_entries",
-        "stream=index,codec_name,sample_rate,channels,channel_layout:stream_tags=language,title",
+        "stream=index,codec_name,sample_rate,channels,channel_layout:stream_tags=language,title:stream_disposition=default",
         "-of",
         "json",
         str(source),
@@ -68,6 +69,12 @@ def probe_audio_streams(source: Path) -> list[AudioStream]:
                 channel_layout=stream.get("channel_layout"),
                 language=tags.get("language"),
                 title=tags.get("title"),
+                is_default=bool(
+                    stream.get(
+                        "disposition",
+                        {},
+                    ).get("default", 0)
+                ),
             )
         )
 
@@ -86,6 +93,65 @@ def choose_channel_mode(
         return "center"
 
     return "mono"
+
+
+def select_audio_stream(
+    streams: list[AudioStream],
+    *,
+    audio_stream: int | None = None,
+    language: str | None = None,
+) -> tuple[int, AudioStream]:
+    if not streams:
+        raise ValueError("No audio streams available")
+
+    if audio_stream is not None:
+        if audio_stream < 0 or audio_stream >= len(streams):
+            raise ValueError(
+                f"Audio stream {audio_stream} does not exist. "
+                f"Source contains {len(streams)} audio stream(s)."
+            )
+
+        return audio_stream, streams[audio_stream]
+
+    if language is not None:
+        normalized_language = language.strip().lower()
+
+        language_matches = [
+            (position, stream)
+            for position, stream in enumerate(streams)
+            if (
+                stream.language is not None
+                and stream.language.strip().lower()
+                == normalized_language
+            )
+        ]
+
+        if len(language_matches) == 1:
+            return language_matches[0]
+
+        if len(language_matches) > 1:
+            raise ValueError(
+                "Multiple audio streams match language "
+                f"{language!r}"
+            )
+
+    default_matches = [
+        (position, stream)
+        for position, stream in enumerate(streams)
+        if stream.is_default
+    ]
+
+    if len(default_matches) == 1:
+        return default_matches[0]
+
+    if len(streams) == 1:
+        return 0, streams[0]
+
+    raise ValueError(
+        "Audio stream selection is ambiguous; "
+        "specify an audio stream"
+    )
+
 
 def normalize_media(
     source: Path,

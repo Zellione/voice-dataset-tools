@@ -325,6 +325,9 @@ def probe(
             f"  Title:          "
             f"{stream.title or '-'}"
         )
+        typer.echo(
+            f"  Default:        {'yes' if stream.is_default else 'no'}"
+        )
         typer.echo()
 
 
@@ -335,11 +338,18 @@ def ingest(
         ...,
         help="Stable identifier for this source.",
     ),
-    audio_stream: int = typer.Option(
-        0,
+    audio_stream: int | None = typer.Option(
+        None,
         help=(
-            "Audio stream number within the audio streams "
-            "(0 = first audio stream)."
+            "Audio stream number within the audio streams. "
+            "Automatically selected when omitted."
+        ),
+    ),
+    language: str | None = typer.Option(
+        None,
+        help=(
+            "Preferred audio stream language. "
+            "Used for automatic stream selection."
         ),
     ),
     channel: str = typer.Option(
@@ -382,6 +392,7 @@ def ingest(
             output=output,
             source_id=source_id,
             audio_stream=audio_stream,
+            language=language,
             channel=channel,
             start=start,
             duration=duration,

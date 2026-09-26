@@ -6,6 +6,7 @@ from .media import (
     choose_channel_mode,
     normalize_media,
     probe_audio_streams,
+    select_audio_stream,
 )
 from .schema import AudioRepresentation, SourceRecord
 from .sources import probe_audio_representation
@@ -16,7 +17,8 @@ def ingest(
     source: Path,
     output: Path,
     source_id: str,
-    audio_stream: int = 0,
+    audio_stream: int | None = None,
+    language: str | None = None,
     channel: str = "auto",
     start: float | None = None,
     duration: float | None = None,
@@ -37,11 +39,11 @@ def ingest(
             f"No audio streams found in {source}"
         )
 
-    if audio_stream < 0 or audio_stream >= len(streams):
-        raise ValueError(
-            f"Audio stream {audio_stream} does not exist. "
-            f"Source contains {len(streams)} audio stream(s)."
-        )
+    audio_stream, selected_stream = select_audio_stream(
+        streams,
+        audio_stream=audio_stream,
+        language=language,
+    )
 
     selected_stream = streams[audio_stream]
 
