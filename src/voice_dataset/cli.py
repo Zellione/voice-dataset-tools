@@ -70,6 +70,7 @@ from .boundary_evidence import (
     refresh_source_boundary_evidence,
 )
 from .workers import WorkerError
+from .process import process_source
 
 preload_cuda_libraries()
 
@@ -422,6 +423,114 @@ def ingest(
     typer.echo(
         f"  media start:    "
         f"{representation.media_start:.3f}s"
+    )
+
+
+@app.command()
+def process(
+    source: Path,
+    source_id: str = typer.Option(
+        ...,
+        help="Stable identifier for this source.",
+    ),
+    audio_stream: int | None = typer.Option(
+        None,
+        help=(
+            "Audio stream number within the audio streams. "
+            "Automatically selected when omitted."
+        ),
+    ),
+    audio_language: str | None = typer.Option(
+        None,
+        help=(
+            "Preferred audio stream language. "
+            "Used for automatic stream selection."
+        ),
+    ),
+    language: str | None = typer.Option(
+        None,
+        help=(
+            "Speech recognition language code, "
+            "e.g. en or de."
+        ),
+    ),
+    channel: str = typer.Option(
+        "auto",
+        help=(
+            "Channel extraction mode: "
+            "auto, mono, or center."
+        ),
+    ),
+    start: float | None = typer.Option(
+        None,
+        min=0.0,
+        help="Start position in seconds.",
+    ),
+    duration: float | None = typer.Option(
+        None,
+        min=0.001,
+        help="Maximum duration to process in seconds.",
+    ),
+    output: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset output directory.",
+    ),
+):
+    """Prepare source media for interactive review."""
+
+    if channel not in {
+        "auto",
+        "mono",
+        "center",
+    }:
+        raise typer.BadParameter(
+            "--channel must be "
+            "auto, mono, or center"
+        )
+
+    try:
+        result = process_source(
+            source=source,
+            output=output,
+            source_id=source_id,
+            audio_stream=audio_stream,
+            audio_language=audio_language,
+            language=language,
+            channel=channel,
+            start=start,
+            duration=duration,
+        )
+    except (
+        FileNotFoundError,
+        KeyError,
+        RuntimeError,
+        ValueError,
+        WorkerError,
+    ) as exc:
+        raise typer.BadParameter(
+            str(exc)
+        ) from exc
+
+    typer.echo()
+    typer.echo(
+        f"Source ready for review: {result.source_id}"
+    )
+    typer.echo(
+        f"  detector ran:  "
+        f"{'yes' if result.detector_ran else 'no'}"
+    )
+    typer.echo(
+        f"  Qwen ran:      "
+        f"{'yes' if result.qwen_ran else 'no'}"
+    )
+    typer.echo(
+        f"  turns created: {result.turns_created}"
+    )
+    typer.echo(
+        f"  turns skipped: {result.turns_skipped}"
+    )
+    typer.echo(
+        f"  turns review:  {result.turns_review}"
     )
 
 

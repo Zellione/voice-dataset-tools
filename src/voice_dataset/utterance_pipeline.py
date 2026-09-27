@@ -32,6 +32,7 @@ from .word_alignment import (
     EffectiveWordAlignment,
     build_effective_word_alignment,
     collect_region_evidence,
+    infer_region_boundaries,
     recover_sat_boundary_alignments,
     validate_sat_boundaries,
 )
@@ -194,7 +195,7 @@ def build_source_utterances(
     sat_boundaries = _run_sat(
         raw_words
     )
-    
+
     alignment = recover_sat_boundary_alignments(
         storage,
         source_id,
@@ -215,7 +216,11 @@ def build_source_utterances(
         region_evidence,
         sat_boundaries,
     )
-    
+
+    sat_boundaries |= infer_region_boundaries(
+        region_evidence
+    )
+
     suppressed_word_indices = set(
         alignment.suppressed_word_indices
     )
@@ -303,6 +308,36 @@ class PrepareSpeakerEvidenceResult:
     representation: MaterializeTurnsResult
     ecapa: EmbeddingRunResult
     wespeaker: EmbeddingRunResult
+
+
+def prepare_source_review_audio(
+    storage: DatasetStorage,
+    source_id: str,
+) -> MaterializeTurnsResult:
+    _, source_representation, source_path = (
+        resolve_source_representation_for_purpose(
+            storage,
+            source_id,
+            "review",
+        )
+    )
+
+    source_kind = source_representation.get("kind")
+
+    if not isinstance(source_kind, str) or not source_kind:
+        raise ValueError(
+            "Review source representation has "
+            f"invalid kind: {source_id}"
+        )
+
+    return materialize_turns(
+        storage=storage,
+        source_id=source_id,
+        source=source_path,
+        representation_name="review",
+        kind=source_kind,
+        purposes=["review"],
+    )
 
 
 def prepare_source_speaker_evidence(
@@ -412,6 +447,71 @@ def apply_source_utterance_turns(
         result
     )
 
+    planned_ranges = {
+        (
+            item.candidate.start_word_index,
+            item.candidate.end_word_index,
+        )
+        for item in plan
+    }
+
+    for turn in storage.turns.load():
+        if turn.get("source_id") != source_id:
+            continue
+
+        metadata = turn.get("metadata")
+
+        if not isinstance(metadata, dict):
+            continue
+
+        creation = metadata.get("creation")
+
+        if not isinstance(creation, dict):
+            continue
+
+        if (
+            creation.get("method")
+            != "continuous_asr_utterance"
+        ):
+            continue
+
+        word_range = metadata.get("word_range")
+
+        if not isinstance(word_range, dict):
+            continue
+
+        start = word_range.get("start")
+        end = word_range.get("end")
+
+        if not isinstance(start, int):
+            continue
+
+        if not isinstance(end, int):
+            continue
+
+        existing_range = (start, end)
+
+        if existing_range in planned_ranges:
+            continue
+
+        overlaps_plan = any(
+            start <= planned_end
+            and planned_start <= end
+            for planned_start, planned_end
+            in planned_ranges
+        )
+
+        if not overlaps_plan:
+            continue
+
+        raise ValueError(
+            "Source has stale automatic turn "
+            f"{turn['id']} with word range "
+            f"{start}-{end}; current reconciliation "
+            "produces a different overlapping turn "
+            "layout. Refusing to mutate turns."
+        )
+
     created = 0
     skipped = 0
     review = 0
@@ -447,8 +547,144 @@ def apply_source_utterance_turns(
             created += 1
             existing_ids.add(turn["id"])
 
+    mark_source_utterance_reconciliation_complete(
+        storage,
+        source_id,
+        result,
+        asr_evidence_name=asr_evidence_name,
+    )
+
     return ApplyUtteranceTurnsResult(
         created=created,
         skipped=skipped,
         review=review,
+    )
+
+
+def source_utterance_reconciliation_is_complete(
+    storage: DatasetStorage,
+    source_id: str,
+    *,
+    asr_evidence_name: str = "qwen3",
+) -> bool:
+    source = storage.get_source(source_id)
+
+    if source is None:
+        return False
+
+    metadata = source.get("metadata")
+
+    if not isinstance(metadata, dict):
+        return False
+
+    reconciliation = metadata.get(
+        "utterance_reconciliation"
+    )
+
+    if not isinstance(reconciliation, dict):
+        return False
+
+    if (
+        reconciliation.get("asr_evidence")
+        != asr_evidence_name
+    ):
+        return False
+
+    word_ranges = reconciliation.get("word_ranges")
+
+    if not isinstance(word_ranges, list):
+        return False
+
+    expected_ranges: list[tuple[int, int]] = []
+
+    for item in word_ranges:
+        if (
+            not isinstance(item, list)
+            or len(item) != 2
+            or not isinstance(item[0], int)
+            or not isinstance(item[1], int)
+        ):
+            return False
+
+        expected_ranges.append((item[0], item[1]))
+
+    actual_ranges: list[tuple[int, int]] = []
+
+    for turn in storage.turns.load():
+        if turn.get("source_id") != source_id:
+            continue
+
+        turn_metadata = turn.get("metadata")
+
+        if not isinstance(turn_metadata, dict):
+            continue
+
+        creation = turn_metadata.get("creation")
+
+        if not isinstance(creation, dict):
+            continue
+
+        if (
+            creation.get("method")
+            != "continuous_asr_utterance"
+        ):
+            continue
+
+        word_range = turn_metadata.get("word_range")
+
+        if not isinstance(word_range, dict):
+            return False
+
+        start = word_range.get("start")
+        end = word_range.get("end")
+
+        if not isinstance(start, int):
+            return False
+
+        if not isinstance(end, int):
+            return False
+
+        actual_ranges.append((start, end))
+
+    return sorted(actual_ranges) == sorted(expected_ranges)
+
+
+def mark_source_utterance_reconciliation_complete(
+    storage: DatasetStorage,
+    source_id: str,
+    result: UtterancePipelineResult,
+    *,
+    asr_evidence_name: str = "qwen3",
+) -> None:
+    word_ranges = [
+        [
+            candidate.start_word_index,
+            candidate.end_word_index,
+        ]
+        for candidate in result.candidates
+    ]
+
+    def update(
+        record: dict,
+    ) -> dict:
+        metadata = record.get("metadata", {})
+
+        if not isinstance(metadata, dict):
+            raise ValueError(
+                f"Source has invalid metadata: "
+                f"{source_id}"
+            )
+
+        metadata["utterance_reconciliation"] = {
+            "asr_evidence": asr_evidence_name,
+            "word_ranges": word_ranges,
+        }
+
+        record["metadata"] = metadata
+
+        return record
+
+    storage.update_source(
+        source_id,
+        update,
     )

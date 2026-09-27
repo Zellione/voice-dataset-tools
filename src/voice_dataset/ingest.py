@@ -39,6 +39,8 @@ def ingest(
             f"No audio streams found in {source}"
         )
 
+    requested_audio_stream = audio_stream
+
     audio_stream, selected_stream = select_audio_stream(
         streams,
         audio_stream=audio_stream,
@@ -120,6 +122,7 @@ def ingest(
             stream_index=selected_stream.index,
             channel_mode=channel_mode,
             purposes=[
+                "asr",
                 "speaker_embedding",
                 "boundary_analysis",
                 "context",
@@ -142,6 +145,23 @@ def ingest(
             media_path=str(source),
             representations={
                 representation_name: representation,
+            },
+            metadata={
+                "ingest": {
+                    "requested_audio_stream": (
+                        requested_audio_stream
+                    ),
+                    "requested_audio_language": language,
+                    "requested_channel": channel,
+                    "requested_start": start,
+                    "requested_duration": duration,
+                    "audio_stream": audio_stream,
+                    "stream_index": selected_stream.index,
+                    "channel_mode": channel_mode,
+                    "source_language": (
+                        selected_stream.language
+                    ),
+                },
             },
         )
 

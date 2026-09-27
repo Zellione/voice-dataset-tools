@@ -714,6 +714,154 @@ class EmbeddingRunResult:
     skipped: int
 
 
+def _validate_existing_embedding(
+    storage: DatasetStorage,
+    record: dict[str, Any],
+    *,
+    representation: str,
+    name: str,
+) -> bool:
+    embeddings = record.get("embeddings")
+
+    if not isinstance(embeddings, dict):
+        raise ValueError(
+            "embeddings must be an object"
+        )
+
+    existing = embeddings.get(name)
+
+    if existing is None:
+        return False
+
+    record_id = record.get("id")
+
+    if not isinstance(record_id, str) or not record_id:
+        raise ValueError(
+            "Persisted turn has invalid id"
+        )
+
+    if not isinstance(existing, dict):
+        raise ValueError(
+            "Persisted embedding reference "
+            "must be an object: "
+            f"{record_id}/{name}"
+        )
+
+    existing_encoder = existing.get("encoder")
+
+    if (
+        not isinstance(existing_encoder, str)
+        or not existing_encoder
+    ):
+        raise ValueError(
+            "Persisted embedding has invalid "
+            f"encoder: {record_id}/{name}"
+        )
+
+    if (
+        existing.get("representation")
+        != representation
+    ):
+        raise ValueError(
+            "Persisted embedding uses unexpected "
+            "representation: "
+            f"{record_id}/{name}"
+        )
+
+    path = existing.get("path")
+
+    if not isinstance(path, str) or not path:
+        raise ValueError(
+            "Persisted embedding has invalid path: "
+            f"{record_id}/{name}"
+        )
+
+    embedding_path = storage.root / path
+
+    if not embedding_path.is_file():
+        raise ValueError(
+            "Embedding metadata exists without "
+            f"file: {embedding_path}"
+        )
+
+    metadata = existing.get("metadata")
+
+    if not isinstance(metadata, dict):
+        raise ValueError(
+            "Persisted embedding has invalid "
+            f"metadata: {record_id}/{name}"
+        )
+
+    expected_sha256 = metadata.get("sha256")
+
+    if (
+        not isinstance(expected_sha256, str)
+        or not expected_sha256
+    ):
+        raise ValueError(
+            "Persisted embedding has invalid "
+            f"sha256: {record_id}/{name}"
+        )
+
+    if (
+        _sha256_file(embedding_path)
+        != expected_sha256
+    ):
+        raise ValueError(
+            "Persisted embedding file does not "
+            "match metadata: "
+            f"{embedding_path}"
+        )
+
+    return True
+
+
+def _completed_turn_embeddings(
+    storage: DatasetStorage,
+    *,
+    representation: str,
+    name: str,
+) -> int | None:
+    turns = storage.turns.load()
+
+    relevant_turns = []
+
+    for turn in turns:
+        representations = turn.get(
+            "representations"
+        )
+
+        if not isinstance(
+            representations,
+            dict,
+        ):
+            raise ValueError(
+                "Turn representations must be "
+                "an object"
+            )
+
+        if representation in representations:
+            relevant_turns.append(turn)
+
+    if not relevant_turns:
+        return None
+
+    completed = 0
+
+    for turn in relevant_turns:
+        if not _validate_existing_embedding(
+            storage,
+            turn,
+            representation=representation,
+            name=name,
+        ):
+            return None
+
+        completed += 1
+
+    return completed
+
+
 def embed_turns(
     storage: DatasetStorage,
     *,
@@ -734,6 +882,20 @@ def embed_turns(
     if not name:
         raise ValueError(
             "embedding evidence name must not be empty"
+        )
+
+    completed = _completed_turn_embeddings(
+        storage,
+        representation=representation,
+        name=name,
+    )
+
+    if completed is not None:
+        return EmbeddingRunResult(
+            encoder=encoder,
+            representation=representation,
+            imported=0,
+            skipped=completed,
         )
 
     with tempfile.TemporaryDirectory(

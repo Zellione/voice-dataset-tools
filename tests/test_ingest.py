@@ -116,3 +116,16 @@ def test_ingest_preserves_audio_position_and_stream_index(
         stored_representation["metadata"]["audio_stream"]
         == 1
     )
+
+
+    assert stored["metadata"]["ingest"] == {
+        "requested_audio_stream": None,
+        "requested_audio_language": "eng",
+        "requested_channel": "auto",
+        "requested_start": None,
+        "requested_duration": None,
+        "audio_stream": 1,
+        "stream_index": 4,
+        "channel_mode": "center",
+        "source_language": "eng",
+    }

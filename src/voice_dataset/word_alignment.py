@@ -711,6 +711,49 @@ def recover_stranded_alignment(
     )
 
 
+def infer_region_boundaries(
+    region_evidence: list[AlignmentRegionEvidence],
+) -> set[int]:
+    boundaries: set[int] = set()
+
+    ordered_evidence = sorted(
+        region_evidence,
+        key=lambda evidence: (
+            evidence.start,
+            evidence.end,
+            evidence.region_id,
+        ),
+    )
+
+    for left, right in zip(
+        ordered_evidence,
+        ordered_evidence[1:],
+    ):
+        if len(left.text_matches) != 1:
+            continue
+
+        if len(right.text_matches) != 1:
+            continue
+
+        left_match = left.text_matches[0]
+        right_match = right.text_matches[0]
+
+        if (
+            left_match.end_word_index + 1
+            != right_match.start_word_index
+        ):
+            continue
+
+        if left.end > right.start:
+            continue
+
+        boundaries.add(
+            left_match.end_word_index
+        )
+
+    return boundaries
+
+
 def validate_sat_boundaries(
     words: list[dict[str, Any]],
     region_evidence: list[AlignmentRegionEvidence],

@@ -109,7 +109,6 @@ def separate_source(
             "processor": BANDIT_PROCESSOR,
             "processor_version": BANDIT_REVISION,
             "purposes": [
-                "asr",
                 "review",
                 "tts_candidate",
             ],
@@ -209,7 +208,6 @@ def separate_source(
             processor=BANDIT_PROCESSOR,
             processor_version=BANDIT_REVISION,
             purposes=[
-                "asr",
                 "review",
                 "tts_candidate",
             ],

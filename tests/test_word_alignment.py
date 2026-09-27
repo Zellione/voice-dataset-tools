@@ -27,6 +27,7 @@ from voice_dataset.word_alignment import (
     alignment_recovery_is_valid,
     find_post_recovery_word_conflicts,
     validate_sat_boundaries,
+    infer_region_boundaries,
 )
 import pytest
 
@@ -1716,6 +1717,8 @@ def test_sat_boundary_candidate_skips_exact_match_across_boundary() -> None:
         ),
     ],
 )
+
+
 def test_validate_sat_boundaries_rejects_exact_region_match(
     words,
     region_start,
@@ -1747,6 +1750,174 @@ def test_validate_sat_boundaries_rejects_exact_region_match(
     )
 
     assert validated == set()
+
+
+def test_infer_region_boundary_from_adjacent_exact_matches():
+    words = [
+        word("I", 1.760, 1.840),
+        word("wish", 1.840, 2.080),
+        word("kiddo", 3.280, 3.680),
+        word("but", 4.880, 4.960),
+        word("lying", 5.040, 5.520),
+    ]
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_000001",
+            start=1.752,
+            end=3.642,
+            speaker="SPEAKER_00",
+            whisper_text="I wish kiddo.",
+            whisper_tokens=("i", "wish", "kiddo"),
+            text_matches=tuple(
+                find_text_matches(
+                    words,
+                    "I wish kiddo.",
+                )
+            ),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_000002",
+            start=4.756,
+            end=5.532,
+            speaker="SPEAKER_00",
+            whisper_text="but lying.",
+            whisper_tokens=("but", "lying"),
+            text_matches=tuple(
+                find_text_matches(
+                    words,
+                    "but lying.",
+                )
+            ),
+        ),
+    ]
+
+    assert infer_region_boundaries(
+        evidence
+    ) == {2}
+
+
+def test_infer_region_boundary_rejects_overlapping_regions():
+    match_left = AlignmentTextMatch(
+        start_word_index=0,
+        end_word_index=0,
+        word_indices=(0,),
+        tokens=("hello",),
+    )
+    match_right = AlignmentTextMatch(
+        start_word_index=1,
+        end_word_index=1,
+        word_indices=(1,),
+        tokens=("world",),
+    )
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_000001",
+            start=10.000,
+            end=10.600,
+            speaker="SPEAKER_00",
+            whisper_text="hello",
+            whisper_tokens=("hello",),
+            text_matches=(match_left,),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_000002",
+            start=10.500,
+            end=11.000,
+            speaker="SPEAKER_00",
+            whisper_text="world",
+            whisper_tokens=("world",),
+            text_matches=(match_right,),
+        ),
+    ]
+
+    assert infer_region_boundaries(
+        evidence
+    ) == set()
+
+
+def test_infer_region_boundary_rejects_ambiguous_match():
+    left_match = AlignmentTextMatch(
+        start_word_index=0,
+        end_word_index=0,
+        word_indices=(0,),
+        tokens=("hello",),
+    )
+    right_match = AlignmentTextMatch(
+        start_word_index=1,
+        end_word_index=1,
+        word_indices=(1,),
+        tokens=("world",),
+    )
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_000001",
+            start=10.000,
+            end=10.400,
+            speaker="SPEAKER_00",
+            whisper_text="hello",
+            whisper_tokens=("hello",),
+            text_matches=(
+                left_match,
+                left_match,
+            ),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_000002",
+            start=10.500,
+            end=11.000,
+            speaker="SPEAKER_00",
+            whisper_text="world",
+            whisper_tokens=("world",),
+            text_matches=(right_match,),
+        ),
+    ]
+
+    assert infer_region_boundaries(
+        evidence
+    ) == set()
+
+
+def test_infer_region_boundary_requires_adjacent_word_matches():
+    left_match = AlignmentTextMatch(
+        start_word_index=0,
+        end_word_index=0,
+        word_indices=(0,),
+        tokens=("hello",),
+    )
+    right_match = AlignmentTextMatch(
+        start_word_index=2,
+        end_word_index=2,
+        word_indices=(2,),
+        tokens=("world",),
+    )
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_000001",
+            start=10.000,
+            end=10.400,
+            speaker="SPEAKER_00",
+            whisper_text="hello",
+            whisper_tokens=("hello",),
+            text_matches=(left_match,),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_000002",
+            start=10.800,
+            end=11.200,
+            speaker="SPEAKER_00",
+            whisper_text="world",
+            whisper_tokens=("world",),
+            text_matches=(right_match,),
+        ),
+    ]
+
+    assert infer_region_boundaries(
+        evidence
+    ) == set()
 
 
 def test_validate_sat_boundaries_keeps_boundary_without_exact_match():
