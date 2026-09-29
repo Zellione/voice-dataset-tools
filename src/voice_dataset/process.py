@@ -19,6 +19,7 @@ from .utterance_pipeline import (
     prepare_source_review_audio,
     prepare_source_speaker_evidence,
     source_utterance_reconciliation_is_complete,
+    source_utterance_reconciliation_is_curated,
 )
 from .media import (
     choose_channel_mode,
@@ -267,7 +268,15 @@ def process_source(
         )
     )
 
-    if reconciliation_complete:
+    reconciliation_curated = (
+        source_utterance_reconciliation_is_curated(
+            storage,
+            source_id,
+            asr_evidence_name="qwen3",
+        )
+    )
+
+    if reconciliation_complete or reconciliation_curated:
         turns_created = 0
         turns_skipped = 0
         turns_review = 0

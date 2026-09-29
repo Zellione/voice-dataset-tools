@@ -977,33 +977,26 @@ def merge_turns(
     return stored
 
 
-def split_turn(
+def split_turn_ranges(
     storage: DatasetStorage,
     turn_id: str,
     *,
     after_region_id: str,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    turns = storage.turns.load()
+) -> tuple[
+    str,
+    list[str],
+    tuple[float, float],
+    list[str],
+    tuple[float, float],
+]:
+    turn = storage.get_turn(turn_id)
 
-    matches = [
-        (index, turn)
-        for index, turn in enumerate(turns)
-        if turn.get("id") == turn_id
-    ]
-
-    if not matches:
+    if turn is None:
         raise KeyError(
             f"Turn does not exist: {turn_id}"
         )
 
-    if len(matches) > 1:
-        raise RuntimeError(
-            f"Duplicate turn id: {turn_id}"
-        )
-
-    turn_index, original = matches[0]
-
-    source_regions = original.get("source_regions")
+    source_regions = turn.get("source_regions")
 
     if not isinstance(source_regions, list):
         raise ValueError(
@@ -1032,6 +1025,13 @@ def split_turn(
             f"of {turn_id}"
         )
 
+    source_id = turn.get("source_id")
+
+    if not isinstance(source_id, str):
+        raise ValueError(
+            f"{turn_id}: invalid source_id"
+        )
+
     left_ids = source_regions[:split_index]
     right_ids = source_regions[split_index:]
 
@@ -1046,37 +1046,13 @@ def split_turn(
                 f"{region_id}"
             )
 
-        regions[region_id] = region
-
-    source_id = original.get("source_id")
-
-    if not isinstance(source_id, str):
-        raise ValueError(
-            f"{turn_id}: invalid source_id"
-        )
-
-    for region_id in source_regions:
-        region = regions[region_id]
-
         if region.get("source_id") != source_id:
             raise ValueError(
                 f"{region_id}: source does not match "
                 f"{turn_id}"
             )
 
-        effective = effective_region_reconciliation(
-            storage,
-            region,
-        )
-
-        if (
-            effective["status"] != "reconciled"
-            or effective["turn_id"] != turn_id
-        ):
-            raise ValueError(
-                f"{region_id} is not exclusively "
-                f"reconciled to {turn_id}"
-            )
+        regions[region_id] = region
 
     def bounds(
         region_ids: list[str],
@@ -1104,8 +1080,82 @@ def split_turn(
 
         return float(start), float(end)
 
-    left_start, left_end = bounds(left_ids)
-    right_start, right_end = bounds(right_ids)
+    return (
+        source_id,
+        left_ids,
+        bounds(left_ids),
+        right_ids,
+        bounds(right_ids),
+    )
+
+
+def split_turn(
+    storage: DatasetStorage,
+    turn_id: str,
+    *,
+    after_region_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    turns = storage.turns.load()
+
+    matches = [
+        (index, turn)
+        for index, turn in enumerate(turns)
+        if turn.get("id") == turn_id
+    ]
+
+    if not matches:
+        raise KeyError(
+            f"Turn does not exist: {turn_id}"
+        )
+
+    if len(matches) > 1:
+        raise RuntimeError(
+            f"Duplicate turn id: {turn_id}"
+        )
+
+    turn_index, original = matches[0]
+
+    (
+        source_id,
+        left_ids,
+        (left_start, left_end),
+        right_ids,
+        (right_start, right_end),
+    ) = split_turn_ranges(
+        storage,
+        turn_id,
+        after_region_id=after_region_id,
+    )
+
+    source_regions = left_ids + right_ids
+
+    regions: dict[str, dict[str, Any]] = {}
+
+    for region_id in source_regions:
+        region = storage.get_region(region_id)
+
+        if region is None:
+            raise KeyError(
+                "Candidate region does not exist: "
+                f"{region_id}"
+            )
+
+        regions[region_id] = region
+
+    for region_id in source_regions:
+        effective = effective_region_reconciliation(
+            storage,
+            regions[region_id],
+        )
+
+        if (
+            effective["status"] != "reconciled"
+            or effective["turn_id"] != turn_id
+        ):
+            raise ValueError(
+                f"{region_id} is not exclusively "
+                f"reconciled to {turn_id}"
+            )
 
     new_turn_id = storage.next_turn_id()
 

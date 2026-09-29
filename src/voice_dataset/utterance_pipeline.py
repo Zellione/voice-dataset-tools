@@ -561,6 +561,38 @@ def apply_source_utterance_turns(
     )
 
 
+def source_utterance_reconciliation_is_curated(
+    storage: DatasetStorage,
+    source_id: str,
+    *,
+    asr_evidence_name: str = "qwen3",
+) -> bool:
+    source = storage.get_source(source_id)
+
+    if source is None:
+        return False
+
+    metadata = source.get("metadata")
+
+    if not isinstance(metadata, dict):
+        return False
+
+    reconciliation = metadata.get(
+        "utterance_reconciliation"
+    )
+
+    if not isinstance(reconciliation, dict):
+        return False
+
+    if (
+        reconciliation.get("asr_evidence")
+        != asr_evidence_name
+    ):
+        return False
+
+    return reconciliation.get("mode") == "curated"
+
+
 def source_utterance_reconciliation_is_complete(
     storage: DatasetStorage,
     source_id: str,
@@ -649,6 +681,49 @@ def source_utterance_reconciliation_is_complete(
     return sorted(actual_ranges) == sorted(expected_ranges)
 
 
+def require_source_utterance_reconciliation(
+    storage: DatasetStorage,
+    source_id: str,
+    *,
+    asr_evidence_name: str = "qwen3",
+) -> dict[str, Any]:
+    source = storage.get_source(source_id)
+
+    if source is None:
+        raise KeyError(
+            f"Source does not exist: {source_id}"
+        )
+
+    metadata = source.get("metadata")
+
+    if not isinstance(metadata, dict):
+        raise ValueError(
+            f"Source has invalid metadata: {source_id}"
+        )
+
+    reconciliation = metadata.get(
+        "utterance_reconciliation"
+    )
+
+    if not isinstance(reconciliation, dict):
+        raise ValueError(
+            "Source has no completed utterance "
+            f"reconciliation: {source_id}"
+        )
+
+    if (
+        reconciliation.get("asr_evidence")
+        != asr_evidence_name
+    ):
+        raise ValueError(
+            "Source utterance reconciliation uses "
+            "different ASR evidence: "
+            f"{source_id}"
+        )
+
+    return reconciliation
+
+
 def mark_source_utterance_reconciliation_complete(
     storage: DatasetStorage,
     source_id: str,
@@ -676,11 +751,40 @@ def mark_source_utterance_reconciliation_complete(
             )
 
         metadata["utterance_reconciliation"] = {
+            "mode": "automatic",
             "asr_evidence": asr_evidence_name,
             "word_ranges": word_ranges,
         }
 
         record["metadata"] = metadata
+
+        return record
+
+    storage.update_source(
+        source_id,
+        update,
+    )
+
+
+def mark_source_utterance_reconciliation_curated(
+    storage: DatasetStorage,
+    source_id: str,
+    *,
+    asr_evidence_name: str = "qwen3",
+) -> None:
+    require_source_utterance_reconciliation(
+        storage,
+        source_id,
+        asr_evidence_name=asr_evidence_name,
+    )
+
+    def update(record: dict) -> dict:
+        metadata = record["metadata"]
+        reconciliation = metadata[
+            "utterance_reconciliation"
+        ]
+
+        reconciliation["mode"] = "curated"
 
         return record
 

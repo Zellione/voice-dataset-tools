@@ -12,6 +12,8 @@ from voice_dataset.utterance_pipeline import (
     UtterancePipelineResult,
     apply_source_utterance_turns,
     source_utterance_reconciliation_is_complete,
+    source_utterance_reconciliation_is_curated,
+    mark_source_utterance_reconciliation_curated,
 )
 
 from voice_dataset.utterance_reconciliation import (
@@ -958,6 +960,7 @@ def test_apply_source_utterance_turns_skips_matching_automatic_turn(
     assert source["metadata"][
         "utterance_reconciliation"
     ] == {
+        "mode": "automatic",
         "asr_evidence": "qwen3",
         "word_ranges": [
             [0, 8],
@@ -1045,6 +1048,117 @@ def test_source_utterance_reconciliation_rejects_duplicate_turn_ranges(
         )
 
     assert not source_utterance_reconciliation_is_complete(
+        storage,
+        "source",
+        asr_evidence_name="qwen3",
+    )
+
+
+def test_source_utterance_reconciliation_detects_curated_source(
+    tmp_path: Path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    storage.sources.append(
+        {
+            "schema_version": 1,
+            "record_type": "source",
+            "id": "source",
+            "metadata": {
+                "utterance_reconciliation": {
+                    "mode": "curated",
+                    "asr_evidence": "qwen3",
+                    "word_ranges": [
+                        [0, 8],
+                    ],
+                },
+            },
+        }
+    )
+
+    assert source_utterance_reconciliation_is_curated(
+        storage,
+        "source",
+        asr_evidence_name="qwen3",
+    )
+
+
+def test_legacy_utterance_reconciliation_is_not_curated(
+    tmp_path: Path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    storage.sources.append(
+        {
+            "schema_version": 1,
+            "record_type": "source",
+            "id": "source",
+            "metadata": {
+                "utterance_reconciliation": {
+                    "asr_evidence": "qwen3",
+                    "word_ranges": [],
+                },
+            },
+        }
+    )
+
+    assert not source_utterance_reconciliation_is_curated(
+        storage,
+        "source",
+        asr_evidence_name="qwen3",
+    )
+
+    assert source_utterance_reconciliation_is_complete(
+        storage,
+        "source",
+        asr_evidence_name="qwen3",
+    )
+
+
+def test_mark_source_utterance_reconciliation_curated_preserves_plan(
+    tmp_path: Path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    storage.sources.append(
+        {
+            "schema_version": 1,
+            "record_type": "source",
+            "id": "source",
+            "metadata": {
+                "utterance_reconciliation": {
+                    "mode": "automatic",
+                    "asr_evidence": "qwen3",
+                    "word_ranges": [
+                        [0, 8],
+                        [9, 12],
+                    ],
+                },
+            },
+        }
+    )
+
+    mark_source_utterance_reconciliation_curated(
+        storage,
+        "source",
+        asr_evidence_name="qwen3",
+    )
+
+    source = storage.get_source("source")
+
+    assert source is not None
+    assert source["metadata"][
+        "utterance_reconciliation"
+    ] == {
+        "mode": "curated",
+        "asr_evidence": "qwen3",
+        "word_ranges": [
+            [0, 8],
+            [9, 12],
+        ],
+    }
+
+    assert source_utterance_reconciliation_is_curated(
         storage,
         "source",
         asr_evidence_name="qwen3",

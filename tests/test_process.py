@@ -1,3 +1,5 @@
+import pytest
+
 from pathlib import Path
 from types import SimpleNamespace
 from voice_dataset.media import AudioStream
@@ -322,9 +324,48 @@ def test_process_source_runs_pipeline_in_order(
     )
 
 
+@pytest.mark.parametrize(
+    ("reconciliation", "turns"),
+    [
+        (
+            {
+                "asr_evidence": "qwen3",
+                "word_ranges": [
+                    [0, 8],
+                    [9, 12],
+                    [13, 17],
+                ],
+            },
+            [
+                (0, 8),
+                (9, 12),
+                (13, 17),
+            ],
+        ),
+        (
+            {
+                "mode": "curated",
+                "asr_evidence": "qwen3",
+                "word_ranges": [
+                    [0, 8],
+                    [9, 12],
+                    [13, 17],
+                ],
+            },
+            [
+                (0, 12),
+                (13, 17),
+            ],
+        ),
+    ],
+)
+
+
 def test_process_source_skips_expensive_completed_steps(
     tmp_path: Path,
     monkeypatch,
+    reconciliation,
+    turns,
 ):
     source = tmp_path / "episode.mkv"
     source.touch()
@@ -340,14 +381,7 @@ def test_process_source_skips_expensive_completed_steps(
                     "model": "existing",
                 },
             },
-            "utterance_reconciliation": {
-                "asr_evidence": "qwen3",
-                "word_ranges": [
-                    [0, 8],
-                    [9, 12],
-                    [13, 17],
-                ],
-            },
+            "utterance_reconciliation": reconciliation,
         },
     }
 
@@ -365,7 +399,7 @@ def test_process_source_skips_expensive_completed_steps(
             self.turns = SimpleNamespace(
                 load=lambda: [
                     {
-                        "id": "turn_000001",
+                        "id": f"turn_{index:06d}",
                         "source_id": "episode",
                         "metadata": {
                             "creation": {
@@ -374,41 +408,15 @@ def test_process_source_skips_expensive_completed_steps(
                                 ),
                             },
                             "word_range": {
-                                "start": 0,
-                                "end": 8,
+                                "start": start,
+                                "end": end,
                             },
                         },
-                    },
-                    {
-                        "id": "turn_000002",
-                        "source_id": "episode",
-                        "metadata": {
-                            "creation": {
-                                "method": (
-                                    "continuous_asr_utterance"
-                                ),
-                            },
-                            "word_range": {
-                                "start": 9,
-                                "end": 12,
-                            },
-                        },
-                    },
-                    {
-                        "id": "turn_000003",
-                        "source_id": "episode",
-                        "metadata": {
-                            "creation": {
-                                "method": (
-                                    "continuous_asr_utterance"
-                                ),
-                            },
-                            "word_range": {
-                                "start": 13,
-                                "end": 17,
-                            },
-                        },
-                    },
+                    }
+                    for index, (start, end) in enumerate(
+                        turns,
+                        start=1,
+                    )
                 ],
             )
 
