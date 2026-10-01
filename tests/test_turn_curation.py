@@ -1,5 +1,8 @@
 import pytest
-from voice_dataset.schema import SourceRecord
+from voice_dataset.schema import (
+    SourceRecord,
+    TurnRecord,
+)
 from voice_dataset.storage import DatasetStorage
 from voice_dataset.turn_curation import (
     merge_and_prepare_turns,
@@ -880,3 +883,165 @@ def test_split_and_prepare_turn_requires_reconciliation_before_split(
 
     assert split_called is False
     assert storage.turns.load() == before
+
+
+def test_accept_alignment_recovery_and_prepare_reprepares_source(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    storage.add_turn(
+        TurnRecord(
+            id="turn_000001",
+            source_id="source_001",
+            source_start=1.0,
+            source_end=2.0,
+        )
+    )
+
+    prepared = []
+
+    def fake_accept(
+        storage_arg,
+        turn_id,
+    ):
+        assert storage_arg is storage
+        assert turn_id == "turn_000001"
+
+        def update(record):
+            record["source_start"] = 1.25
+            return record
+
+        return storage.update_turn(
+            turn_id,
+            update,
+        )
+
+    def fake_prepare(
+        storage_arg,
+        source_id,
+    ):
+        assert storage_arg is storage
+        prepared.append(source_id)
+
+        def update(record):
+            record["representations"] = {
+                "review": {
+                    "path": "prepared.wav",
+                },
+            }
+            return record
+
+        storage.update_turn(
+            "turn_000001",
+            update,
+        )
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "accept_alignment_recovery",
+        fake_accept,
+    )
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        fake_prepare,
+    )
+
+    from voice_dataset.turn_curation import (
+        accept_alignment_recovery_and_prepare,
+    )
+
+    turn = accept_alignment_recovery_and_prepare(
+        storage,
+        "turn_000001",
+    )
+
+    assert prepared == ["source_001"]
+    assert turn["source_start"] == 1.25
+    assert turn["representations"]["review"][
+        "path"
+    ] == "prepared.wav"
+
+
+def test_accept_edge_recovery_and_prepare_reprepares_source(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    storage.add_turn(
+        TurnRecord(
+            id="turn_000001",
+            source_id="source_001",
+            source_start=1.0,
+            source_end=2.0,
+        )
+    )
+
+    prepared = []
+
+    def fake_accept(
+        storage_arg,
+        turn_id,
+    ):
+        assert storage_arg is storage
+        assert turn_id == "turn_000001"
+
+        def update(record):
+            record["source_end"] = 2.25
+            record["transcript"] = "recovered text"
+            return record
+
+        return storage.update_turn(
+            turn_id,
+            update,
+        )
+
+    def fake_prepare(
+        storage_arg,
+        source_id,
+    ):
+        assert storage_arg is storage
+        prepared.append(source_id)
+
+        def update(record):
+            record["embeddings"] = {
+                "ecapa": {
+                    "path": "prepared.npy",
+                },
+            }
+            return record
+
+        storage.update_turn(
+            "turn_000001",
+            update,
+        )
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "accept_edge_recovery",
+        fake_accept,
+    )
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        fake_prepare,
+    )
+
+    from voice_dataset.turn_curation import (
+        accept_edge_recovery_and_prepare,
+    )
+
+    turn = accept_edge_recovery_and_prepare(
+        storage,
+        "turn_000001",
+    )
+
+    assert prepared == ["source_001"]
+    assert turn["source_end"] == 2.25
+    assert turn["transcript"] == "recovered text"
+    assert turn["embeddings"]["ecapa"][
+        "path"
+    ] == "prepared.npy"

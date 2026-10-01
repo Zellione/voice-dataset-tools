@@ -19,6 +19,10 @@ from .reconciliation import (
     split_turn,
     split_turn_ranges,
 )
+from .review import (
+    accept_alignment_recovery,
+    accept_edge_recovery,
+)
 
 @dataclass(frozen=True)
 class CuratedTurnProjection:
@@ -172,6 +176,68 @@ def prepare_curated_source_turns(
         storage,
         source_id,
     )
+
+
+def accept_alignment_recovery_and_prepare(
+    storage: DatasetStorage,
+    turn_id: str,
+) -> dict[str, Any]:
+    updated = accept_alignment_recovery(
+        storage,
+        turn_id,
+    )
+
+    source_id = updated.get("source_id")
+
+    if not isinstance(source_id, str) or not source_id:
+        raise ValueError(
+            f"Turn has invalid source_id: {turn_id}"
+        )
+
+    prepare_curated_source_turns(
+        storage,
+        source_id,
+    )
+
+    stored = storage.get_turn(turn_id)
+
+    if stored is None:
+        raise RuntimeError(
+            "Failed to read back recovered turn"
+        )
+
+    return stored
+
+
+def accept_edge_recovery_and_prepare(
+    storage: DatasetStorage,
+    turn_id: str,
+) -> dict[str, Any]:
+    updated = accept_edge_recovery(
+        storage,
+        turn_id,
+    )
+
+    source_id = updated.get("source_id")
+
+    if not isinstance(source_id, str) or not source_id:
+        raise ValueError(
+            f"Turn has invalid source_id: {turn_id}"
+        )
+
+    prepare_curated_source_turns(
+        storage,
+        source_id,
+    )
+
+    stored = storage.get_turn(turn_id)
+
+    if stored is None:
+        raise RuntimeError(
+            "Failed to read back recovered turn"
+        )
+
+    return stored
 
 
 def _project_merge(
