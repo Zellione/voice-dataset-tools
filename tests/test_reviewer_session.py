@@ -1,8 +1,13 @@
 import pytest
+import numpy as np
 from voice_dataset.reviewer_session import ReviewerSession
 from voice_dataset.storage import DatasetStorage
 from voice_dataset.schema import TurnRecord
 from voice_dataset.voices import create_voice
+from voice_dataset.speaker_candidates import (
+    EmbeddingVoiceCandidate,
+    SpeakerCandidate,
+)
 
 
 def add_turn(
@@ -757,3 +762,435 @@ def test_merge_with_next_uses_canonical_next_turn_when_filtered(
         "turn_000001",
         "turn_000002",
     ]
+
+
+def test_session_speaker_candidates_combines_available_embeddings(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    def add_embeddings(record):
+        record["embeddings"] = {
+            "ecapa_speaker": {},
+            "wespeaker_speaker": {},
+        }
+        return record
+
+    storage.update_turn(
+        "turn_000001",
+        add_embeddings,
+    )
+
+    session = ReviewerSession(storage)
+
+    rank_calls = []
+
+    def fake_rank(
+        storage_arg,
+        turn_id,
+        embedding_name,
+    ):
+        assert storage_arg is storage
+        assert turn_id == "turn_000001"
+        rank_calls.append(embedding_name)
+
+        return []
+
+    def fake_aggregate(
+        matches,
+        *,
+        embedding_name,
+    ):
+        assert matches == []
+
+        score = {
+            "ecapa_speaker": 0.80,
+            "wespeaker_speaker": 0.70,
+        }[embedding_name]
+
+        return [
+            EmbeddingVoiceCandidate(
+                voice_id="voice_001",
+                embedding_name=embedding_name,
+                score=score,
+                support=2,
+                matches=(),
+            )
+        ]
+
+    def fake_combine(*groups):
+        assert len(groups) == 2
+
+        return [
+            SpeakerCandidate(
+                voice_id="voice_001",
+                score=0.75,
+                encoder_count=2,
+                embedding_scores=tuple(
+                    group[0]
+                    for group in groups
+                ),
+            )
+        ]
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_session."
+        "rank_voice_matches",
+        fake_rank,
+    )
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_session."
+        "aggregate_voice_matches",
+        fake_aggregate,
+    )
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_session."
+        "combine_embedding_candidates",
+        fake_combine,
+    )
+
+    candidates = session.speaker_candidates(
+        embedding_names=(
+            "ecapa_speaker",
+            "wespeaker_speaker",
+        ),
+    )
+
+    assert rank_calls == [
+        "ecapa_speaker",
+        "wespeaker_speaker",
+    ]
+    assert len(candidates) == 1
+    assert candidates[0].voice_id == "voice_001"
+    assert candidates[0].score == pytest.approx(0.75)
+
+
+def test_session_speaker_candidates_skips_missing_embedding(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    def add_embeddings(record):
+        record["embeddings"] = {
+            "ecapa_speaker": {},
+        }
+        return record
+
+    storage.update_turn(
+        "turn_000001",
+        add_embeddings,
+    )
+
+    session = ReviewerSession(storage)
+
+    rank_calls = []
+
+    def fake_rank(
+        storage_arg,
+        turn_id,
+        embedding_name,
+    ):
+        rank_calls.append(embedding_name)
+        return []
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_session."
+        "rank_voice_matches",
+        fake_rank,
+    )
+
+    candidates = session.speaker_candidates(
+        embedding_names=(
+            "ecapa_speaker",
+            "wespeaker_speaker",
+        ),
+    )
+
+    assert rank_calls == [
+        "ecapa_speaker",
+    ]
+    assert candidates == []
+
+
+def test_session_speaker_candidates_applies_limit(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    def add_embeddings(record):
+        record["embeddings"] = {
+            "ecapa_speaker": {},
+        }
+        return record
+
+    storage.update_turn(
+        "turn_000001",
+        add_embeddings,
+    )
+
+    session = ReviewerSession(storage)
+
+    combined = [
+        SpeakerCandidate(
+            voice_id=f"voice_{index:03d}",
+            score=1.0 - index / 10,
+            encoder_count=1,
+            embedding_scores=(),
+        )
+        for index in range(1, 6)
+    ]
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_session."
+        "rank_voice_matches",
+        lambda *args: [],
+    )
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_session."
+        "aggregate_voice_matches",
+        lambda matches, *, embedding_name: [],
+    )
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_session."
+        "combine_embedding_candidates",
+        lambda *groups: combined,
+    )
+
+    candidates = session.speaker_candidates(
+        embedding_names=("ecapa_speaker",),
+        limit=3,
+    )
+
+    assert [
+        candidate.voice_id
+        for candidate in candidates
+    ] == [
+        "voice_001",
+        "voice_002",
+        "voice_003",
+    ]
+
+
+def test_session_speaker_candidates_rejects_invalid_limit(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    with pytest.raises(
+        ValueError,
+        match="limit must be positive",
+    ):
+        session.speaker_candidates(
+            embedding_names=("ecapa_speaker",),
+            limit=0,
+        )
+
+
+def test_session_speaker_candidates_integrates_real_embeddings(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    voice_1 = create_voice(
+        storage,
+        character="Voice One",
+        language="en",
+    )
+    voice_2 = create_voice(
+        storage,
+        character="Voice Two",
+        language="en",
+    )
+
+    add_turn(
+        storage,
+        "turn_query",
+        source_start=1.0,
+    )
+    add_turn(
+        storage,
+        "turn_voice_1",
+        source_start=2.0,
+    )
+    add_turn(
+        storage,
+        "turn_voice_2",
+        source_start=3.0,
+    )
+
+    def add_embedding(
+        turn_id,
+        embedding_name,
+        vector,
+    ):
+        relative_path = (
+            f"turns/{turn_id}/embeddings/"
+            f"{embedding_name}.npy"
+        )
+
+        path = storage.root / relative_path
+        path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        np.save(path, vector)
+
+        def update(record):
+            embeddings = dict(
+                record.get("embeddings") or {}
+            )
+            embeddings[embedding_name] = {
+                "encoder": f"test-{embedding_name}",
+                "representation": "speech",
+                "path": relative_path,
+                "dimension": int(vector.shape[0]),
+                "metadata": {
+                    "model": f"test-{embedding_name}",
+                },
+            }
+            record["embeddings"] = embeddings
+            return record
+
+        storage.update_turn(
+            turn_id,
+            update,
+        )
+
+    query = np.array(
+        [1.0, 0.0],
+        dtype=np.float32,
+    )
+    same = np.array(
+        [1.0, 0.0],
+        dtype=np.float32,
+    )
+    different = np.array(
+        [0.0, 1.0],
+        dtype=np.float32,
+    )
+
+    for embedding_name in (
+        "ecapa_speaker",
+        "wespeaker_speaker",
+    ):
+        add_embedding(
+            "turn_query",
+            embedding_name,
+            query,
+        )
+        add_embedding(
+            "turn_voice_1",
+            embedding_name,
+            same,
+        )
+        add_embedding(
+            "turn_voice_2",
+            embedding_name,
+            different,
+        )
+
+    def assign(
+        turn_id,
+        voice_id,
+    ):
+        def update(record):
+            record["assignment"] = {
+                "status": "assigned",
+                "voice_id": voice_id,
+                "method": "manual",
+                "confidence": None,
+            }
+            return record
+
+        storage.update_turn(
+            turn_id,
+            update,
+        )
+
+    assign(
+        "turn_voice_1",
+        voice_1["id"],
+    )
+    assign(
+        "turn_voice_2",
+        voice_2["id"],
+    )
+
+    session = ReviewerSession(storage)
+
+    assert session.current_turn_id == "turn_query"
+
+    candidates = session.speaker_candidates(
+        embedding_names=(
+            "ecapa_speaker",
+            "wespeaker_speaker",
+        ),
+    )
+
+    assert [
+        candidate.voice_id
+        for candidate in candidates
+    ] == [
+        voice_1["id"],
+        voice_2["id"],
+    ]
+
+    assert candidates[0].score == pytest.approx(1.0)
+    assert candidates[0].encoder_count == 2
+
+    assert [
+        score.embedding_name
+        for score in candidates[0].embedding_scores
+    ] == [
+        "ecapa_speaker",
+        "wespeaker_speaker",
+    ]
+
+    assert [
+        score.score
+        for score in candidates[0].embedding_scores
+    ] == pytest.approx([
+        1.0,
+        1.0,
+    ])
+
+    assert [
+        score.support
+        for score in candidates[0].embedding_scores
+    ] == [
+        1,
+        1,
+    ]
+
+    assert candidates[1].score == pytest.approx(0.0)
+    assert candidates[1].encoder_count == 2

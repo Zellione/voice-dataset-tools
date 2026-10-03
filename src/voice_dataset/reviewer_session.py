@@ -22,6 +22,12 @@ from .voices import (
     ignore_turn,
     mark_turn_unknown,
 )
+from .speaker_candidates import (
+    SpeakerCandidate,
+    aggregate_voice_matches,
+    combine_embedding_candidates,
+)
+from .speaker_similarity import rank_voice_matches
 
 
 class ReviewerSession:
@@ -359,3 +365,49 @@ class ReviewerSession:
         )
 
         return left, right
+
+    def speaker_candidates(
+        self,
+        *,
+        embedding_names: tuple[str, ...],
+        limit: int | None = None,
+    ) -> list[SpeakerCandidate]:
+        if limit is not None and limit <= 0:
+            raise ValueError(
+                "limit must be positive"
+            )
+
+        turn = self.current()
+
+        if turn is None:
+            return []
+
+        embeddings = turn.get("embeddings") or {}
+
+        groups = []
+
+        for embedding_name in embedding_names:
+            if embedding_name not in embeddings:
+                continue
+
+            matches = rank_voice_matches(
+                self.storage,
+                turn["id"],
+                embedding_name,
+            )
+
+            groups.append(
+                aggregate_voice_matches(
+                    matches,
+                    embedding_name=embedding_name,
+                )
+            )
+
+        candidates = combine_embedding_candidates(
+            *groups,
+        )
+
+        if limit is not None:
+            return candidates[:limit]
+
+        return candidates
