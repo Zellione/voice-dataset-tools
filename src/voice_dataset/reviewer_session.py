@@ -10,6 +10,10 @@ from .review import (
     mark_turn_reviewed,
 )
 from .reviewer import sorted_turns
+from .reviewer_view import (
+    ReviewerTurnView,
+    build_reviewer_turn_view,
+)
 from .storage import DatasetStorage
 from .turn_curation import (
     accept_alignment_recovery_and_prepare,
@@ -411,3 +415,32 @@ class ReviewerSession:
             return candidates[:limit]
 
         return candidates
+
+    def current_view(
+        self,
+        *,
+        embedding_names: tuple[str, ...],
+        speaker_limit: int | None = None,
+    ) -> ReviewerTurnView | None:
+        turn = self.current()
+
+        if turn is None:
+            return None
+
+        candidates = self.speaker_candidates(
+            embedding_names=embedding_names,
+            limit=speaker_limit,
+        )
+
+        voices = {
+            str(voice["id"]): voice
+            for voice in self.storage.voices.load()
+        }
+
+        return build_reviewer_turn_view(
+            turn,
+            position=self.position,
+            total=self.total,
+            voices=voices,
+            speaker_candidates=candidates,
+        )

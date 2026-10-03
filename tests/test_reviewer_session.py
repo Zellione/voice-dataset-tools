@@ -1194,3 +1194,52 @@ def test_session_speaker_candidates_integrates_real_embeddings(
 
     assert candidates[1].score == pytest.approx(0.0)
     assert candidates[1].encoder_count == 2
+
+
+def test_session_current_view_builds_view(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    monkeypatch.setattr(
+        session,
+        "speaker_candidates",
+        lambda **kwargs: [],
+    )
+
+    view = session.current_view(
+        embedding_names=(
+            "ecapa_speaker",
+            "wespeaker_speaker",
+        ),
+    )
+
+    assert view is not None
+    assert view.turn_id == "turn_000001"
+    assert view.position == 1
+    assert view.total == 1
+
+
+def test_session_current_view_returns_none_when_empty(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+    session = ReviewerSession(storage)
+
+    view = session.current_view(
+        embedding_names=(
+            "ecapa_speaker",
+            "wespeaker_speaker",
+        ),
+    )
+
+    assert view is None
