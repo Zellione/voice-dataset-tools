@@ -44,6 +44,8 @@ from .reviewer import (
     reviewer_help,
     sorted_turns,
 )
+from .reviewer_session import ReviewerSession
+from .reviewer_tui import run_reviewer_tui
 from .voices import (
     assign_turn,
     create_voice,
@@ -2385,11 +2387,42 @@ def turn_review(
             "by the automatic utterance pipeline."
         ),
     ),
+    legacy: bool = typer.Option(
+        False,
+        "--legacy",
+        help="Use the legacy line-based reviewer.",
+    ),
 ):
     """Interactively review reconciled speech turns."""
 
     storage = storage_for(dataset)
     dataset = storage.root
+
+    if not legacy:
+        embedding_names = tuple(
+            speaker_embedding
+            or (
+                "ecapa_speaker",
+                "wespeaker_speaker",
+            )
+        )
+
+        session = ReviewerSession(
+            storage,
+            source_id=source_id,
+            auto_review_only=auto_review_only,
+        )
+
+        if session.total == 0:
+            typer.echo("No speech turns to review.")
+            return
+
+        run_reviewer_tui(
+            session,
+            embedding_names=embedding_names,
+            context_padding=context_padding,
+        )
+        return
 
     turns = sorted_turns(
         storage,
