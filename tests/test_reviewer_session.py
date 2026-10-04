@@ -1243,3 +1243,59 @@ def test_session_current_view_returns_none_when_empty(
     )
 
     assert view is None
+
+
+def test_session_create_and_assign_voice(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    voice = session.create_and_assign_voice(
+        character="Vander",
+        language="en",
+    )
+
+    assert voice["character"] == "Vander"
+    assert voice["language"] == "en"
+
+    persisted_voice = storage.get_voice(
+        voice["id"]
+    )
+
+    assert persisted_voice is not None
+
+    turn = storage.get_turn("turn_000001")
+
+    assert turn is not None
+    assert turn["assignment"] == {
+        "status": "assigned",
+        "voice_id": voice["id"],
+        "method": "manual",
+        "confidence": None,
+    }
+
+
+def test_session_create_and_assign_voice_requires_current_turn(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+    session = ReviewerSession(storage)
+
+    with pytest.raises(
+        ValueError,
+        match="Reviewer session has no current turn",
+    ):
+        session.create_and_assign_voice(
+            character="Vander",
+            language="en",
+        )
+
+    assert storage.voices.load() == []

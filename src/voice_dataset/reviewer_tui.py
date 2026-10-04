@@ -1,10 +1,18 @@
 from __future__ import annotations
+from dataclasses import dataclass
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Header, Static
+from textual.widgets import (
+    Footer,
+    Header,
+    Input,
+    OptionList,
+    Static,
+)
+from textual.widgets.option_list import Option
 
 from .playback import (
     play_preferred_review_audio,
@@ -83,6 +91,295 @@ class HelpScreen(ModalScreen[None]):
 
     def action_dismiss_help(self) -> None:
         self.dismiss(None)
+
+
+@dataclass(frozen=True)
+class NewVoiceRequest:
+    character: str | None
+    language: str | None
+
+
+class NewVoiceScreen(
+    ModalScreen[NewVoiceRequest | None]
+):
+    CSS = """
+    NewVoiceScreen {
+        align: center middle;
+    }
+
+    #new-voice-dialog {
+        width: 70;
+        height: auto;
+        padding: 1 2;
+        border: round $primary;
+        background: $surface;
+    }
+
+    #new-voice-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    Input {
+        margin-bottom: 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding(
+            "escape",
+            "cancel",
+            "Cancel",
+        ),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="new-voice-dialog"):
+            yield Static(
+                "Create Voice",
+                id="new-voice-title",
+            )
+
+            yield Static("Character")
+            yield Input(
+                placeholder="Character name",
+                id="new-voice-character",
+            )
+
+            yield Static("Language")
+            yield Input(
+                placeholder="Language, e.g. en",
+                id="new-voice-language",
+            )
+
+            yield Static(
+                "[Enter] Create & Assign   "
+                "[Esc] Cancel"
+            )
+
+    def on_mount(self) -> None:
+        self.query_one(
+            "#new-voice-character",
+            Input,
+        ).focus()
+
+    def on_input_submitted(
+        self,
+        event: Input.Submitted,
+    ) -> None:
+        if event.input.id == "new-voice-character":
+            self.query_one(
+                "#new-voice-language",
+                Input,
+            ).focus()
+            return
+
+        self.action_create()
+
+    def action_create(self) -> None:
+        character_value = self.query_one(
+            "#new-voice-character",
+            Input,
+        ).value.strip()
+
+        language_value = self.query_one(
+            "#new-voice-language",
+            Input,
+        ).value.strip()
+
+        self.dismiss(
+            NewVoiceRequest(
+                character=character_value or None,
+                language=language_value or None,
+            )
+        )
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class VoicePickerScreen(
+    ModalScreen[str | NewVoiceRequest | None]
+):
+    def __init__(
+        self,
+        *,
+        voices: list[dict],
+        candidates: tuple = (),
+    ) -> None:
+        super().__init__()
+        self.voices = voices
+        self.candidates = candidates
+
+        self._voices_by_id = {
+            str(voice["id"]): voice
+            for voice in voices
+        }
+
+        ordered_ids: list[str] = []
+
+        for candidate in candidates:
+            if (
+                candidate.voice_id
+                in self._voices_by_id
+                and candidate.voice_id
+                not in ordered_ids
+            ):
+                ordered_ids.append(
+                    candidate.voice_id
+                )
+
+        for voice in voices:
+            voice_id = str(voice["id"])
+
+            if voice_id not in ordered_ids:
+                ordered_ids.append(voice_id)
+
+        self.voice_ids = tuple(ordered_ids)
+
+    CSS = """
+    VoicePickerScreen {
+        align: center middle;
+    }
+
+    #voice-dialog {
+        width: 80;
+        height: auto;
+        max-height: 90%;
+        padding: 1 2;
+        border: round $primary;
+        background: $surface;
+    }
+
+    #voice-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    #voice-options {
+        height: auto;
+        max-height: 24;
+        margin-top: 1;
+        margin-bottom: 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding(
+            "escape",
+            "cancel",
+            "Cancel",
+        ),
+        Binding(
+            "n",
+            "new_voice",
+            "New Voice",
+        ),
+    ]
+
+    def compose(self) -> ComposeResult:
+        candidate_ids = {
+            candidate.voice_id
+            for candidate in self.candidates
+        }
+
+        summary_lines = [
+            "Suggested voices are listed first.",
+            "",
+            "All voices",
+        ]
+
+        if self.voices:
+            for voice in self.voices:
+                summary_lines.append(
+                    f"  {voice['id']}  "
+                    f"{voice.get('character') or '-'}"
+                )
+        else:
+            summary_lines.append(
+                "  No voice profiles."
+            )
+
+        options: list[Option] = []
+
+        for voice_id in self.voice_ids:
+            voice = self._voices_by_id[
+                voice_id
+            ]
+
+            character = (
+                voice.get("character")
+                or "-"
+            )
+
+            suggested = (
+                "  [suggested]"
+                if voice_id in candidate_ids
+                else ""
+            )
+
+            options.append(
+                Option(
+                    f"{voice_id}  "
+                    f"{character}"
+                    f"{suggested}",
+                    id=voice_id,
+                )
+            )
+
+        with Vertical(id="voice-dialog"):
+            yield Static(
+                "Assign Voice",
+                id="voice-title",
+            )
+
+            yield Static(
+                "\n".join(summary_lines),
+                id="voice-content",
+            )
+
+            if options:
+                yield OptionList(
+                    *options,
+                    id="voice-options",
+                )
+
+            yield Static(
+                "[Enter] Assign   "
+                "[N] New Voice   "
+                "[Esc] Cancel"
+            )
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_new_voice(self) -> None:
+        self.app.push_screen(
+            NewVoiceScreen(),
+            self._new_voice_created,
+        )
+
+    def _new_voice_created(
+        self,
+        request: NewVoiceRequest | None,
+    ) -> None:
+        if request is None:
+            return
+
+        self.dismiss(request)
+
+    def on_option_list_option_selected(
+        self,
+        event: OptionList.OptionSelected,
+    ) -> None:
+        option_id = event.option.id
+
+        if option_id is None:
+            return
+
+        self.dismiss(
+            str(option_id)
+        )
 
 
 class ReviewerTUI(App[None]):
@@ -181,6 +478,11 @@ class ReviewerTUI(App[None]):
             "s",
             "stop_playback",
             "Stop",
+        ),
+        Binding(
+            "v",
+            "assign_voice",
+            "Voice",
         ),
     ]
 
@@ -325,6 +627,72 @@ class ReviewerTUI(App[None]):
     def action_quit(self) -> None:
         stop()
         self.exit()
+
+    def _voice_selected(
+        self,
+        result: str | NewVoiceRequest | None,
+    ) -> None:
+        if result is None:
+            return
+
+        try:
+            if isinstance(
+                result,
+                NewVoiceRequest,
+            ):
+                voice = (
+                    self.session
+                    .create_and_assign_voice(
+                        character=result.character,
+                        language=result.language,
+                    )
+                )
+
+                message = (
+                    "Created and assigned voice: "
+                    f"{voice['id']}"
+                )
+            else:
+                self.session.assign_voice(
+                    result
+                )
+
+                message = (
+                    f"Assigned voice: {result}"
+                )
+
+            self._refresh_view()
+            self._set_status(message)
+
+        except (
+            ValueError,
+            KeyError,
+            RuntimeError,
+            OSError,
+        ) as exc:
+            self._set_status(
+                f"Voice assignment failed: {exc}"
+            )
+
+    def action_assign_voice(self) -> None:
+        view = self._current_view()
+
+        candidates = (
+            view.speaker_candidates
+            if view is not None
+            else ()
+        )
+
+        self.push_screen(
+            VoicePickerScreen(
+                voices=(
+                    self.session.storage
+                    .voices.load()
+                ),
+                candidates=candidates,
+            ),
+            self._voice_selected,
+        )
 
     def compose(self) -> ComposeResult:
         yield Header()

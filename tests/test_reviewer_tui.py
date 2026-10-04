@@ -4,6 +4,8 @@ from voice_dataset.reviewer_session import ReviewerSession
 from voice_dataset.reviewer_tui import ReviewerTUI
 from voice_dataset.storage import DatasetStorage
 
+from textual.widgets import Input, Static
+
 
 def add_turn(
     storage: DatasetStorage,
@@ -414,3 +416,216 @@ async def test_reviewer_tui_plays_context(
                 False,
             )
         ]
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_opens_voice_picker(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        assert len(app.screen_stack) == 1
+
+        await pilot.press("v")
+        await pilot.pause()
+
+        assert len(app.screen_stack) == 2
+
+
+@pytest.mark.asyncio
+async def test_voice_picker_shows_candidates_and_voices(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.voices.append(
+        {
+            "schema_version": 1,
+            "record_type": "voice_profile",
+            "id": "voice_001",
+            "character": "Silco",
+            "language": "en",
+            "aliases": [],
+            "ignored": False,
+            "notes": None,
+            "metadata": {},
+        }
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("v")
+        await pilot.pause()
+
+        screen = app.screen
+
+        content = screen.query_one(
+            "#voice-content",
+            Static,
+        )
+
+        rendered = str(content.render())
+
+        assert "All voices" in rendered
+        assert "voice_001" in rendered
+        assert "Silco" in rendered
+
+
+@pytest.mark.asyncio
+async def test_voice_picker_assigns_selected_voice(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.voices.append(
+        {
+            "schema_version": 1,
+            "record_type": "voice_profile",
+            "id": "voice_001",
+            "character": "Silco",
+            "language": "en",
+            "aliases": [],
+            "ignored": False,
+            "notes": None,
+            "metadata": {},
+        }
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("v")
+        await pilot.pause()
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        turn = storage.get_turn(
+            "turn_000001"
+        )
+
+        assert turn is not None
+        assert turn["assignment"] == {
+            "status": "assigned",
+            "voice_id": "voice_001",
+            "method": "manual",
+            "confidence": None,
+        }
+
+        assert len(app.screen_stack) == 1
+
+
+@pytest.mark.asyncio
+async def test_voice_picker_creates_and_assigns_new_voice(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("v")
+        await pilot.pause()
+
+        await pilot.press("n")
+        await pilot.pause()
+
+        assert len(app.screen_stack) == 3
+
+        character = app.screen.query_one(
+            "#new-voice-character",
+            Input,
+        )
+        language = app.screen.query_one(
+            "#new-voice-language",
+            Input,
+        )
+
+        character.value = "Vander"
+        language.value = "en"
+
+        character.focus()
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert len(app.screen_stack) == 3
+        assert language.has_focus
+        assert storage.voices.load() == []
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        voices = storage.voices.load()
+
+        assert len(voices) == 1
+        assert voices[0]["character"] == "Vander"
+        assert voices[0]["language"] == "en"
+
+        turn = storage.get_turn(
+            "turn_000001"
+        )
+
+        assert turn is not None
+        assert turn["assignment"]["status"] == "assigned"
+        assert (
+            turn["assignment"]["voice_id"]
+            == voices[0]["id"]
+        )
+
+        assert len(app.screen_stack) == 1

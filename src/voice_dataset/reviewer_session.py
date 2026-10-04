@@ -23,6 +23,7 @@ from .turn_curation import (
 )
 from .voices import (
     assign_turn,
+    create_voice,
     ignore_turn,
     mark_turn_unknown,
 )
@@ -226,6 +227,28 @@ class ReviewerSession:
             self._require_current_id(),
             voice_id,
         )
+
+    def create_and_assign_voice(
+        self,
+        *,
+        character: str | None = None,
+        language: str | None = None,
+    ) -> dict[str, Any]:
+        turn_id = self._require_current_id()
+
+        voice = create_voice(
+            self.storage,
+            character=character,
+            language=language,
+        )
+
+        assign_turn(
+            self.storage,
+            turn_id,
+            voice["id"],
+        )
+
+        return voice
 
     def mark_unknown(self) -> dict[str, Any]:
         return mark_turn_unknown(
