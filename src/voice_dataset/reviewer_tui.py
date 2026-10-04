@@ -78,12 +78,28 @@ class HelpScreen(ModalScreen[None]):
                     "  r         Play raw audio",
                     "  s         Stop playback",
                     "",
+                    "Turn",
+                    "  t         Edit transcript",
+                    "  l         Edit language",
+                    "  a         Mark reviewed",
+                    "  x         Mark pending",
+                    "",
+                    "Speaker",
+                    "  v         Assign/create voice",
+                    "  u         Mark voice unknown",
+                    "  i         Ignore turn",
+                    "",
+                    "Boundary",
+                    "  k         Mark complete",
+                    "  d         Mark clipped",
+                    "",
                     "General",
                     "  ?         Help",
                     "  q         Quit",
                     "",
                     "Coming next",
-                    "  v         Assign/create voice",
+                    "  f         Accept alignment recovery",
+                    "  e         Accept edge recovery",
                     "  m         Merge",
                     "  /         Split",
                 ])
@@ -382,6 +398,83 @@ class VoicePickerScreen(
         )
 
 
+class EditValueScreen(
+    ModalScreen[str | None]
+):
+    CSS = """
+    EditValueScreen {
+        align: center middle;
+    }
+
+    #edit-dialog {
+        width: 80;
+        height: auto;
+        padding: 1 2;
+        border: round $primary;
+        background: $surface;
+    }
+
+    #edit-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding(
+            "escape",
+            "cancel",
+            "Cancel",
+        ),
+    ]
+
+    def __init__(
+        self,
+        *,
+        title: str,
+        value: str,
+        placeholder: str = "",
+    ) -> None:
+        super().__init__()
+        self.title_text = title
+        self.initial_value = value
+        self.placeholder = placeholder
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="edit-dialog"):
+            yield Static(
+                self.title_text,
+                id="edit-title",
+            )
+
+            yield Input(
+                value=self.initial_value,
+                placeholder=self.placeholder,
+                id="edit-value",
+            )
+
+            yield Static(
+                "[Enter] Save   [Esc] Cancel"
+            )
+
+    def on_mount(self) -> None:
+        self.query_one(
+            "#edit-value",
+            Input,
+        ).focus()
+
+    def on_input_submitted(
+        self,
+        event: Input.Submitted,
+    ) -> None:
+        self.dismiss(
+            event.value.strip()
+        )
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class ReviewerTUI(App[None]):
     TITLE = "Voice Dataset Reviewer"
 
@@ -483,6 +576,46 @@ class ReviewerTUI(App[None]):
             "v",
             "assign_voice",
             "Voice",
+        ),
+        Binding(
+            "a",
+            "mark_reviewed",
+            "Reviewed",
+        ),
+        Binding(
+            "x",
+            "mark_pending",
+            "Pending",
+        ),
+        Binding(
+            "u",
+            "mark_unknown",
+            "Unknown",
+        ),
+        Binding(
+            "i",
+            "ignore_turn",
+            "Ignore",
+        ),
+        Binding(
+            "t",
+            "edit_transcript",
+            "Transcript",
+        ),
+        Binding(
+            "l",
+            "edit_language",
+            "Language",
+        ),
+        Binding(
+            "k",
+            "mark_boundary_complete",
+            "Boundary OK",
+        ),
+        Binding(
+            "d",
+            "mark_boundary_clipped",
+            "Boundary clipped",
         ),
     ]
 
@@ -693,6 +826,200 @@ class ReviewerTUI(App[None]):
             ),
             self._voice_selected,
         )
+
+    def action_mark_reviewed(self) -> None:
+        try:
+            self.session.mark_reviewed()
+            self._refresh_view()
+            self._set_status(
+                "Turn marked reviewed."
+            )
+        except (
+            ValueError,
+            KeyError,
+            RuntimeError,
+            OSError,
+        ) as exc:
+            self._set_status(
+                f"Action failed: {exc}"
+            )
+
+    def action_mark_pending(self) -> None:
+        try:
+            self.session.mark_pending()
+            self._refresh_view()
+            self._set_status(
+                "Turn marked pending."
+            )
+        except (
+            ValueError,
+            KeyError,
+            RuntimeError,
+            OSError,
+        ) as exc:
+            self._set_status(
+                f"Action failed: {exc}"
+            )
+
+    def action_mark_unknown(self) -> None:
+        try:
+            self.session.mark_unknown()
+            self._refresh_view()
+            self._set_status(
+                "Voice marked unknown."
+            )
+        except (
+            ValueError,
+            KeyError,
+            RuntimeError,
+            OSError,
+        ) as exc:
+            self._set_status(
+                f"Action failed: {exc}"
+            )
+
+    def action_ignore_turn(self) -> None:
+        try:
+            self.session.ignore()
+            self._refresh_view()
+            self._set_status(
+                "Turn ignored."
+            )
+        except (
+            ValueError,
+            KeyError,
+            RuntimeError,
+            OSError,
+        ) as exc:
+            self._set_status(
+                f"Action failed: {exc}"
+            )
+
+    def _transcript_edited(
+        self,
+        value: str | None,
+    ) -> None:
+        if value is None:
+            return
+
+        try:
+            self.session.edit_transcript(
+                value
+            )
+            self._refresh_view()
+            self._set_status(
+                "Transcript updated."
+            )
+        except (
+            ValueError,
+            KeyError,
+            RuntimeError,
+            OSError,
+        ) as exc:
+            self._set_status(
+                f"Action failed: {exc}"
+            )
+
+    def action_edit_transcript(self) -> None:
+        turn = self.session.current()
+
+        if turn is None:
+            return
+
+        self.push_screen(
+            EditValueScreen(
+                title="Edit Transcript",
+                value=str(
+                    turn.get("transcript")
+                    or ""
+                ),
+                placeholder="Transcript",
+            ),
+            self._transcript_edited,
+        )
+
+    def _language_edited(
+        self,
+        value: str | None,
+    ) -> None:
+        if value is None:
+            return
+
+        if not value:
+            self._set_status(
+                "Language must not be empty."
+            )
+            return
+
+        try:
+            self.session.set_language(
+                value
+            )
+            self._refresh_view()
+            self._set_status(
+                f"Language set to {value}."
+            )
+        except (
+            ValueError,
+            KeyError,
+            RuntimeError,
+            OSError,
+        ) as exc:
+            self._set_status(
+                f"Action failed: {exc}"
+            )
+
+    def action_edit_language(self) -> None:
+        turn = self.session.current()
+
+        if turn is None:
+            return
+
+        self.push_screen(
+            EditValueScreen(
+                title="Edit Language",
+                value=str(
+                    turn.get("language")
+                    or ""
+                ),
+                placeholder="Language, e.g. en",
+            ),
+            self._language_edited,
+        )
+
+    def action_mark_boundary_complete(self) -> None:
+        try:
+            self.session.mark_boundary_complete()
+            self._refresh_view()
+            self._set_status(
+                "Boundary marked complete."
+            )
+        except (
+            ValueError,
+            KeyError,
+            RuntimeError,
+            OSError,
+        ) as exc:
+            self._set_status(
+                f"Action failed: {exc}"
+            )
+
+    def action_mark_boundary_clipped(self) -> None:
+        try:
+            self.session.mark_boundary_clipped()
+            self._refresh_view()
+            self._set_status(
+                "Boundary marked clipped."
+            )
+        except (
+            ValueError,
+            KeyError,
+            RuntimeError,
+            OSError,
+        ) as exc:
+            self._set_status(
+                f"Action failed: {exc}"
+            )
 
     def compose(self) -> ComposeResult:
         yield Header()

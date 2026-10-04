@@ -629,3 +629,343 @@ async def test_voice_picker_creates_and_assigns_new_voice(
         )
 
         assert len(app.screen_stack) == 1
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_marks_turn_reviewed(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("a")
+        await pilot.pause()
+
+        turn = storage.get_turn(
+            "turn_000001"
+        )
+
+        assert turn is not None
+        assert turn["review"]["status"] == "reviewed"
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_marks_turn_pending(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    session.mark_reviewed()
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("x")
+        await pilot.pause()
+
+        turn = storage.get_turn(
+            "turn_000001"
+        )
+
+        assert turn is not None
+        assert turn["review"]["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_marks_voice_unknown(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.voices.append(
+        {
+            "schema_version": 1,
+            "record_type": "voice_profile",
+            "id": "voice_001",
+            "character": "Silco",
+            "language": "en",
+            "aliases": [],
+            "ignored": False,
+            "notes": None,
+            "metadata": {},
+        }
+    )
+
+    session = ReviewerSession(storage)
+    session.assign_voice("voice_001")
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("u")
+        await pilot.pause()
+
+        turn = storage.get_turn(
+            "turn_000001"
+        )
+
+        assert turn is not None
+        assert turn["assignment"]["status"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_ignores_turn(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("i")
+        await pilot.pause()
+
+        turn = storage.get_turn(
+            "turn_000001"
+        )
+
+        assert turn is not None
+        assert turn["assignment"]["status"] == "ignore"
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_edits_transcript(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("t")
+        await pilot.pause()
+
+        assert len(app.screen_stack) == 2
+
+        field = app.screen.query_one(
+            "#edit-value",
+            Input,
+        )
+
+        assert field.value == "turn_000001"
+
+        field.value = "Corrected transcript"
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        turn = storage.get_turn(
+            "turn_000001"
+        )
+
+        assert turn is not None
+        assert (
+            turn["transcript"]
+            == "Corrected transcript"
+        )
+
+        assert len(app.screen_stack) == 1
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_edits_language(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("l")
+        await pilot.pause()
+
+        field = app.screen.query_one(
+            "#edit-value",
+            Input,
+        )
+
+        assert field.value == "en"
+
+        field.value = "de"
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        turn = storage.get_turn(
+            "turn_000001"
+        )
+
+        assert turn is not None
+        assert turn["language"] == "de"
+
+        assert len(app.screen_stack) == 1
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_marks_boundary_complete(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.turns.update(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "metadata": {
+                **(turn.get("metadata") or {}),
+                "boundary_evidence": {
+                    "near_source_start": True,
+                    "near_source_end": False,
+                },
+            },
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("k")
+        await pilot.pause()
+
+        turn = storage.get_turn(
+            "turn_000001"
+        )
+
+        assert turn is not None
+        assert (
+            turn["review"]["boundary"]["status"]
+            == "complete"
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_marks_boundary_clipped(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.turns.update(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "metadata": {
+                **(turn.get("metadata") or {}),
+                "boundary_evidence": {
+                    "near_source_start": True,
+                    "near_source_end": False,
+                },
+            },
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("d")
+        await pilot.pause()
+
+        turn = storage.get_turn(
+            "turn_000001"
+        )
+
+        assert turn is not None
+        assert (
+            turn["review"]["boundary"]["status"]
+            == "clipped"
+        )
