@@ -4,7 +4,11 @@ from voice_dataset.reviewer_session import ReviewerSession
 from voice_dataset.reviewer_tui import ReviewerTUI
 from voice_dataset.storage import DatasetStorage
 
-from textual.widgets import Input, Static
+from textual.widgets import (
+    Input,
+    OptionList,
+    Static,
+)
 
 
 def add_turn(
@@ -1234,6 +1238,385 @@ async def test_reviewer_tui_accepts_edge_recovery(
 
         assert calls == [
             "turn_000001",
+        ]
+
+        assert len(app.screen_stack) == 1
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_does_not_open_merge_without_next_turn(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("m")
+        await pilot.pause()
+
+        assert len(app.screen_stack) == 1
+
+        status = app.screen.query_one(
+            "#status",
+            Static,
+        )
+
+        assert (
+            "Current turn has no next turn"
+            in str(status.render())
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_merges_with_next_turn(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+    add_turn(
+        storage,
+        "turn_000002",
+        source_start=2.0,
+    )
+
+    storage.update_turn(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "transcript": "First line",
+        },
+    )
+
+    storage.update_turn(
+        "turn_000002",
+        lambda turn: {
+            **turn,
+            "transcript": "Second line",
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    calls = []
+
+    def merge_with_next():
+        calls.append(
+            session.current_turn_id
+        )
+
+        return storage.get_turn(
+            "turn_000001"
+        )
+
+    monkeypatch.setattr(
+        session,
+        "merge_with_next",
+        merge_with_next,
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("m")
+        await pilot.pause()
+
+        assert len(app.screen_stack) == 2
+
+        content = app.screen.query_one(
+            "#merge-content",
+            Static,
+        )
+
+        rendered = str(content.render())
+
+        assert "Merge Turns" in rendered
+        assert "turn_000001" in rendered
+        assert "turn_000002" in rendered
+        assert "First line" in rendered
+        assert "Second line" in rendered
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert calls == [
+            "turn_000001",
+        ]
+
+        assert len(app.screen_stack) == 1
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_merge_uses_canonical_next_turn_when_filtered(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+    add_turn(
+        storage,
+        "turn_000002",
+        source_start=2.0,
+    )
+    add_turn(
+        storage,
+        "turn_000003",
+        source_start=3.0,
+    )
+
+    def set_auto_status(
+        turn_id: str,
+        status: str,
+    ) -> None:
+        def update(turn):
+            metadata = dict(
+                turn.get("metadata") or {}
+            )
+            automatic_pipeline = dict(
+                metadata.get(
+                    "automatic_pipeline"
+                )
+                or {}
+            )
+
+            automatic_pipeline["status"] = status
+            metadata["automatic_pipeline"] = (
+                automatic_pipeline
+            )
+            turn["metadata"] = metadata
+
+            return turn
+
+        storage.update_turn(
+            turn_id,
+            update,
+        )
+
+    set_auto_status(
+        "turn_000001",
+        "review",
+    )
+    set_auto_status(
+        "turn_000002",
+        "accepted",
+    )
+    set_auto_status(
+        "turn_000003",
+        "review",
+    )
+
+    storage.update_turn(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "transcript": "First visible turn",
+        },
+    )
+
+    storage.update_turn(
+        "turn_000002",
+        lambda turn: {
+            **turn,
+            "transcript": "Hidden canonical next turn",
+        },
+    )
+
+    session = ReviewerSession(
+        storage,
+        auto_review_only=True,
+    )
+
+    assert session.turn_ids == (
+        "turn_000001",
+        "turn_000003",
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("m")
+        await pilot.pause()
+
+        assert len(app.screen_stack) == 2
+
+        content = app.screen.query_one(
+            "#merge-content",
+            Static,
+        )
+
+        rendered = str(content.render())
+
+        assert "turn_000001" in rendered
+        assert "turn_000002" in rendered
+        assert "Hidden canonical next turn" in rendered
+
+        assert "turn_000003" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_does_not_open_split_without_valid_region(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.update_turn(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "source_regions": [
+                "region_000001",
+            ],
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("/")
+        await pilot.pause()
+
+        assert len(app.screen_stack) == 1
+
+        status = app.screen.query_one(
+            "#status",
+            Static,
+        )
+
+        assert (
+            "Turn has no valid split point"
+            in str(status.render())
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_splits_after_selected_region(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.update_turn(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "source_regions": [
+                "region_000001",
+                "region_000002",
+                "region_000003",
+            ],
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    calls = []
+
+    def split(*, after_region_id):
+        calls.append(after_region_id)
+
+        turn = storage.get_turn(
+            "turn_000001"
+        )
+
+        assert turn is not None
+
+        return turn, turn
+
+    monkeypatch.setattr(
+        session,
+        "split",
+        split,
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("/")
+        await pilot.pause()
+
+        assert len(app.screen_stack) == 2
+
+        title = app.screen.query_one(
+            "#split-title",
+            Static,
+        )
+
+        assert "Split Turn" in str(
+            title.render()
+        )
+
+        options = app.screen.query_one(
+            "#split-options",
+            OptionList,
+        )
+
+        option_ids = [
+            str(option.id)
+            for option in options.options
+        ]
+
+        assert option_ids == [
+            "region_000001",
+            "region_000002",
+        ]
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert calls == [
+            "region_000001",
         ]
 
         assert len(app.screen_stack) == 1

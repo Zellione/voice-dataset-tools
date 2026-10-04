@@ -20,7 +20,10 @@ from .playback import (
     play_turn_context,
     stop,
 )
-from .reviewer import raw_representation
+from .reviewer import (
+    raw_representation,
+    sorted_turns,
+)
 from .reviewer_session import ReviewerSession
 from .reviewer_view import ReviewerTurnView
 
@@ -532,6 +535,162 @@ class ConfirmRecoveryScreen(
         self.dismiss(None)
 
 
+class ConfirmMergeScreen(
+    ModalScreen[bool | None]
+):
+    CSS = """
+    ConfirmMergeScreen {
+        align: center middle;
+    }
+
+    #merge-dialog {
+        width: 90;
+        height: auto;
+        max-height: 90%;
+        padding: 1 2;
+        border: round $primary;
+        background: $surface;
+    }
+    """
+
+    BINDINGS = [
+        Binding(
+            "enter",
+            "accept",
+            "Merge",
+        ),
+        Binding(
+            "escape",
+            "cancel",
+            "Cancel",
+        ),
+    ]
+
+    def __init__(
+        self,
+        *,
+        content: str,
+    ) -> None:
+        super().__init__()
+        self.content = content
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="merge-dialog"):
+            yield Static(
+                self.content,
+                id="merge-content",
+            )
+
+            yield Static(
+                "[Enter] Merge   [Esc] Cancel"
+            )
+
+    def action_accept(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class SplitTurnScreen(
+    ModalScreen[str | None]
+):
+    CSS = """
+    SplitTurnScreen {
+        align: center middle;
+    }
+
+    #split-dialog {
+        width: 80;
+        height: auto;
+        max-height: 90%;
+        padding: 1 2;
+        border: round $primary;
+        background: $surface;
+    }
+
+    #split-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    #split-options {
+        height: auto;
+        max-height: 20;
+        margin-top: 1;
+        margin-bottom: 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding(
+            "escape",
+            "cancel",
+            "Cancel",
+        ),
+    ]
+
+    def __init__(
+        self,
+        *,
+        turn_id: str,
+        region_ids: tuple[str, ...],
+    ) -> None:
+        super().__init__()
+        self.turn_id = turn_id
+        self.region_ids = region_ids
+
+    def compose(self) -> ComposeResult:
+        options = [
+            Option(
+                f"after {region_id}",
+                id=region_id,
+            )
+            for region_id in self.region_ids
+        ]
+
+        with Vertical(id="split-dialog"):
+            yield Static(
+                "Split Turn",
+                id="split-title",
+            )
+
+            yield Static(
+                "\n".join([
+                    f"Turn: {self.turn_id}",
+                    "",
+                    "Choose the final region "
+                    "for the left turn:",
+                ]),
+                id="split-content",
+            )
+
+            yield OptionList(
+                *options,
+                id="split-options",
+            )
+
+            yield Static(
+                "[Enter] Split   [Esc] Cancel"
+            )
+
+    def on_option_list_option_selected(
+        self,
+        event: OptionList.OptionSelected,
+    ) -> None:
+        option_id = event.option.id
+
+        if option_id is None:
+            return
+
+        self.dismiss(
+            str(option_id)
+        )
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class ReviewerTUI(App[None]):
     TITLE = "Voice Dataset Reviewer"
 
@@ -683,6 +842,16 @@ class ReviewerTUI(App[None]):
             "e",
             "accept_edge_recovery",
             "Edge recovery",
+        ),
+        Binding(
+            "m",
+            "merge_with_next",
+            "Merge",
+        ),
+        Binding(
+            "/",
+            "split_turn",
+            "Split",
         ),
     ]
 
@@ -1330,6 +1499,185 @@ class ReviewerTUI(App[None]):
                 content="\n".join(lines),
             ),
             self._edge_recovery_confirmed,
+        )
+
+    def _merge_with_next_confirmed(
+        self,
+        accepted: bool | None,
+    ) -> None:
+        if not accepted:
+            return
+
+        try:
+            merged = self.session.merge_with_next()
+
+            self._refresh_view()
+
+            self._set_status(
+                f"Merged turn: {merged['id']}"
+            )
+        except (
+            ValueError,
+            KeyError,
+            RuntimeError,
+            OSError,
+        ) as exc:
+            self._set_status(
+                f"Merge failed: {exc}"
+            )
+
+    def action_merge_with_next(self) -> None:
+        current = self.session.current()
+
+        if current is None:
+            return
+
+        turn_id = str(current["id"])
+        source_id = current.get("source_id")
+
+        if not isinstance(source_id, str) or not source_id:
+            self._set_status(
+                "Current turn has invalid source_id"
+            )
+            return
+
+        turns = sorted_turns(
+            self.session.storage,
+            source_id=source_id,
+        )
+
+        turn_ids = [
+            str(turn["id"])
+            for turn in turns
+        ]
+
+        try:
+            index = turn_ids.index(turn_id)
+        except ValueError:
+            self._set_status(
+                "Current turn is missing from "
+                "canonical turn timeline"
+            )
+            return
+
+        if index >= len(turns) - 1:
+            self._set_status(
+                "Current turn has no next turn"
+            )
+            return
+
+        next_turn = turns[index + 1]
+
+        current_start = float(
+            current["source_start"]
+        )
+        current_end = float(
+            current["source_end"]
+        )
+        next_start = float(
+            next_turn["source_start"]
+        )
+        next_end = float(
+            next_turn["source_end"]
+        )
+
+        content = "\n".join([
+            "Merge Turns",
+            "",
+            (
+                f"{current['id']}  "
+                f"{current_start:.3f}-{current_end:.3f}"
+            ),
+            str(
+                current.get("transcript")
+                or "-"
+            ),
+            "",
+            (
+                f"{next_turn['id']}  "
+                f"{next_start:.3f}-{next_end:.3f}"
+            ),
+            str(
+                next_turn.get("transcript")
+                or "-"
+            ),
+        ])
+
+        self.push_screen(
+            ConfirmMergeScreen(
+                content=content,
+            ),
+            self._merge_with_next_confirmed,
+        )
+
+    def _split_region_selected(
+        self,
+        region_id: str | None,
+    ) -> None:
+        if region_id is None:
+            return
+
+        try:
+            left, right = self.session.split(
+                after_region_id=region_id,
+            )
+
+            self._refresh_view()
+
+            self._set_status(
+                "Split turn: "
+                f"{left['id']} / {right['id']}"
+            )
+        except (
+            ValueError,
+            KeyError,
+            RuntimeError,
+            OSError,
+        ) as exc:
+            self._set_status(
+                f"Split failed: {exc}"
+            )
+
+    def action_split_turn(self) -> None:
+        turn = self.session.current()
+
+        if turn is None:
+            return
+
+        source_regions = (
+            turn.get("source_regions")
+            or []
+        )
+
+        if not isinstance(
+            source_regions,
+            list,
+        ):
+            self._set_status(
+                "Turn has invalid source_regions"
+            )
+            return
+
+        valid_regions = tuple(
+            str(region_id)
+            for region_id
+            in source_regions[:-1]
+            if isinstance(region_id, str)
+            and region_id
+        )
+
+        if not valid_regions:
+            self._set_status(
+                "Turn has no valid split point"
+            )
+            return
+
+        self.push_screen(
+            SplitTurnScreen(
+                turn_id=str(turn["id"]),
+                region_ids=valid_regions,
+            ),
+            self._split_region_selected,
         )
 
     def compose(self) -> ComposeResult:

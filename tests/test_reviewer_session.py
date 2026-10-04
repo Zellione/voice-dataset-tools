@@ -764,6 +764,35 @@ def test_merge_with_next_uses_canonical_next_turn_when_filtered(
     ]
 
 
+def test_merge_with_next_does_not_cross_sources(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_id="source_001",
+        source_start=1.0,
+    )
+    add_turn(
+        storage,
+        "turn_000002",
+        source_id="source_002",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    assert session.current_turn_id == "turn_000001"
+
+    with pytest.raises(
+        ValueError,
+        match="Current turn has no next turn",
+    ):
+        session.merge_with_next()
+
+
 def test_session_speaker_candidates_combines_available_embeddings(
     tmp_path,
     monkeypatch,

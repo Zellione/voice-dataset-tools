@@ -345,9 +345,25 @@ class ReviewerSession:
     ) -> dict[str, Any]:
         turn_id = self._require_current_id()
 
+        turn = self.storage.get_turn(
+            turn_id
+        )
+
+        if turn is None:
+            raise RuntimeError(
+                "Current turn is missing from storage"
+            )
+
+        source_id = turn.get("source_id")
+
+        if not isinstance(source_id, str) or not source_id:
+            raise RuntimeError(
+                "Current turn has invalid source_id"
+            )
+
         turns = sorted_turns(
             self.storage,
-            source_id=self.source_id,
+            source_id=source_id,
         )
         turn_ids = [
             str(turn["id"])
