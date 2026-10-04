@@ -969,3 +969,271 @@ async def test_reviewer_tui_marks_boundary_clipped(
             turn["review"]["boundary"]["status"]
             == "clipped"
         )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_does_not_open_alignment_recovery_without_suggestion(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("f")
+        await pilot.pause()
+
+        assert len(app.screen_stack) == 1
+
+        status = app.screen.query_one(
+            "#status",
+            Static,
+        )
+
+        assert (
+            "No suggested alignment recovery."
+            in str(status.render())
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_accepts_alignment_recovery(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.turns.update(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "metadata": {
+                **(turn.get("metadata") or {}),
+                "alignment_evidence": {
+                    "status": "review",
+                    "issue_word_indices": [
+                        2,
+                        3,
+                    ],
+                    "recovery": {
+                        "status": "suggested",
+                        "source_start": 1.1,
+                        "source_end": 1.9,
+                        "speaker": "SPEAKER_04",
+                        "region_ids": [
+                            "region_000020",
+                        ],
+                        "matched_token_count": 4,
+                        "candidate_token_count": 5,
+                    },
+                },
+            },
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    calls = []
+
+    def accept_alignment_recovery():
+        calls.append(
+            session.current_turn_id
+        )
+
+        return storage.get_turn(
+            "turn_000001"
+        )
+
+    monkeypatch.setattr(
+        session,
+        "accept_alignment_recovery",
+        accept_alignment_recovery,
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("f")
+        await pilot.pause()
+
+        assert len(app.screen_stack) == 2
+
+        content = app.screen.query_one(
+            "#recovery-content",
+            Static,
+        )
+
+        rendered = str(content.render())
+
+        assert "Alignment Recovery" in rendered
+        assert "1.100" in rendered
+        assert "1.900" in rendered
+        assert "SPEAKER_04" in rendered
+        assert "region_000020" in rendered
+        assert "4 / 5" in rendered
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert calls == [
+            "turn_000001",
+        ]
+
+        assert len(app.screen_stack) == 1
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_does_not_open_edge_recovery_without_suggestion(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("e")
+        await pilot.pause()
+
+        assert len(app.screen_stack) == 1
+
+        status = app.screen.query_one(
+            "#status",
+            Static,
+        )
+
+        assert (
+            "No suggested edge recovery."
+            in str(status.render())
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_accepts_edge_recovery(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.turns.update(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "metadata": {
+                **(turn.get("metadata") or {}),
+                "edge_evidence": {
+                    "status": "suggested",
+                    "method": (
+                        "community_whisper_"
+                        "edge_extension"
+                    ),
+                    "edge": "end",
+                    "source_end": 2.4,
+                    "region_id": "region_000020",
+                    "speaker": "SPEAKER_04",
+                    "candidate_token": "kid",
+                    "whisper_token": "kiddo",
+                    "candidate_text": (
+                        "It gets easier kid"
+                    ),
+                    "whisper_text": (
+                        "It gets easier kiddo"
+                    ),
+                },
+            },
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    calls = []
+
+    def accept_edge_recovery():
+        calls.append(
+            session.current_turn_id
+        )
+
+        return storage.get_turn(
+            "turn_000001"
+        )
+
+    monkeypatch.setattr(
+        session,
+        "accept_edge_recovery",
+        accept_edge_recovery,
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("e")
+        await pilot.pause()
+
+        assert len(app.screen_stack) == 2
+
+        content = app.screen.query_one(
+            "#recovery-content",
+            Static,
+        )
+
+        rendered = str(content.render())
+
+        assert "Edge Recovery" in rendered
+        assert "end" in rendered
+        assert "2.400" in rendered
+        assert "SPEAKER_04" in rendered
+        assert "region_000020" in rendered
+        assert "kid" in rendered
+        assert "kiddo" in rendered
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert calls == [
+            "turn_000001",
+        ]
+
+        assert len(app.screen_stack) == 1

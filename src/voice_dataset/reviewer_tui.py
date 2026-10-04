@@ -475,6 +475,63 @@ class EditValueScreen(
         self.dismiss(None)
 
 
+class ConfirmRecoveryScreen(
+    ModalScreen[bool | None]
+):
+    CSS = """
+    ConfirmRecoveryScreen {
+        align: center middle;
+    }
+
+    #recovery-dialog {
+        width: 80;
+        height: auto;
+        max-height: 90%;
+        padding: 1 2;
+        border: round $primary;
+        background: $surface;
+    }
+    """
+
+    BINDINGS = [
+        Binding(
+            "enter",
+            "accept",
+            "Accept",
+        ),
+        Binding(
+            "escape",
+            "cancel",
+            "Cancel",
+        ),
+    ]
+
+    def __init__(
+        self,
+        *,
+        content: str,
+    ) -> None:
+        super().__init__()
+        self.content = content
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="recovery-dialog"):
+            yield Static(
+                self.content,
+                id="recovery-content",
+            )
+
+            yield Static(
+                "[Enter] Accept   [Esc] Cancel"
+            )
+
+    def action_accept(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class ReviewerTUI(App[None]):
     TITLE = "Voice Dataset Reviewer"
 
@@ -616,6 +673,16 @@ class ReviewerTUI(App[None]):
             "d",
             "mark_boundary_clipped",
             "Boundary clipped",
+        ),
+        Binding(
+            "f",
+            "accept_alignment_recovery",
+            "Alignment recovery",
+        ),
+        Binding(
+            "e",
+            "accept_edge_recovery",
+            "Edge recovery",
         ),
     ]
 
@@ -1020,6 +1087,250 @@ class ReviewerTUI(App[None]):
             self._set_status(
                 f"Action failed: {exc}"
             )
+
+    def _alignment_recovery_confirmed(
+        self,
+        accepted: bool | None,
+    ) -> None:
+        if not accepted:
+            return
+
+        try:
+            self.session.accept_alignment_recovery()
+            self._refresh_view()
+            self._set_status(
+                "Alignment recovery accepted."
+            )
+        except (
+            ValueError,
+            KeyError,
+            RuntimeError,
+            OSError,
+        ) as exc:
+            self._set_status(
+                f"Action failed: {exc}"
+            )
+
+    def action_accept_alignment_recovery(
+        self,
+    ) -> None:
+        view = self._current_view()
+
+        if view is None:
+            return
+
+        recovery = view.alignment.recovery
+
+        if (
+            recovery is None
+            or recovery.status != "suggested"
+        ):
+            self._set_status(
+                "No suggested alignment recovery."
+            )
+            return
+
+        source_range = "-"
+
+        if (
+            recovery.source_start is not None
+            and recovery.source_end is not None
+        ):
+            source_range = (
+                f"{recovery.source_start:.3f}"
+                "-"
+                f"{recovery.source_end:.3f}"
+            )
+
+        regions = (
+            ", ".join(recovery.region_ids)
+            if recovery.region_ids
+            else "-"
+        )
+
+        token_match = "-"
+
+        if (
+            recovery.matched_token_count is not None
+            and recovery.candidate_token_count
+            is not None
+        ):
+            token_match = (
+                f"{recovery.matched_token_count}"
+                " / "
+                f"{recovery.candidate_token_count}"
+            )
+
+        issue_words = (
+            ", ".join(
+                str(index)
+                for index
+                in view.alignment.issue_word_indices
+            )
+            if view.alignment.issue_word_indices
+            else "-"
+        )
+
+        content = "\n".join([
+            "Alignment Recovery",
+            "",
+            (
+                "Current range:   "
+                f"{view.start:.3f}-{view.end:.3f}"
+            ),
+            (
+                "Proposed range:  "
+                f"{source_range}"
+            ),
+            (
+                "Speaker:         "
+                f"{recovery.speaker or '-'}"
+            ),
+            (
+                "Regions:         "
+                f"{regions}"
+            ),
+            (
+                "Token match:     "
+                f"{token_match}"
+            ),
+            (
+                "Issue words:     "
+                f"{issue_words}"
+            ),
+        ])
+
+        self.push_screen(
+            ConfirmRecoveryScreen(
+                content=content,
+            ),
+            self._alignment_recovery_confirmed,
+        )
+
+    def _edge_recovery_confirmed(
+        self,
+        accepted: bool | None,
+    ) -> None:
+        if not accepted:
+            return
+
+        try:
+            self.session.accept_edge_recovery()
+            self._refresh_view()
+            self._set_status(
+                "Edge recovery accepted."
+            )
+        except (
+            ValueError,
+            KeyError,
+            RuntimeError,
+            OSError,
+        ) as exc:
+            self._set_status(
+                f"Action failed: {exc}"
+            )
+
+    def action_accept_edge_recovery(
+        self,
+    ) -> None:
+        view = self._current_view()
+
+        if view is None:
+            return
+
+        edge = view.edge_recovery
+
+        if (
+            edge is None
+            or edge.status != "suggested"
+        ):
+            self._set_status(
+                "No suggested edge recovery."
+            )
+            return
+
+        if edge.edge == "start":
+            proposed = (
+                f"{edge.source_start:.3f}"
+                if edge.source_start is not None
+                else "-"
+            )
+        elif edge.edge == "end":
+            proposed = (
+                f"{edge.source_end:.3f}"
+                if edge.source_end is not None
+                else "-"
+            )
+        else:
+            proposed = "-"
+
+        lines = [
+            "Edge Recovery",
+            "",
+            f"Edge:            {edge.edge or '-'}",
+            (
+                "Current range:   "
+                f"{view.start:.3f}-{view.end:.3f}"
+            ),
+            (
+                "Proposed edge:   "
+                f"{proposed}"
+            ),
+            (
+                "Speaker:         "
+                f"{edge.speaker or '-'}"
+            ),
+            (
+                "Region:          "
+                f"{edge.region_id or '-'}"
+            ),
+        ]
+
+        if edge.conflicting_region_id:
+            lines.append(
+                "Conflict region: "
+                f"{edge.conflicting_region_id}"
+            )
+
+        if edge.candidate_token:
+            lines.append(
+                "Candidate token: "
+                f"{edge.candidate_token}"
+            )
+
+        if edge.whisper_token:
+            lines.append(
+                "Whisper token:   "
+                f"{edge.whisper_token}"
+            )
+
+        if edge.candidate_text:
+            lines.extend([
+                "",
+                "Candidate:",
+                edge.candidate_text,
+            ])
+
+        if edge.whisper_text:
+            lines.extend([
+                "",
+                "Whisper:",
+                edge.whisper_text,
+            ])
+
+        if edge.conflicting_whisper_text:
+            lines.extend([
+                "",
+                "Conflicting Whisper:",
+                edge.conflicting_whisper_text,
+            ])
+
+        self.push_screen(
+            ConfirmRecoveryScreen(
+                content="\n".join(lines),
+            ),
+            self._edge_recovery_confirmed,
+        )
 
     def compose(self) -> ComposeResult:
         yield Header()
