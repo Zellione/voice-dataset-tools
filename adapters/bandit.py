@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import sys
+import warnings
 from pathlib import Path
 from types import ModuleType
 
@@ -116,17 +117,28 @@ def main() -> None:
     print(f"BandIt revision: {BANDIT_REVISION}")
     print(f"Checkpoint SHA-256: {CHECKPOINT_SHA256}")
 
-    inference.run_inference(
-        checkpoint_path=str(CHECKPOINT),
-        audio_path=str(audio),
-        output_dir=str(output),
-        stems=["speech", "music", "sfx"],
-        fs=48000,
-        device="cuda",
-        use_half=True,
-        chunk_seconds=args.chunk,
-        overlap_seconds=args.overlap,
-    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=(
+                r"`torch\.cuda\.amp\.autocast\(args\.\.\.\)` "
+                r"is deprecated\..*"
+            ),
+            category=FutureWarning,
+            module=r"voice_dataset_bandit_inference",
+        )
+
+        inference.run_inference(
+            checkpoint_path=str(CHECKPOINT),
+            audio_path=str(audio),
+            output_dir=str(output),
+            stems=["speech", "music", "sfx"],
+            fs=48000,
+            device="cuda",
+            use_half=True,
+            chunk_seconds=args.chunk,
+            overlap_seconds=args.overlap,
+        )
 
 
 if __name__ == "__main__":

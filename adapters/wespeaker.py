@@ -1,6 +1,7 @@
 import argparse
 import json
 import shutil
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -8,6 +9,9 @@ import soundfile as sf
 import torch
 
 from pyannote.audio import Model, Inference
+from pyannote.audio.utils.reproducibility import (
+    ReproducibilityWarning,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -263,8 +267,18 @@ def encode(
     inference: Inference,
     path: Path,
 ) -> np.ndarray:
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            category=ReproducibilityWarning,
+        )
+
+        embedding = inference(
+            str(path)
+        )
+
     return normalize(
-        inference(str(path))
+        embedding
     )
 
 

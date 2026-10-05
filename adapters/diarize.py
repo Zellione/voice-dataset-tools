@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import warnings
 from pathlib import Path
 from typing import Any
 
 import soundfile as sf
 import torch
 from pyannote.audio import Pipeline
+from pyannote.audio.utils.reproducibility import (
+    ReproducibilityWarning,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -154,10 +158,29 @@ def main() -> None:
     print(f"Audio: {audio}")
     print("Running diarization...")
 
-    result = pipeline(
-        audio,
-        **parameters,
-    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            category=ReproducibilityWarning,
+        )
+
+        warnings.filterwarnings(
+            "ignore",
+            message=(
+                r"std\(\): degrees of freedom "
+                r"is <= 0\..*"
+            ),
+            category=UserWarning,
+            module=(
+                r"pyannote\.audio\.models\."
+                r"blocks\.pooling"
+            ),
+        )
+
+        result = pipeline(
+            audio,
+            **parameters,
+        )
 
     regions = annotation_to_regions(
         result.speaker_diarization
