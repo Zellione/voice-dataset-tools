@@ -369,7 +369,7 @@ def test_pipeline_rejects_sat_boundary_spanned_by_exact_region_match():
     ]
 
 
-def test_pipeline_infers_missing_boundary_from_exact_region_matches():
+def test_pipeline_does_not_split_on_region_boundary_without_sat():
     raw_words = [
         {
             "text": "I",
@@ -587,15 +587,17 @@ def test_pipeline_infers_missing_boundary_from_exact_region_matches():
 
     assert (
         result.sat_boundary_after_word_indices
-        == (8,)
+        == ()
     )
 
     assert [
         candidate.text
         for candidate in result.candidates
     ] == [
-        "I wish I could say it gets easier kiddo",
-        "but I'll be lying",
+        (
+            "I wish I could say it gets easier kiddo "
+            "but I'll be lying"
+        ),
     ]
 
 

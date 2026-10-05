@@ -32,7 +32,6 @@ from .word_alignment import (
     EffectiveWordAlignment,
     build_effective_word_alignment,
     collect_region_evidence,
-    infer_region_boundaries,
     recover_sat_boundary_alignments,
     validate_sat_boundaries,
 )
@@ -215,10 +214,6 @@ def build_source_utterances(
         list(alignment.words),
         region_evidence,
         sat_boundaries,
-    )
-
-    sat_boundaries |= infer_region_boundaries(
-        region_evidence
     )
 
     suppressed_word_indices = set(
