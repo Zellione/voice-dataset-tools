@@ -149,6 +149,9 @@ def main() -> None:
     text, word_spans = build_text(words)
 
     from wtpsplit import SaT
+    from transformers.utils import logging
+
+    logging.disable_progress_bar()
 
     model = SaT(MODEL_ID)
 

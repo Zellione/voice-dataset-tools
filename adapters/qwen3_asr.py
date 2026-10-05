@@ -79,6 +79,11 @@ def main() -> None:
             f"Input audio does not exist: {args.input}"
         )
 
+    from transformers.utils import logging
+
+    logging.set_verbosity_error()
+    logging.disable_progress_bar()
+
     from qwen_asr import Qwen3ASRModel
 
     model = Qwen3ASRModel.from_pretrained(
