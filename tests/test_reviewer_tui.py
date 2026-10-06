@@ -1,10 +1,19 @@
 import pytest
 
 from voice_dataset.reviewer_session import ReviewerSession
-from voice_dataset.reviewer_tui import ReviewerTUI
+from voice_dataset.reviewer_tui import (
+    ConfirmMergeScreen,
+    ConfirmRecoveryScreen,
+    EditValueScreen,
+    NewVoiceScreen,
+    ReviewerTUI,
+    SplitTurnScreen,
+    VoicePickerScreen,
+)
 from voice_dataset.storage import DatasetStorage
 
 from textual.widgets import (
+    Footer,
     Input,
     OptionList,
     Static,
@@ -1001,16 +1010,6 @@ async def test_reviewer_tui_does_not_open_alignment_recovery_without_suggestion(
 
         assert len(app.screen_stack) == 1
 
-        status = app.screen.query_one(
-            "#status",
-            Static,
-        )
-
-        assert (
-            "No suggested alignment recovery."
-            in str(status.render())
-        )
-
 
 @pytest.mark.asyncio
 async def test_reviewer_tui_accepts_alignment_recovery(
@@ -1133,16 +1132,6 @@ async def test_reviewer_tui_does_not_open_edge_recovery_without_suggestion(
         await pilot.pause()
 
         assert len(app.screen_stack) == 1
-
-        status = app.screen.query_one(
-            "#status",
-            Static,
-        )
-
-        assert (
-            "No suggested edge recovery."
-            in str(status.render())
-        )
 
 
 @pytest.mark.asyncio
@@ -1268,16 +1257,6 @@ async def test_reviewer_tui_does_not_open_merge_without_next_turn(
         await pilot.pause()
 
         assert len(app.screen_stack) == 1
-
-        status = app.screen.query_one(
-            "#status",
-            Static,
-        )
-
-        assert (
-            "Current turn has no next turn"
-            in str(status.render())
-        )
 
 
 @pytest.mark.asyncio
@@ -1519,16 +1498,6 @@ async def test_reviewer_tui_does_not_open_split_without_valid_region(
 
         assert len(app.screen_stack) == 1
 
-        status = app.screen.query_one(
-            "#status",
-            Static,
-        )
-
-        assert (
-            "Turn has no valid split point"
-            in str(status.render())
-        )
-
 
 @pytest.mark.asyncio
 async def test_reviewer_tui_splits_after_selected_region(
@@ -1620,3 +1589,754 @@ async def test_reviewer_tui_splits_after_selected_region(
         ]
 
         assert len(app.screen_stack) == 1
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_hides_previous_on_first_turn(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+    add_turn(
+        storage,
+        "turn_000002",
+        source_start=2.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "previous_turn",
+                (),
+            )
+            is False
+        )
+
+        assert (
+            app.check_action(
+                "next_turn",
+                (),
+            )
+            is True
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_hides_next_on_last_turn(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+    add_turn(
+        storage,
+        "turn_000002",
+        source_start=2.0,
+    )
+
+    session = ReviewerSession(storage)
+    session.next()
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "previous_turn",
+                (),
+            )
+            is True
+        )
+
+        assert (
+            app.check_action(
+                "next_turn",
+                (),
+            )
+            is False
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_hides_recovery_actions_without_suggestion(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "accept_alignment_recovery",
+                (),
+            )
+            is False
+        )
+
+        assert (
+            app.check_action(
+                "accept_edge_recovery",
+                (),
+            )
+            is False
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_hides_merge_on_last_turn(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "merge_with_next",
+                (),
+            )
+            is False
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_hides_split_without_split_point(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.update_turn(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "source_regions": [
+                "region_000001",
+            ],
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "split_turn",
+                (),
+            )
+            is False
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_shows_merge_when_next_turn_exists(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+    add_turn(
+        storage,
+        "turn_000002",
+        source_start=2.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "merge_with_next",
+                (),
+            )
+            is True
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_shows_split_with_valid_split_point(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.update_turn(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "source_regions": [
+                "region_000001",
+                "region_000002",
+            ],
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "split_turn",
+                (),
+            )
+            is True
+        )
+
+
+def test_voice_picker_hides_assign_without_voices():
+    screen = VoicePickerScreen(
+        voices=[],
+        candidates=(),
+    )
+
+    assert (
+        screen.check_action(
+            "assign",
+            (),
+        )
+        is False
+    )
+
+    assert (
+        screen.check_action(
+            "new_voice",
+            (),
+        )
+        is True
+    )
+
+
+def test_voice_picker_shows_assign_with_voice():
+    screen = VoicePickerScreen(
+        voices=[
+            {
+                "id": "voice_001",
+                "character": "Vander",
+            },
+        ],
+        candidates=(),
+    )
+
+    assert (
+        screen.check_action(
+            "assign",
+            (),
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_voice_picker_has_contextual_footer(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("v")
+        await pilot.pause()
+
+        assert isinstance(
+            app.screen,
+            VoicePickerScreen,
+        )
+
+        footer = app.screen.query_one(
+            Footer
+        )
+
+        assert footer is not None
+
+
+@pytest.mark.asyncio
+async def test_new_voice_screen_has_contextual_footer(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        app.push_screen(
+            NewVoiceScreen()
+        )
+        await pilot.pause()
+
+        assert isinstance(
+            app.screen,
+            NewVoiceScreen,
+        )
+
+        assert app.screen.query_one(
+            Footer
+        ) is not None
+
+
+@pytest.mark.asyncio
+async def test_recovery_screen_has_contextual_footer(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        app.push_screen(
+            ConfirmRecoveryScreen(
+                content="Recovery",
+            )
+        )
+        await pilot.pause()
+
+        assert isinstance(
+            app.screen,
+            ConfirmRecoveryScreen,
+        )
+
+        assert app.screen.query_one(
+            Footer
+        ) is not None
+
+
+@pytest.mark.asyncio
+async def test_merge_screen_has_contextual_footer(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        app.push_screen(
+            ConfirmMergeScreen(
+                content="Merge",
+            )
+        )
+        await pilot.pause()
+
+        assert isinstance(
+            app.screen,
+            ConfirmMergeScreen,
+        )
+
+        assert app.screen.query_one(
+            Footer
+        ) is not None
+
+
+@pytest.mark.asyncio
+async def test_split_screen_has_contextual_footer(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        app.push_screen(
+            SplitTurnScreen(
+                turn_id="turn_000001",
+                region_ids=(
+                    "region_000001",
+                ),
+            )
+        )
+        await pilot.pause()
+
+        assert isinstance(
+            app.screen,
+            SplitTurnScreen,
+        )
+
+        assert app.screen.query_one(
+            Footer
+        ) is not None
+
+
+@pytest.mark.asyncio
+async def test_edit_value_screen_has_contextual_footer(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        app.push_screen(
+            EditValueScreen(
+                title="Edit Transcript",
+                value="hello",
+            )
+        )
+        await pilot.pause()
+
+        assert isinstance(
+            app.screen,
+            EditValueScreen,
+        )
+
+        assert app.screen.query_one(
+            Footer
+        ) is not None
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_hides_current_review_state_action(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "mark_pending",
+                (),
+            )
+            is False
+        )
+
+        assert (
+            app.check_action(
+                "mark_reviewed",
+                (),
+            )
+            is True
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_hides_reviewed_after_marking_reviewed(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+    session.mark_reviewed()
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "mark_reviewed",
+                (),
+            )
+            is False
+        )
+
+        assert (
+            app.check_action(
+                "mark_pending",
+                (),
+            )
+            is True
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_hides_unknown_when_already_unknown(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "mark_unknown",
+                (),
+            )
+            is False
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_hides_boundary_complete_when_already_complete(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.update_turn(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "review": {
+                **(turn.get("review") or {}),
+                "boundary": {
+                    "status": "complete",
+                },
+            },
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "mark_boundary_complete",
+                (),
+            )
+            is False
+        )
+
+        assert (
+            app.check_action(
+                "mark_boundary_clipped",
+                (),
+            )
+            is True
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_hides_boundary_clipped_when_already_clipped(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.update_turn(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "review": {
+                **(turn.get("review") or {}),
+                "boundary": {
+                    "status": "clipped",
+                },
+            },
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "mark_boundary_clipped",
+                (),
+            )
+            is False
+        )
+
+        assert (
+            app.check_action(
+                "mark_boundary_complete",
+                (),
+            )
+            is True
+        )

@@ -171,10 +171,7 @@ class NewVoiceScreen(
                 id="new-voice-language",
             )
 
-            yield Static(
-                "[Enter] Create & Assign   "
-                "[Esc] Cancel"
-            )
+        yield Footer()
 
     def on_mount(self) -> None:
         self.query_one(
@@ -285,14 +282,19 @@ class VoicePickerScreen(
 
     BINDINGS = [
         Binding(
-            "escape",
-            "cancel",
-            "Cancel",
+            "enter",
+            "assign",
+            "Assign",
         ),
         Binding(
             "n",
             "new_voice",
             "New Voice",
+        ),
+        Binding(
+            "escape",
+            "cancel",
+            "Cancel",
         ),
     ]
 
@@ -363,11 +365,7 @@ class VoicePickerScreen(
                     id="voice-options",
                 )
 
-            yield Static(
-                "[Enter] Assign   "
-                "[N] New Voice   "
-                "[Esc] Cancel"
-            )
+        yield Footer()
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -376,6 +374,44 @@ class VoicePickerScreen(
         self.app.push_screen(
             NewVoiceScreen(),
             self._new_voice_created,
+        )
+
+    def check_action(
+        self,
+        action: str,
+        parameters: tuple,
+    ) -> bool | None:
+        if action == "assign":
+            return bool(self.voice_ids)
+
+        return super().check_action(
+            action,
+            parameters,
+        )
+
+    def action_assign(self) -> None:
+        if not self.voice_ids:
+            return
+
+        options = self.query_one(
+            "#voice-options",
+            OptionList,
+        )
+
+        highlighted = options.highlighted
+
+        if highlighted is None:
+            return
+
+        option = options.get_option_at_index(
+            highlighted
+        )
+
+        if option.id is None:
+            return
+
+        self.dismiss(
+            str(option.id)
         )
 
     def _new_voice_created(
@@ -456,9 +492,7 @@ class EditValueScreen(
                 id="edit-value",
             )
 
-            yield Static(
-                "[Enter] Save   [Esc] Cancel"
-            )
+        yield Footer()
 
     def on_mount(self) -> None:
         self.query_one(
@@ -524,9 +558,7 @@ class ConfirmRecoveryScreen(
                 id="recovery-content",
             )
 
-            yield Static(
-                "[Enter] Accept   [Esc] Cancel"
-            )
+        yield Footer()
 
     def action_accept(self) -> None:
         self.dismiss(True)
@@ -581,9 +613,7 @@ class ConfirmMergeScreen(
                 id="merge-content",
             )
 
-            yield Static(
-                "[Enter] Merge   [Esc] Cancel"
-            )
+        yield Footer()
 
     def action_accept(self) -> None:
         self.dismiss(True)
@@ -670,9 +700,7 @@ class SplitTurnScreen(
                 id="split-options",
             )
 
-            yield Static(
-                "[Enter] Split   [Esc] Cancel"
-            )
+        yield Footer()
 
     def on_option_list_option_selected(
         self,
@@ -1720,6 +1748,199 @@ class ReviewerTUI(App[None]):
             speaker_limit=3,
         )
 
+    def check_action(
+        self,
+        action: str,
+        parameters: tuple,
+    ) -> bool | None:
+        if action == "previous_turn":
+            return self.session.position > 1
+
+        if action == "next_turn":
+            return (
+                self.session.position
+                < self.session.total
+            )
+
+        if action == "accept_alignment_recovery":
+            turn = self.session.current()
+
+            if turn is None:
+                return False
+
+            metadata = turn.get("metadata")
+
+            if not isinstance(metadata, dict):
+                return False
+
+            alignment = metadata.get(
+                "alignment_evidence"
+            )
+
+            if not isinstance(alignment, dict):
+                return False
+
+            recovery = alignment.get("recovery")
+
+            return (
+                isinstance(recovery, dict)
+                and recovery.get("status")
+                == "suggested"
+            )
+
+        if action == "accept_edge_recovery":
+            turn = self.session.current()
+
+            if turn is None:
+                return False
+
+            metadata = turn.get("metadata")
+
+            if not isinstance(metadata, dict):
+                return False
+
+            edge = metadata.get(
+                "edge_evidence"
+            )
+
+            return (
+                isinstance(edge, dict)
+                and edge.get("status")
+                == "suggested"
+            )
+
+        if action == "merge_with_next":
+            current = self.session.current()
+
+            if current is None:
+                return False
+
+            turn_id = str(current["id"])
+            source_id = current.get("source_id")
+
+            if (
+                not isinstance(source_id, str)
+                or not source_id
+            ):
+                return False
+
+            turns = sorted_turns(
+                self.session.storage,
+                source_id=source_id,
+            )
+
+            turn_ids = [
+                str(turn["id"])
+                for turn in turns
+            ]
+
+            try:
+                index = turn_ids.index(turn_id)
+            except ValueError:
+                return False
+
+            return index < len(turn_ids) - 1
+
+        if action == "split_turn":
+            turn = self.session.current()
+
+            if turn is None:
+                return False
+
+            source_regions = (
+                turn.get("source_regions")
+                or []
+            )
+
+            if not isinstance(
+                source_regions,
+                list,
+            ):
+                return False
+
+            valid_regions = [
+                region_id
+                for region_id
+                in source_regions[:-1]
+                if isinstance(region_id, str)
+                and region_id
+            ]
+
+            return bool(valid_regions)
+
+        if action == "mark_pending":
+            turn = self.session.current()
+
+            if turn is None:
+                return False
+
+            review = turn.get("review") or {}
+
+            return (
+                review.get("status")
+                != "pending"
+            )
+
+        if action == "mark_reviewed":
+            turn = self.session.current()
+
+            if turn is None:
+                return False
+
+            review = turn.get("review") or {}
+
+            return (
+                review.get("status")
+                != "reviewed"
+            )
+
+        if action == "mark_unknown":
+            turn = self.session.current()
+
+            if turn is None:
+                return False
+
+            assignment = (
+                turn.get("assignment")
+                or {}
+            )
+
+            return (
+                assignment.get("status")
+                != "unknown"
+            )
+
+        if action in {
+            "mark_boundary_complete",
+            "mark_boundary_clipped",
+        }:
+            turn = self.session.current()
+
+            if turn is None:
+                return False
+
+            review = turn.get("review") or {}
+
+            if not isinstance(review, dict):
+                return False
+
+            boundary = review.get("boundary") or {}
+
+            if not isinstance(boundary, dict):
+                return False
+
+            status = boundary.get("status")
+
+            if action == "mark_boundary_complete":
+                return status != "complete"
+
+            return status != "clipped"
+
+        return super().check_action(
+            action,
+            parameters,
+        )
+
     def _refresh_view(self) -> None:
         view = self._current_view()
 
@@ -1749,6 +1970,16 @@ class ReviewerTUI(App[None]):
                 Static,
             ).update("No speech turns to review.")
 
+            self.refresh_bindings()
+
+            self.query_one(
+                "#status",
+                Static,
+            ).update(
+                "No speech turns to review."
+            )
+
+            self.refresh_bindings()
             return
 
         self.query_one(
@@ -1788,6 +2019,8 @@ class ReviewerTUI(App[None]):
             f"{view.duration:.3f}s  "
             f"language={view.language or '-'}"
         )
+
+        self.refresh_bindings()
 
     def _format_evidence(
         self,
