@@ -3399,3 +3399,82 @@ async def test_reviewer_tui_shows_language_in_evidence(
 
         assert "Language:" in evidence
         assert "en" in evidence
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_shows_turn_timing_in_title(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        title = str(
+            app.screen.query_one(
+                "#turn-title",
+                Static,
+            ).render()
+        )
+
+        assert "Turn 1 / 1" in title
+        assert "turn_000001" in title
+        assert "1.000-2.000" in title
+        assert "1.000s" in title
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_status_is_transient(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        status = app.screen.query_one(
+            "#status",
+            Static,
+        )
+
+        assert str(status.render()) == ""
+        assert status.display is False
+
+        app._set_status(
+            "Temporary status"
+        )
+
+        assert (
+            "Temporary status"
+            in str(status.render())
+        )
+        assert status.display is True
+
+        app._refresh_view()
+
+        assert str(status.render()) == ""
+        assert status.display is False

@@ -1070,10 +1070,22 @@ class ReviewerTUI(App[None]):
         self,
         message: str,
     ) -> None:
-        self.query_one(
+        status = self.query_one(
             "#status",
             Static,
-        ).update(message)
+        )
+
+        status.update(message)
+        status.display = True
+
+    def _clear_status(self) -> None:
+        status = self.query_one(
+            "#status",
+            Static,
+        )
+
+        status.update("")
+        status.display = False
 
     def action_play_preferred(self) -> None:
         try:
@@ -2257,10 +2269,9 @@ class ReviewerTUI(App[None]):
                 Static,
             ).update("")
 
-            self.query_one(
-                "#status",
-                Static,
-            ).update("No speech turns to review.")
+            self._set_status(
+                "No speech turns to review."
+            )
 
             self.refresh_bindings()
             self._refresh_shortcuts()
@@ -2271,7 +2282,9 @@ class ReviewerTUI(App[None]):
             Static,
         ).update(
             f"Turn {view.position} / {view.total}  "
-            f"{view.turn_id}"
+            f"{view.turn_id}   "
+            f"{view.start:.3f}-{view.end:.3f}  "
+            f"{view.duration:.3f}s"
         )
 
         self.query_one(
@@ -2295,14 +2308,7 @@ class ReviewerTUI(App[None]):
             self._format_speakers(view)
         )
 
-        self.query_one(
-            "#status",
-            Static,
-        ).update(
-            f"{view.start:.3f}-{view.end:.3f}  "
-            f"{view.duration:.3f}s  "
-            f"language={view.language or '-'}"
-        )
+        self._clear_status()
 
         self.refresh_bindings()
         self._refresh_shortcuts()
