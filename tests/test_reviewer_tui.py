@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from voice_dataset.reviewer_session import ReviewerSession
@@ -2338,5 +2340,418 @@ async def test_reviewer_tui_hides_boundary_clipped_when_already_clipped(
                 "mark_boundary_complete",
                 (),
             )
+            is True
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_hides_stop_when_not_playing(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui.is_playing",
+        lambda: False,
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "stop_playback",
+                (),
+            )
+            is False
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_shows_stop_when_playing(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui.is_playing",
+        lambda: True,
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "stop_playback",
+                (),
+            )
+            is True
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_refreshes_bindings_when_playback_state_changes(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    state = {
+        "playing": False,
+    }
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui.is_playing",
+        lambda: state["playing"],
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    calls = []
+
+    original_refresh_bindings = (
+        app.refresh_bindings
+    )
+
+    def refresh_bindings():
+        calls.append(
+            state["playing"]
+        )
+
+        return original_refresh_bindings()
+
+    monkeypatch.setattr(
+        app,
+        "refresh_bindings",
+        refresh_bindings,
+    )
+
+    async with app.run_test():
+        calls.clear()
+
+        state["playing"] = True
+
+        await asyncio.sleep(0.2)
+
+        assert True in calls
+
+        calls.clear()
+
+        state["playing"] = False
+
+        await asyncio.sleep(0.2)
+
+        assert False in calls
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_refreshes_bindings_immediately_on_stop(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    state = {
+        "playing": True,
+    }
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui.is_playing",
+        lambda: state["playing"],
+    )
+
+    def fake_stop():
+        state["playing"] = False
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui.stop",
+        fake_stop,
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        app._last_playback_active = True
+
+        calls = []
+
+        original_refresh_bindings = (
+            app.refresh_bindings
+        )
+
+        def refresh_bindings():
+            calls.append(
+                state["playing"]
+            )
+            return original_refresh_bindings()
+
+        monkeypatch.setattr(
+            app,
+            "refresh_bindings",
+            refresh_bindings,
+        )
+
+        app.action_stop_playback()
+
+        assert (
+            app._last_playback_active
+            is False
+        )
+        assert False in calls
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_refreshes_bindings_immediately_on_play(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    state = {
+        "playing": False,
+    }
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui.is_playing",
+        lambda: state["playing"],
+    )
+
+    def fake_play(
+        dataset,
+        turn,
+        *,
+        blocking,
+    ):
+        state["playing"] = True
+
+        return (
+            "review",
+            dataset / "review.wav",
+        )
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui."
+        "play_preferred_review_audio",
+        fake_play,
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        app._last_playback_active = False
+
+        calls = []
+
+        original_refresh_bindings = (
+            app.refresh_bindings
+        )
+
+        def refresh_bindings():
+            calls.append(
+                state["playing"]
+            )
+            return original_refresh_bindings()
+
+        monkeypatch.setattr(
+            app,
+            "refresh_bindings",
+            refresh_bindings,
+        )
+
+        app.action_play_preferred()
+
+        assert (
+            app._last_playback_active
+            is True
+        )
+        assert True in calls
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_refreshes_bindings_immediately_on_raw_play(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    state = {"playing": False}
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui.is_playing",
+        lambda: state["playing"],
+    )
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui.raw_representation",
+        lambda turn: {"path": "raw.wav"},
+    )
+
+    def fake_play(
+        dataset,
+        representation,
+        *,
+        blocking,
+    ):
+        state["playing"] = True
+        return dataset / "raw.wav"
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui.play_representation",
+        fake_play,
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        app._last_playback_active = False
+
+        app.action_play_raw()
+
+        assert (
+            app._last_playback_active
+            is True
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_refreshes_bindings_immediately_on_context_play(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.sources.append(
+        {
+            "schema_version": 1,
+            "record_type": "source",
+            "id": "source_001",
+            "metadata": {},
+        }
+    )
+
+    session = ReviewerSession(storage)
+
+    state = {"playing": False}
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui.is_playing",
+        lambda: state["playing"],
+    )
+
+    def fake_context(
+        source,
+        turn,
+        *,
+        padding,
+        blocking,
+    ):
+        state["playing"] = True
+
+        return (
+            "center",
+            tmp_path / "center.wav",
+            0.0,
+            2.0,
+        )
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui.play_turn_context",
+        fake_context,
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        app._last_playback_active = False
+
+        app.action_play_context()
+
+        assert (
+            app._last_playback_active
             is True
         )

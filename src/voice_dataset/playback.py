@@ -237,6 +237,15 @@ def stop() -> None:
     sd.stop()
 
 
+def is_playing() -> bool:
+    try:
+        stream = sd.get_stream()
+    except RuntimeError:
+        return False
+
+    return bool(stream.active)
+
+
 def play_representation(
     dataset: Path,
     representation: dict[str, Any],

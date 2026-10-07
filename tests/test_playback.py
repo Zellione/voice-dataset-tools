@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -434,3 +435,48 @@ def test_play_turn_context_uses_original_media(
     assert extraction["channel_mode"] == "center"
 
     assert len(played) == 1
+
+
+def test_is_playing_false_without_stream(
+    monkeypatch,
+):
+    def no_stream():
+        raise RuntimeError(
+            "play() was not called yet"
+        )
+
+    monkeypatch.setattr(
+        playback.sd,
+        "get_stream",
+        no_stream,
+    )
+
+    assert playback.is_playing() is False
+
+
+def test_is_playing_true_for_active_stream(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        playback.sd,
+        "get_stream",
+        lambda: SimpleNamespace(
+            active=True,
+        ),
+    )
+
+    assert playback.is_playing() is True
+
+
+def test_is_playing_false_for_inactive_stream(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        playback.sd,
+        "get_stream",
+        lambda: SimpleNamespace(
+            active=False,
+        ),
+    )
+
+    assert playback.is_playing() is False

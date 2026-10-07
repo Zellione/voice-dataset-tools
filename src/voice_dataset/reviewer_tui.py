@@ -15,6 +15,7 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 
 from .playback import (
+    is_playing,
     play_preferred_review_audio,
     play_representation,
     play_turn_context,
@@ -894,6 +895,7 @@ class ReviewerTUI(App[None]):
         self.session = session
         self.embedding_names = embedding_names
         self.context_padding = context_padding
+        self._last_playback_active = False
 
     def _current_turn(self) -> dict:
         turn = self.session.current()
@@ -924,6 +926,8 @@ class ReviewerTUI(App[None]):
                 blocking=False,
             )
 
+            self._sync_playback_state()
+
             self._set_status(
                 f"Playing {name}: {path}"
             )
@@ -950,6 +954,8 @@ class ReviewerTUI(App[None]):
                 representation,
                 blocking=False,
             )
+
+            self._sync_playback_state()
 
             self._set_status(
                 f"Playing raw: {path}"
@@ -990,6 +996,8 @@ class ReviewerTUI(App[None]):
                 blocking=False,
             )
 
+            self._sync_playback_state()
+
             self._set_status(
                 f"Playing context {name}: "
                 f"{start:.3f}-{end:.3f} "
@@ -1007,6 +1015,7 @@ class ReviewerTUI(App[None]):
 
     def action_stop_playback(self) -> None:
         stop()
+        self._sync_playback_state()
         self._set_status(
             "Playback stopped."
         )
@@ -1738,7 +1747,38 @@ class ReviewerTUI(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
+        self._last_playback_active = (
+            is_playing()
+        )
+
         self._refresh_view()
+
+        self.set_interval(
+            0.1,
+            self._poll_playback_state,
+        )
+
+    def _poll_playback_state(
+        self,
+    ) -> None:
+        self._sync_playback_state()
+
+    def _sync_playback_state(
+        self,
+    ) -> None:
+        playback_active = is_playing()
+
+        if (
+            playback_active
+            == self._last_playback_active
+        ):
+            return
+
+        self._last_playback_active = (
+            playback_active
+        )
+
+        self.refresh_bindings()
 
     def _current_view(
         self,
@@ -1935,6 +1975,9 @@ class ReviewerTUI(App[None]):
                 return status != "complete"
 
             return status != "clipped"
+
+        if action == "stop_playback":
+            return is_playing()
 
         return super().check_action(
             action,
