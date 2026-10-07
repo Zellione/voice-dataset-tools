@@ -1887,27 +1887,40 @@ async def test_reviewer_tui_shows_split_with_valid_split_point(
         )
 
 
-def test_voice_picker_hides_assign_without_voices():
-    screen = VoicePickerScreen(
-        voices=[],
-        candidates=(),
+@pytest.mark.asyncio
+async def test_voice_picker_hides_assign_shortcut_without_voices(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
     )
 
-    assert (
-        screen.check_action(
-            "assign",
-            (),
-        )
-        is False
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
     )
 
-    assert (
-        screen.check_action(
-            "new_voice",
-            (),
+    async with app.run_test() as pilot:
+        await pilot.press("v")
+        await pilot.pause()
+
+        shortcuts = str(
+            app.screen.query_one(
+                "#voice-shortcuts",
+                Static,
+            ).render()
         )
-        is True
-    )
+
+        assert "Enter Assign" not in shortcuts
+        assert "n New Voice" in shortcuts
+        assert "Esc Cancel" in shortcuts
 
 
 def test_voice_picker_shows_assign_with_voice():
@@ -1942,6 +1955,17 @@ async def test_voice_picker_has_contextual_footer(
         source_start=1.0,
     )
 
+    storage.add_voice(
+        VoiceProfile(
+            id="voice_001",
+            character="Vander",
+            language="en",
+            aliases=[],
+            ignored=False,
+            notes=None,
+        )
+    )
+
     session = ReviewerSession(storage)
 
     app = ReviewerTUI(
@@ -1959,11 +1983,20 @@ async def test_voice_picker_has_contextual_footer(
             VoicePickerScreen,
         )
 
-        footer = app.screen.query_one(
-            Footer
+        assert list(
+            app.screen.query(Footer)
+        ) == []
+
+        shortcuts = str(
+            app.screen.query_one(
+                "#voice-shortcuts",
+                Static,
+            ).render()
         )
 
-        assert footer is not None
+        assert "Enter Assign" in shortcuts
+        assert "n New Voice" in shortcuts
+        assert "Esc Cancel" in shortcuts
 
 
 @pytest.mark.asyncio
@@ -2292,6 +2325,13 @@ async def test_reviewer_tui_hides_boundary_complete_when_already_complete(
                     "status": "complete",
                 },
             },
+            "metadata": {
+                **(turn.get("metadata") or {}),
+                "boundary_evidence": {
+                    "near_source_start": True,
+                    "near_source_end": False,
+                },
+            },
         },
     )
 
@@ -2341,6 +2381,13 @@ async def test_reviewer_tui_hides_boundary_clipped_when_already_clipped(
                 **(turn.get("review") or {}),
                 "boundary": {
                     "status": "clipped",
+                },
+            },
+            "metadata": {
+                **(turn.get("metadata") or {}),
+                "boundary_evidence": {
+                    "near_source_start": True,
+                    "near_source_end": False,
                 },
             },
         },
@@ -3274,3 +3321,41 @@ async def test_new_voice_screen_shows_enter_create_for_language(
 
         assert "Enter Create" in footer
         assert "Esc Cancel" in footer
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_hides_boundary_actions_without_evidence(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "mark_boundary_complete",
+                (),
+            )
+            is False
+        )
+
+        assert (
+            app.check_action(
+                "mark_boundary_clipped",
+                (),
+            )
+            is False
+        )

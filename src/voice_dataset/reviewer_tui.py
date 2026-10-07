@@ -320,6 +320,11 @@ class VoicePickerScreen(
         margin-top: 1;
         margin-bottom: 1;
     }
+
+    #voice-shortcuts {
+        height: 1;
+        padding: 0 1;
+    }
     """
 
     BINDINGS = [
@@ -407,7 +412,19 @@ class VoicePickerScreen(
                     id="voice-options",
                 )
 
-        yield Footer()
+        yield Static(
+            (
+                "Enter Assign   "
+                "n New Voice   "
+                "Esc Cancel"
+                if self.voice_ids
+                else (
+                    "n New Voice   "
+                    "Esc Cancel"
+                )
+            ),
+            id="voice-shortcuts",
+        )
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -2113,6 +2130,25 @@ class ReviewerTUI(App[None]):
             boundary = review.get("boundary") or {}
 
             if not isinstance(boundary, dict):
+                return False
+
+            metadata = turn.get("metadata") or {}
+
+            if not isinstance(metadata, dict):
+                return False
+
+            evidence = (
+                metadata.get("boundary_evidence")
+                or {}
+            )
+
+            if not isinstance(evidence, dict):
+                return False
+
+            if not (
+                evidence.get("near_source_start")
+                or evidence.get("near_source_end")
+            ):
                 return False
 
             status = boundary.get("status")
