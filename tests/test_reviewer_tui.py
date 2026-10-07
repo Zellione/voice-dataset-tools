@@ -198,6 +198,22 @@ async def test_reviewer_tui_plays_preferred_audio(
         source_start=1.0,
     )
 
+    storage.update_turn(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "representations": {
+                "review": {
+                    "path": (
+                        "turns/turn_000001/"
+                        "review.wav"
+                    ),
+                    "purposes": ["review"],
+                },
+            },
+        },
+    )
+
     session = ReviewerSession(storage)
 
     calls = []
@@ -376,6 +392,12 @@ async def test_reviewer_tui_plays_context(
             "schema_version": 1,
             "record_type": "source",
             "id": "source_001",
+            "representations": {
+                "center": {
+                    "path": "audio/source_001/center.wav",
+                    "purposes": ["context"],
+                },
+            },
             "metadata": {},
         }
     )
@@ -2753,5 +2775,240 @@ async def test_reviewer_tui_refreshes_bindings_immediately_on_context_play(
 
         assert (
             app._last_playback_active
+            is True
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_hides_play_without_review_representation(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.update_turn(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "representations": {},
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "play_preferred",
+                (),
+            )
+            is False
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_shows_play_with_review_representation(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.update_turn(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "representations": {
+                "review": {
+                    "path": (
+                        "turns/turn_000001/"
+                        "review.wav"
+                    ),
+                    "purposes": ["review"],
+                },
+            },
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "play_preferred",
+                (),
+            )
+            is True
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_hides_raw_without_raw_representation(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui.raw_representation",
+        lambda turn: (_ for _ in ()).throw(
+            ValueError("no raw representation")
+        ),
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "play_raw",
+                (),
+            )
+            is False
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_shows_raw_with_raw_representation(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui.raw_representation",
+        lambda turn: {
+            "path": "turns/turn_000001/raw.wav",
+        },
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "play_raw",
+                (),
+            )
+            is True
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_hides_context_without_source(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "play_context",
+                (),
+            )
+            is False
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_shows_context_with_context_representation(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.sources.append(
+        {
+            "schema_version": 1,
+            "record_type": "source",
+            "id": "source_001",
+            "representations": {
+                "center": {
+                    "path": "audio/source/center.wav",
+                    "purposes": ["context"],
+                },
+            },
+            "metadata": {},
+        }
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert (
+            app.check_action(
+                "play_context",
+                (),
+            )
             is True
         )

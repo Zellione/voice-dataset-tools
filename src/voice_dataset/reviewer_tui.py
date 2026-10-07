@@ -19,6 +19,8 @@ from .playback import (
     play_preferred_review_audio,
     play_representation,
     play_turn_context,
+    preferred_review_representation,
+    preferred_context_representation,
     stop,
 )
 from .reviewer import (
@@ -1978,6 +1980,69 @@ class ReviewerTUI(App[None]):
 
         if action == "stop_playback":
             return is_playing()
+
+        if action == "play_preferred":
+            turn = self.session.current()
+
+            if turn is None:
+                return False
+
+            try:
+                preferred_review_representation(
+                    turn
+                )
+            except ValueError:
+                return False
+
+            return True
+
+        if action == "play_raw":
+            turn = self.session.current()
+
+            if turn is None:
+                return False
+
+            try:
+                raw_representation(
+                    turn
+                )
+            except (
+                ValueError,
+                KeyError,
+            ):
+                return False
+
+            return True
+
+        if action == "play_context":
+            turn = self.session.current()
+
+            if turn is None:
+                return False
+
+            source_id = turn.get("source_id")
+
+            if (
+                not isinstance(source_id, str)
+                or not source_id
+            ):
+                return False
+
+            source = self.session.storage.get_source(
+                source_id
+            )
+
+            if source is None:
+                return False
+
+            try:
+                preferred_context_representation(
+                    source
+                )
+            except ValueError:
+                return False
+
+            return True
 
         return super().check_action(
             action,
