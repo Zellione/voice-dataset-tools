@@ -774,6 +774,11 @@ class ReviewerTUI(App[None]):
         height: 1;
         padding: 0 2;
     }
+    #shortcuts-primary,
+    #shortcuts-secondary {
+        height: 1;
+        padding: 0 1;
+    }
     """
 
     BINDINGS = [
@@ -885,6 +890,98 @@ class ReviewerTUI(App[None]):
             "Split",
         ),
     ]
+
+    PRIMARY_SHORTCUT_ACTIONS = {
+        "previous_turn",
+        "next_turn",
+        "play_preferred",
+        "play_context",
+        "play_raw",
+        "stop_playback",
+        "show_help",
+        "quit",
+    }
+
+    SECONDARY_SHORTCUT_ACTIONS = {
+        "assign_voice",
+        "mark_reviewed",
+        "mark_pending",
+        "mark_unknown",
+        "ignore_turn",
+        "edit_transcript",
+        "edit_language",
+        "mark_boundary_complete",
+        "mark_boundary_clipped",
+        "accept_alignment_recovery",
+        "accept_edge_recovery",
+        "merge_with_next",
+        "split_turn",
+    }
+
+    @staticmethod
+    def _shortcut_key(binding: Binding) -> str:
+        if binding.key_display:
+            return binding.key_display
+
+        key = binding.key.split(",", 1)[0]
+
+        return {
+            "left": "←",
+            "right": "→",
+            "question_mark": "?",
+            "space": "Space",
+        }.get(
+            key,
+            key,
+        )
+
+    def _format_shortcut_group(
+        self,
+        actions: set[str],
+    ) -> str:
+        items = []
+
+        for binding in self.BINDINGS:
+            if binding.action not in actions:
+                continue
+
+            if (
+                self.check_action(
+                    binding.action,
+                    (),
+                )
+                is False
+            ):
+                continue
+
+            key = self._shortcut_key(
+                binding
+            )
+
+            items.append(
+                f"{key} {binding.description}"
+            )
+
+        return "   ".join(items)
+
+    def _refresh_shortcuts(self) -> None:
+        self.query_one(
+            "#shortcuts-primary",
+            Static,
+        ).update(
+            self._format_shortcut_group(
+                self.PRIMARY_SHORTCUT_ACTIONS
+            )
+        )
+
+        self.query_one(
+            "#shortcuts-secondary",
+            Static,
+        ).update(
+            self._format_shortcut_group(
+                self.SECONDARY_SHORTCUT_ACTIONS
+            )
+        )
 
     def __init__(
         self,
@@ -1746,7 +1843,14 @@ class ReviewerTUI(App[None]):
                     )
 
         yield Static(id="status")
-        yield Footer()
+
+        yield Static(
+            id="shortcuts-primary",
+        )
+
+        yield Static(
+            id="shortcuts-secondary",
+        )
 
     def on_mount(self) -> None:
         self._last_playback_active = (
@@ -1781,6 +1885,7 @@ class ReviewerTUI(App[None]):
         )
 
         self.refresh_bindings()
+        self._refresh_shortcuts()
 
     def _current_view(
         self,
@@ -2079,15 +2184,7 @@ class ReviewerTUI(App[None]):
             ).update("No speech turns to review.")
 
             self.refresh_bindings()
-
-            self.query_one(
-                "#status",
-                Static,
-            ).update(
-                "No speech turns to review."
-            )
-
-            self.refresh_bindings()
+            self._refresh_shortcuts()
             return
 
         self.query_one(
@@ -2129,6 +2226,7 @@ class ReviewerTUI(App[None]):
         )
 
         self.refresh_bindings()
+        self._refresh_shortcuts()
 
     def _format_evidence(
         self,

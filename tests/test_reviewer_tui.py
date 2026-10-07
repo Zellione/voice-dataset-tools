@@ -3012,3 +3012,126 @@ async def test_reviewer_tui_shows_context_with_context_representation(
             )
             is True
         )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_uses_two_shortcut_rows(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        assert list(
+            app.screen.query(Footer)
+        ) == []
+
+        assert app.screen.query_one(
+            "#shortcuts-primary",
+            Static,
+        ) is not None
+
+        assert app.screen.query_one(
+            "#shortcuts-secondary",
+            Static,
+        ) is not None
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_renders_contextual_shortcut_rows(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    add_turn(
+        storage,
+        "turn_000002",
+        source_start=2.0,
+    )
+
+    storage.update_turn(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "representations": {
+                "review": {
+                    "path": (
+                        "turns/turn_000001/"
+                        "review.wav"
+                    ),
+                    "purposes": ["review"],
+                },
+            },
+        },
+    )
+
+    storage.sources.append(
+        {
+            "schema_version": 1,
+            "record_type": "source",
+            "id": "source_001",
+            "representations": {
+                "center": {
+                    "path": "audio/source_001/center.wav",
+                    "purposes": ["context"],
+                },
+            },
+            "metadata": {},
+        }
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        primary = str(
+            app.screen.query_one(
+                "#shortcuts-primary",
+                Static,
+            ).render()
+        )
+
+        secondary = str(
+            app.screen.query_one(
+                "#shortcuts-secondary",
+                Static,
+            ).render()
+        )
+
+        assert "Next" in primary
+        assert "Play" in primary
+        assert "Context" in primary
+        assert "Help" in primary
+        assert "Quit" in primary
+
+        assert "Previous" not in primary
+        assert "Stop" not in primary
+
+        assert "Voice" in secondary
+        assert "Reviewed" in secondary
+        assert "Transcript" in secondary
+        assert "Language" in secondary
