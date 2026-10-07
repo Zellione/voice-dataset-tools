@@ -17,6 +17,7 @@ class ReviewerBoundaryView:
 class ReviewerAssignmentView:
     status: str
     voice_id: str | None
+    character: str | None
 
 
 @dataclass(frozen=True)
@@ -417,6 +418,26 @@ def build_reviewer_turn_view(
     if not isinstance(assignment_voice_id, str):
         assignment_voice_id = None
 
+    assignment_character = None
+
+    if assignment_voice_id is not None:
+        voice = voices.get(
+            assignment_voice_id
+        )
+
+        if isinstance(voice, dict):
+            character = voice.get(
+                "character"
+            )
+
+            if (
+                isinstance(character, str)
+                and character
+            ):
+                assignment_character = (
+                    character
+                )
+
     return ReviewerTurnView(
         turn_id=str(turn["id"]),
         source_id=str(turn["source_id"]),
@@ -471,6 +492,7 @@ def build_reviewer_turn_view(
         assignment=ReviewerAssignmentView(
             status=assignment_status,
             voice_id=assignment_voice_id,
+            character=assignment_character,
         ),
         automatic_pipeline=ReviewerAutomaticPipelineView(
             status=auto_status,

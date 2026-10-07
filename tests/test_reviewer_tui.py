@@ -13,6 +13,7 @@ from voice_dataset.reviewer_tui import (
     VoicePickerScreen,
 )
 from voice_dataset.storage import DatasetStorage
+from voice_dataset.schema import VoiceProfile
 
 from textual.widgets import (
     Footer,
@@ -1996,8 +1997,13 @@ async def test_new_voice_screen_has_contextual_footer(
             NewVoiceScreen,
         )
 
+        assert list(
+            app.screen.query(Footer)
+        ) == []
+        
         assert app.screen.query_one(
-            Footer
+            "#new-voice-shortcuts",
+            Static,
         ) is not None
 
 
@@ -3135,3 +3141,136 @@ async def test_reviewer_tui_renders_contextual_shortcut_rows(
         assert "Reviewed" in secondary
         assert "Transcript" in secondary
         assert "Language" in secondary
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_shows_assigned_voice_character(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.add_voice(
+        VoiceProfile(
+            id="voice_001",
+            character="Vander",
+            language="en",
+            aliases=[],
+            ignored=False,
+            notes=None,
+        )
+    )
+
+    storage.update_turn(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "assignment": {
+                "status": "assigned",
+                "voice_id": "voice_001",
+                "method": "manual",
+                "confidence": None,
+            },
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        evidence = str(
+            app.screen.query_one(
+                "#evidence-content",
+                Static,
+            ).render()
+        )
+
+        assert "voice_001" in evidence
+        assert "Vander" in evidence
+
+
+@pytest.mark.asyncio
+async def test_new_voice_screen_shows_enter_next_for_character(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        app.push_screen(
+            NewVoiceScreen()
+        )
+        await pilot.pause()
+
+        footer = str(
+            app.screen.query_one(
+                "#new-voice-shortcuts",
+                Static,
+            ).render()
+        )
+
+        assert "Enter Next" in footer
+        assert "Esc Cancel" in footer
+
+
+@pytest.mark.asyncio
+async def test_new_voice_screen_shows_enter_create_for_language(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        app.push_screen(
+            NewVoiceScreen()
+        )
+        await pilot.pause()
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        footer = str(
+            app.screen.query_one(
+                "#new-voice-shortcuts",
+                Static,
+            ).render()
+        )
+
+        assert "Enter Create" in footer
+        assert "Esc Cancel" in footer

@@ -460,3 +460,34 @@ def test_build_reviewer_turn_view_maps_start_edge_recovery():
     assert edge.conflicting_whisper_text == (
         "Something else"
     )
+
+
+def test_build_reviewer_turn_view_maps_assigned_voice_character():
+    view = build_reviewer_turn_view(
+        {
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 2.0,
+            "assignment": {
+                "status": "assigned",
+                "voice_id": "voice_001",
+                "method": "manual",
+                "confidence": None,
+            },
+        },
+        position=1,
+        total=1,
+        voices={
+            "voice_001": {
+                "id": "voice_001",
+                "character": "Vander",
+                "language": "en",
+            },
+        },
+        speaker_candidates=[],
+    )
+
+    assert view.assignment.status == "assigned"
+    assert view.assignment.voice_id == "voice_001"
+    assert view.assignment.character == "Vander"

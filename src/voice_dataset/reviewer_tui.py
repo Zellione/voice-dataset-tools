@@ -145,6 +145,11 @@ class NewVoiceScreen(
     Input {
         margin-bottom: 1;
     }
+
+    #new-voice-shortcuts {
+        height: 1;
+        padding: 0 1;
+    }
     """
 
     BINDINGS = [
@@ -174,13 +179,43 @@ class NewVoiceScreen(
                 id="new-voice-language",
             )
 
-        yield Footer()
+        yield Static(
+            id="new-voice-shortcuts",
+        )
+
+    def _refresh_shortcuts(
+        self,
+        *,
+        field: str | None = None,
+    ) -> None:
+        if field is None:
+            focused = self.focused
+
+            field = (
+                focused.id
+                if isinstance(focused, Input)
+                else None
+            )
+
+        if field == "new-voice-character":
+            content = "Enter Next   Esc Cancel"
+        else:
+            content = "Enter Create   Esc Cancel"
+
+        self.query_one(
+            "#new-voice-shortcuts",
+            Static,
+        ).update(content)
 
     def on_mount(self) -> None:
         self.query_one(
             "#new-voice-character",
             Input,
         ).focus()
+
+        self._refresh_shortcuts(
+            field="new-voice-character",
+        )
 
     def on_input_submitted(
         self,
@@ -191,6 +226,10 @@ class NewVoiceScreen(
                 "#new-voice-language",
                 Input,
             ).focus()
+
+            self._refresh_shortcuts(
+                field="new-voice-language",
+            )
             return
 
         self.action_create()
@@ -2243,7 +2282,22 @@ class ReviewerTUI(App[None]):
             ),
             (
                 "Assigned:  "
-                f"{view.assignment.status}"
+                + (
+                    "  ".join(
+                        part
+                        for part in (
+                            view.assignment.voice_id,
+                            view.assignment.character,
+                        )
+                        if part
+                    )
+                    if (
+                        view.assignment.status
+                        == "assigned"
+                        and view.assignment.voice_id
+                    )
+                    else view.assignment.status
+                )
             ),
             (
                 "Auto:      "
