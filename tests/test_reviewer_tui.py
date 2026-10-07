@@ -2000,7 +2000,7 @@ async def test_new_voice_screen_has_contextual_footer(
         assert list(
             app.screen.query(Footer)
         ) == []
-        
+
         assert app.screen.query_one(
             "#new-voice-shortcuts",
             Static,
