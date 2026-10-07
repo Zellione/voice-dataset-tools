@@ -3359,3 +3359,43 @@ async def test_reviewer_tui_hides_boundary_actions_without_evidence(
             )
             is False
         )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_shows_language_in_evidence(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.update_turn(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "language": "en",
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test():
+        evidence = str(
+            app.screen.query_one(
+                "#evidence-content",
+                Static,
+            ).render()
+        )
+
+        assert "Language:" in evidence
+        assert "en" in evidence

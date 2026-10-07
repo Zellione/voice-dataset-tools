@@ -147,6 +147,8 @@ class NewVoiceScreen(
     }
 
     #new-voice-shortcuts {
+        dock: bottom;
+        width: 100%;
         height: 1;
         padding: 0 1;
     }
@@ -322,6 +324,8 @@ class VoicePickerScreen(
     }
 
     #voice-shortcuts {
+        dock: bottom;
+        width: 100%;
         height: 1;
         padding: 0 1;
     }
@@ -2334,6 +2338,10 @@ class ReviewerTUI(App[None]):
                     )
                     else view.assignment.status
                 )
+            ),
+            (
+                "Language:  "
+                f"{view.language or '-'}"
             ),
             (
                 "Auto:      "
