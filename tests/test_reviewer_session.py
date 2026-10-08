@@ -1328,3 +1328,91 @@ def test_session_create_and_assign_voice_requires_current_turn(
         )
 
     assert storage.voices.load() == []
+
+
+def test_session_trim_uses_prepared_operation_and_keeps_current_turn(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+    add_turn(
+        storage,
+        "turn_000002",
+        source_start=2.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    calls = []
+
+    def fake_trim(
+        storage_arg,
+        turn_id,
+        *,
+        source_start=None,
+        source_end=None,
+    ):
+        assert storage_arg is storage
+        assert turn_id == "turn_000001"
+
+        calls.append(
+            (
+                source_start,
+                source_end,
+            )
+        )
+
+        def update(record):
+            record["source_end"] = source_end
+            return record
+
+        return storage.update_turn(
+            turn_id,
+            update,
+        )
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_session."
+        "trim_and_prepare_turn",
+        fake_trim,
+    )
+
+    updated = session.trim(
+        source_end=1.75,
+    )
+
+    assert calls == [
+        (
+            None,
+            1.75,
+        )
+    ]
+
+    assert updated["source_end"] == 1.75
+
+    assert (
+        session.current_turn_id
+        == "turn_000001"
+    )
+    assert session.position == 1
+
+
+def test_session_trim_requires_current_turn(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+    session = ReviewerSession(storage)
+
+    with pytest.raises(
+        ValueError,
+        match="Reviewer session has no current turn",
+    ):
+        session.trim(
+            source_end=1.0,
+        )

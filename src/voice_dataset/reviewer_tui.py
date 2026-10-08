@@ -120,6 +120,11 @@ class NewVoiceRequest:
     character: str | None
     language: str | None
 
+@dataclass(frozen=True)
+class TrimTurnRequest:
+    source_start: float
+    source_end: float
+
 
 class NewVoiceScreen(
     ModalScreen[NewVoiceRequest | None]
@@ -782,6 +787,125 @@ class SplitTurnScreen(
         self.dismiss(None)
 
 
+class TrimTurnScreen(
+    ModalScreen[TrimTurnRequest | None]
+):
+    CSS = """
+    TrimTurnScreen {
+        align: center middle;
+    }
+
+    #trim-dialog {
+        width: 70;
+        height: auto;
+        padding: 1 2;
+        border: round $primary;
+        background: $surface;
+    }
+
+    #trim-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    Input {
+        margin-bottom: 1;
+    }
+
+    #trim-shortcuts {
+        dock: bottom;
+        width: 100%;
+        height: 1;
+        padding: 0 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding(
+            "escape",
+            "cancel",
+            "Cancel",
+        ),
+    ]
+
+    def __init__(
+        self,
+        *,
+        source_start: float,
+        source_end: float,
+    ) -> None:
+        super().__init__()
+        self.source_start = source_start
+        self.source_end = source_end
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="trim-dialog"):
+            yield Static(
+                "Trim Turn",
+                id="trim-title",
+            )
+
+            yield Static("Start")
+            yield Input(
+                value=f"{self.source_start:.3f}",
+                id="trim-start",
+            )
+
+            yield Static("End")
+            yield Input(
+                value=f"{self.source_end:.3f}",
+                id="trim-end",
+            )
+
+        yield Static(
+            "Enter Apply   Esc Cancel",
+            id="trim-shortcuts",
+        )
+
+    def on_mount(self) -> None:
+        self.query_one(
+            "#trim-start",
+            Input,
+        ).focus()
+
+    def on_input_submitted(
+        self,
+        event: Input.Submitted,
+    ) -> None:
+        if event.input.id == "trim-start":
+            self.query_one(
+                "#trim-end",
+                Input,
+            ).focus()
+            return
+
+        try:
+            source_start = float(
+                self.query_one(
+                    "#trim-start",
+                    Input,
+                ).value
+            )
+            source_end = float(
+                self.query_one(
+                    "#trim-end",
+                    Input,
+                ).value
+            )
+        except ValueError:
+            return
+
+        self.dismiss(
+            TrimTurnRequest(
+                source_start=source_start,
+                source_end=source_end,
+            )
+        )
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class ReviewerTUI(App[None]):
     TITLE = "Voice Dataset Reviewer"
 
@@ -949,6 +1073,11 @@ class ReviewerTUI(App[None]):
             "split_turn",
             "Split",
         ),
+        Binding(
+            "z",
+            "trim_turn",
+            "Trim",
+        ),
     ]
 
     PRIMARY_SHORTCUT_ACTIONS = {
@@ -976,6 +1105,7 @@ class ReviewerTUI(App[None]):
         "accept_edge_recovery",
         "merge_with_next",
         "split_turn",
+        "trim_turn",
     }
 
     @staticmethod
@@ -993,6 +1123,52 @@ class ReviewerTUI(App[None]):
         }.get(
             key,
             key,
+        )
+
+    def _trim_requested(
+        self,
+        request: TrimTurnRequest | None,
+    ) -> None:
+        if request is None:
+            return
+
+        try:
+            self.session.trim(
+                source_start=request.source_start,
+                source_end=request.source_end,
+            )
+
+            self._refresh_view()
+
+            self._set_status(
+                "Trimmed turn."
+            )
+        except (
+            ValueError,
+            KeyError,
+            RuntimeError,
+            OSError,
+        ) as exc:
+            self._set_status(
+                f"Trim failed: {exc}"
+            )
+
+    def action_trim_turn(self) -> None:
+        turn = self.session.current()
+
+        if turn is None:
+            return
+
+        self.push_screen(
+            TrimTurnScreen(
+                source_start=float(
+                    turn["source_start"]
+                ),
+                source_end=float(
+                    turn["source_end"]
+                ),
+            ),
+            self._trim_requested,
         )
 
     def _format_shortcut_group(

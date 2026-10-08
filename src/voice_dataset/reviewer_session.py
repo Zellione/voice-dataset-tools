@@ -20,6 +20,7 @@ from .turn_curation import (
     accept_edge_recovery_and_prepare,
     merge_and_prepare_turns,
     split_and_prepare_turn,
+    trim_and_prepare_turn,
 )
 from .voices import (
     assign_turn,
@@ -408,6 +409,27 @@ class ReviewerSession:
         )
 
         return left, right
+
+    def trim(
+        self,
+        *,
+        source_start: float | None = None,
+        source_end: float | None = None,
+    ) -> dict[str, Any]:
+        turn_id = self._require_current_id()
+
+        updated = trim_and_prepare_turn(
+            self.storage,
+            turn_id,
+            source_start=source_start,
+            source_end=source_end,
+        )
+
+        self.refresh(
+            anchor_turn_id=updated["id"],
+        )
+
+        return updated
 
     def speaker_candidates(
         self,

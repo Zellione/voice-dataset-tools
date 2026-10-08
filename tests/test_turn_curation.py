@@ -1045,3 +1045,356 @@ def test_accept_edge_recovery_and_prepare_reprepares_source(
     assert turn["embeddings"]["ecapa"][
         "path"
     ] == "prepared.npy"
+
+
+def test_trim_and_prepare_turn_updates_end_and_reprepares_source(
+    tmp_path,
+    monkeypatch,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    storage.turns.append(
+        {
+            "schema_version": 1,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 0.9,
+            "source_end": 1.9,
+            "source_regions": [
+                "region_000001",
+            ],
+            "language": "en",
+            "transcript": "Manually reviewed transcript",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {},
+        }
+    )
+
+    prepared = []
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        lambda storage_arg, source_id:
+            prepared.append(source_id),
+    )
+
+    from voice_dataset.turn_curation import (
+        trim_and_prepare_turn,
+    )
+
+    result = trim_and_prepare_turn(
+        storage,
+        "turn_000001",
+        source_end=1.6,
+    )
+
+    assert result["source_start"] == 0.9
+    assert result["source_end"] == 1.6
+
+    assert (
+        result["transcript"]
+        == "Manually reviewed transcript"
+    )
+    assert result["language"] == "en"
+
+    assert result["metadata"]["word_range"] == {
+        "start": 0,
+        "end": 1,
+    }
+
+    assert result["metadata"]["continuous_asr"] == {
+        "evidence": "qwen3",
+        "word_indices": [0, 1],
+    }
+
+    assert prepared == ["source_001"]
+
+
+def test_trim_and_prepare_turn_rejects_invalid_range_without_mutation(
+    tmp_path,
+    monkeypatch,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    storage.turns.append(
+        {
+            "schema_version": 1,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 0.9,
+            "source_end": 1.9,
+            "source_regions": [
+                "region_000001",
+            ],
+            "language": "en",
+            "transcript": "hello there",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {},
+        }
+    )
+
+    prepared = []
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        lambda storage_arg, source_id:
+            prepared.append(source_id),
+    )
+
+    from voice_dataset.turn_curation import (
+        trim_and_prepare_turn,
+    )
+
+    before = storage.get_turn(
+        "turn_000001"
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="source_start must be before source_end",
+    ):
+        trim_and_prepare_turn(
+            storage,
+            "turn_000001",
+            source_start=1.7,
+            source_end=1.6,
+        )
+
+    after = storage.get_turn(
+        "turn_000001"
+    )
+
+    assert after == before
+    assert prepared == []
+
+
+def test_trim_and_prepare_turn_rejects_expansion_without_mutation(
+    tmp_path,
+    monkeypatch,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    storage.turns.append(
+        {
+            "schema_version": 1,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 0.9,
+            "source_end": 1.9,
+            "source_regions": [
+                "region_000001",
+            ],
+            "language": "en",
+            "transcript": "hello there",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {},
+        }
+    )
+
+    prepared = []
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        lambda storage_arg, source_id:
+            prepared.append(source_id),
+    )
+
+    from voice_dataset.turn_curation import (
+        trim_and_prepare_turn,
+    )
+
+    before = storage.get_turn(
+        "turn_000001"
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Trim must stay within current turn range",
+    ):
+        trim_and_prepare_turn(
+            storage,
+            "turn_000001",
+            source_start=0.8,
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="Trim must stay within current turn range",
+    ):
+        trim_and_prepare_turn(
+            storage,
+            "turn_000001",
+            source_end=2.0,
+        )
+
+    after = storage.get_turn(
+        "turn_000001"
+    )
+
+    assert after == before
+    assert prepared == []
+
+
+def test_trim_and_prepare_turn_rejects_word_loss_without_mutation(
+    tmp_path,
+    monkeypatch,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    storage.turns.append(
+        {
+            "schema_version": 1,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 0.9,
+            "source_end": 1.9,
+            "source_regions": [
+                "region_000001",
+            ],
+            "language": "en",
+            "transcript": "hello there",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {},
+        }
+    )
+
+    prepared = []
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        lambda storage_arg, source_id:
+            prepared.append(source_id),
+    )
+
+    from voice_dataset.turn_curation import (
+        trim_and_prepare_turn,
+    )
+
+    before = storage.get_turn(
+        "turn_000001"
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Trim would change continuous ASR words",
+    ):
+        trim_and_prepare_turn(
+            storage,
+            "turn_000001",
+            source_end=1.35,
+        )
+
+    after = storage.get_turn(
+        "turn_000001"
+    )
+
+    assert after == before
+    assert prepared == []
+
+
+def test_trim_and_prepare_turn_requires_reconciliation_before_trim(
+    tmp_path,
+    monkeypatch,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    def remove_reconciliation(record):
+        del record["metadata"][
+            "utterance_reconciliation"
+        ]
+        return record
+
+    storage.update_source(
+        "source_001",
+        remove_reconciliation,
+    )
+
+    storage.turns.append(
+        {
+            "schema_version": 1,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 0.9,
+            "source_end": 1.9,
+            "source_regions": [
+                "region_000001",
+            ],
+            "language": "en",
+            "transcript": "hello there",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {},
+        }
+    )
+
+    prepared = []
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        lambda storage_arg, source_id:
+            prepared.append(source_id),
+    )
+
+    from voice_dataset.turn_curation import (
+        trim_and_prepare_turn,
+    )
+
+    before = storage.get_turn(
+        "turn_000001"
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="no completed utterance reconciliation",
+    ):
+        trim_and_prepare_turn(
+            storage,
+            "turn_000001",
+            source_end=1.6,
+        )
+
+    after = storage.get_turn(
+        "turn_000001"
+    )
+
+    assert after == before
+    assert prepared == []

@@ -11,6 +11,8 @@ from voice_dataset.reviewer_tui import (
     ReviewerTUI,
     SplitTurnScreen,
     VoicePickerScreen,
+    TrimTurnRequest,
+    TrimTurnScreen,
 )
 from voice_dataset.storage import DatasetStorage
 from voice_dataset.schema import VoiceProfile
@@ -3478,3 +3480,279 @@ async def test_reviewer_tui_status_is_transient(
 
         assert str(status.render()) == ""
         assert status.display is False
+
+
+@pytest.mark.asyncio
+async def test_trim_turn_screen_returns_updated_range(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    result = []
+
+    async with app.run_test() as pilot:
+        app.push_screen(
+            TrimTurnScreen(
+                source_start=1.0,
+                source_end=2.0,
+            ),
+            result.append,
+        )
+        await pilot.pause()
+
+        assert isinstance(
+            app.screen,
+            TrimTurnScreen,
+        )
+
+        start_input = app.screen.query_one(
+            "#trim-start",
+            Input,
+        )
+        end_input = app.screen.query_one(
+            "#trim-end",
+            Input,
+        )
+
+        assert start_input.value == "1.000"
+        assert end_input.value == "2.000"
+
+        end_input.value = "1.750"
+        end_input.focus()
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert result == [
+        TrimTurnRequest(
+            source_start=1.0,
+            source_end=1.75,
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_trim_turn_screen_rejects_invalid_number(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    result = []
+
+    async with app.run_test() as pilot:
+        app.push_screen(
+            TrimTurnScreen(
+                source_start=1.0,
+                source_end=2.0,
+            ),
+            result.append,
+        )
+        await pilot.pause()
+
+        end_input = app.screen.query_one(
+            "#trim-end",
+            Input,
+        )
+
+        end_input.value = "nope"
+        end_input.focus()
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert isinstance(
+            app.screen,
+            TrimTurnScreen,
+        )
+
+        assert result == []
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_trims_current_turn(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    calls = []
+
+    def fake_trim(
+        *,
+        source_start=None,
+        source_end=None,
+    ):
+        calls.append(
+            (
+                source_start,
+                source_end,
+            )
+        )
+
+        def update(record):
+            record["source_start"] = source_start
+            record["source_end"] = source_end
+            return record
+
+        return storage.update_turn(
+            "turn_000001",
+            update,
+        )
+
+    monkeypatch.setattr(
+        session,
+        "trim",
+        fake_trim,
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("z")
+        await pilot.pause()
+
+        assert isinstance(
+            app.screen,
+            TrimTurnScreen,
+        )
+
+        end_input = app.screen.query_one(
+            "#trim-end",
+            Input,
+        )
+
+        end_input.value = "1.750"
+        end_input.focus()
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert calls == [
+            (
+                1.0,
+                1.75,
+            )
+        ]
+
+        assert (
+            "Trimmed turn"
+            in str(
+                app.screen.query_one(
+                    "#status",
+                    Static,
+                ).render()
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_reports_rejected_trim(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    def reject_trim(
+        *,
+        source_start=None,
+        source_end=None,
+    ):
+        raise ValueError(
+            "Trim would change continuous ASR words"
+        )
+
+    monkeypatch.setattr(
+        session,
+        "trim",
+        reject_trim,
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("z")
+        await pilot.pause()
+
+        end_input = app.screen.query_one(
+            "#trim-end",
+            Input,
+        )
+
+        end_input.value = "1.250"
+        end_input.focus()
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        status = str(
+            app.screen.query_one(
+                "#status",
+                Static,
+            ).render()
+        )
+
+        assert (
+            "Trim failed: "
+            "Trim would change continuous ASR words"
+            in status
+        )
+
+        turn = storage.get_turn(
+            "turn_000001"
+        )
+
+        assert turn is not None
+        assert turn["source_start"] == 1.0
+        assert turn["source_end"] == 2.0

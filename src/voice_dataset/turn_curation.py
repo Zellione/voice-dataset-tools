@@ -590,3 +590,131 @@ def split_and_prepare_turn(
         )
 
     return stored_left, stored_right
+
+
+def trim_and_prepare_turn(
+    storage: DatasetStorage,
+    turn_id: str,
+    *,
+    source_start: float | None = None,
+    source_end: float | None = None,
+    evidence_name: str = "qwen3",
+) -> dict[str, Any]:
+    turn = storage.get_turn(turn_id)
+
+    if turn is None:
+        raise KeyError(
+            f"Turn does not exist: {turn_id}"
+        )
+
+    current_start = float(
+        turn["source_start"]
+    )
+    current_end = float(
+        turn["source_end"]
+    )
+
+    new_start = (
+        current_start
+        if source_start is None
+        else float(source_start)
+    )
+    new_end = (
+        current_end
+        if source_end is None
+        else float(source_end)
+    )
+
+    if new_start >= new_end:
+        raise ValueError(
+            "source_start must be before source_end"
+        )
+
+    if (
+        new_start < current_start
+        or new_end > current_end
+    ):
+        raise ValueError(
+            "Trim must stay within current turn range"
+        )
+
+    source_id = turn.get("source_id")
+
+    if not isinstance(source_id, str) or not source_id:
+        raise ValueError(
+            f"Turn has invalid source_id: {turn_id}"
+        )
+
+    require_source_utterance_reconciliation(
+        storage,
+        source_id,
+        asr_evidence_name=evidence_name,
+    )
+
+    language = turn.get("language")
+
+    if language is not None and not isinstance(
+        language,
+        str,
+    ):
+        raise ValueError(
+            f"{turn_id}: invalid language"
+        )
+
+    current_projection = project_curated_turn(
+        storage,
+        source_id=source_id,
+        source_start=current_start,
+        source_end=current_end,
+        evidence_name=evidence_name,
+        language=language,
+    )
+
+    trimmed_projection = project_curated_turn(
+        storage,
+        source_id=source_id,
+        source_start=new_start,
+        source_end=new_end,
+        evidence_name=evidence_name,
+        language=language,
+    )
+
+    if (
+        current_projection.projection.word_indices
+        != trimmed_projection.projection.word_indices
+    ):
+        raise ValueError(
+            "Trim would change continuous ASR words"
+        )
+
+    def update(
+        record: dict[str, Any],
+    ) -> dict[str, Any]:
+        record["source_start"] = new_start
+        record["source_end"] = new_end
+        return record
+
+    storage.update_turn(
+        turn_id,
+        update,
+    )
+
+    _apply_projection(
+        storage,
+        turn_id,
+        trimmed_projection,
+    )
+
+    prepare_curated_source_turns(
+        storage,
+        source_id,
+    )
+
+    stored = storage.get_turn(turn_id)
+
+    if stored is None:
+        raise RuntimeError(
+            "Failed to read back trimmed turn"
+        )
+
+    return stored
