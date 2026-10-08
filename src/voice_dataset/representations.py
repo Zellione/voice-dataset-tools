@@ -400,6 +400,7 @@ def materialize_turn_audio(
     channels: int | None = None,
     clip_start: float | None = None,
     clip_end: float | None = None,
+    replace_existing: bool = False,
 ) -> AudioRepresentation:
     source = source.resolve()
 
@@ -449,7 +450,10 @@ def materialize_turn_audio(
         representation_name
     )
 
-    if existing is not None:
+    if (
+        existing is not None
+        and not replace_existing
+    ):
         raise ValueError(
             f"Representation already exists: "
             f"{turn_id}/{representation_name}"
@@ -525,15 +529,114 @@ def materialize_turn_audio(
         f".{destination.name}.tmp.wav"
     )
 
-    if destination.exists():
+    backup = destination.with_name(
+        f".{destination.name}.backup"
+    )
+
+    if (
+        destination.exists()
+        and not replace_existing
+    ):
         raise ValueError(
             f"Representation file already exists: "
             f"{destination}"
         )
 
+    if (
+        replace_existing
+        and existing is None
+    ):
+        raise ValueError(
+            "Cannot replace missing representation: "
+            f"{turn_id}/{representation_name}"
+        )
+
+    stale_embedding_names: list[str] = []
+    invalidated_embedding_paths: list[Path] = []
+
+    if replace_existing:
+        embeddings = turn.get(
+            "embeddings"
+        )
+
+        if not isinstance(
+            embeddings,
+            dict,
+        ):
+            raise ValueError(
+                f"Invalid embeddings for {turn_id}"
+            )
+
+        for (
+            embedding_name,
+            embedding,
+        ) in embeddings.items():
+            if not isinstance(
+                embedding,
+                dict,
+            ):
+                raise ValueError(
+                    f"Invalid embedding "
+                    f"{turn_id}/{embedding_name}"
+                )
+
+            if (
+                embedding.get("representation")
+                != representation_name
+            ):
+                continue
+
+            path = embedding.get("path")
+
+            if not isinstance(
+                path,
+                str,
+            ) or not path:
+                raise ValueError(
+                    f"Invalid embedding path "
+                    f"{turn_id}/{embedding_name}"
+                )
+
+            stale_embedding_names.append(
+                embedding_name
+            )
+            invalidated_embedding_paths.append(
+                storage.root / path
+            )
+
+    representation = AudioRepresentation(
+        path=relative_path.as_posix(),
+        kind=kind,
+        sample_rate=sample_rate,
+        channels=channels,
+        purposes=list(purposes),
+        metadata={
+            "source": str(source),
+            "canonical_start": canonical_start,
+            "canonical_end": canonical_end,
+            "clip_start": actual_start,
+            "clip_end": actual_end,
+            "padding_before": (
+                canonical_start - actual_start
+            ),
+            "padding_after": (
+                actual_end - canonical_end
+            ),
+        },
+    )
+
     temporary.unlink(
         missing_ok=True
     )
+
+    if backup.exists():
+        raise ValueError(
+            "Representation backup already exists: "
+            f"{backup}"
+        )
+
+    backup_created = False
+    destination_replaced = False
 
     try:
         extract_audio_region(
@@ -543,31 +646,25 @@ def materialize_turn_audio(
             end=actual_end,
         )
 
+        if replace_existing:
+            if not destination.is_file():
+                raise ValueError(
+                    "Representation metadata exists "
+                    "but file is missing: "
+                    f"{destination}"
+                )
+
+            os.replace(
+                destination,
+                backup,
+            )
+            backup_created = True
+
         os.replace(
             temporary,
             destination,
         )
-
-        representation = AudioRepresentation(
-            path=relative_path.as_posix(),
-            kind=kind,
-            sample_rate=sample_rate,
-            channels=channels,
-            purposes=list(purposes),
-            metadata={
-                "source": str(source),
-                "canonical_start": canonical_start,
-                "canonical_end": canonical_end,
-                "clip_start": actual_start,
-                "clip_end": actual_end,
-                "padding_before": (
-                    canonical_start - actual_start
-                ),
-                "padding_after": (
-                    actual_end - canonical_end
-                ),
-            },
-        )
+        destination_replaced = True
 
         def update(
             record: dict[str, Any],
@@ -585,7 +682,10 @@ def materialize_turn_audio(
                     f"for {turn_id}"
                 )
 
-            if representation_name in current:
+            if (
+                representation_name in current
+                and not replace_existing
+            ):
                 raise ValueError(
                     f"Representation already exists: "
                     f"{turn_id}/"
@@ -595,6 +695,28 @@ def materialize_turn_audio(
             current[
                 representation_name
             ] = representation.to_dict()
+
+            if replace_existing:
+                embeddings = record.get(
+                    "embeddings"
+                )
+
+                if not isinstance(
+                    embeddings,
+                    dict,
+                ):
+                    raise ValueError(
+                        f"Invalid embeddings "
+                        f"for {turn_id}"
+                    )
+
+                for embedding_name in (
+                    stale_embedding_names
+                ):
+                    embeddings.pop(
+                        embedding_name,
+                        None,
+                    )
 
             return record
 
@@ -608,11 +730,33 @@ def materialize_turn_audio(
             missing_ok=True
         )
 
-        destination.unlink(
-            missing_ok=True
-        )
+        if destination_replaced:
+            destination.unlink(
+                missing_ok=True
+            )
+
+        if backup_created:
+            os.replace(
+                backup,
+                destination,
+            )
 
         raise
+
+    backup.unlink(
+        missing_ok=True
+    )
+
+    for path in invalidated_embedding_paths:
+        try:
+            path.unlink(
+                missing_ok=True
+            )
+        except OSError:
+            # Metadata no longer references the stale
+            # embedding. A leftover file is harmless
+            # and can be cleaned up separately.
+            pass
 
     return representation
 
@@ -706,77 +850,6 @@ def materialize_turns(
                 f"{canonical_start}-{canonical_end}"
             )
 
-        representations = turn.get(
-            "representations"
-        )
-
-        if not isinstance(
-            representations,
-            dict,
-        ):
-            raise ValueError(
-                f"Invalid representations "
-                f"for {turn_id}"
-            )
-
-        existing = representations.get(
-            representation_name
-        )
-
-        expected_relative_path = (
-            Path("turns")
-            / turn_id
-            / f"{representation_name}.wav"
-        )
-
-        expected_destination = (
-            storage.root
-            / expected_relative_path
-        )
-
-        if existing is not None:
-            if not isinstance(
-                existing,
-                dict,
-            ):
-                raise ValueError(
-                    f"Invalid representation "
-                    f"{turn_id}/"
-                    f"{representation_name}"
-                )
-
-            existing_path = existing.get(
-                "path"
-            )
-
-            if (
-                existing_path
-                != expected_relative_path.as_posix()
-            ):
-                raise ValueError(
-                    f"Unexpected representation path "
-                    f"for {turn_id}/"
-                    f"{representation_name}: "
-                    f"{existing_path}"
-                )
-
-            if not expected_destination.is_file():
-                raise ValueError(
-                    f"Representation metadata exists "
-                    f"but file is missing: "
-                    f"{expected_destination}"
-                )
-
-            skipped += 1
-            continue
-
-        if expected_destination.exists():
-            raise ValueError(
-                f"Representation file exists "
-                f"without metadata: "
-                f"{expected_destination}"
-            )
-
         clip_start = canonical_start
         clip_end = canonical_end
 
@@ -817,6 +890,134 @@ def materialize_turns(
                         next_start,
                     )
 
+        representations = turn.get(
+            "representations"
+        )
+
+        if not isinstance(
+            representations,
+            dict,
+        ):
+            raise ValueError(
+                f"Invalid representations "
+                f"for {turn_id}"
+            )
+
+        existing = representations.get(
+            representation_name
+        )
+
+        expected_relative_path = (
+            Path("turns")
+            / turn_id
+            / f"{representation_name}.wav"
+        )
+
+        expected_destination = (
+            storage.root
+            / expected_relative_path
+        )
+
+        replace_existing = False
+
+        if existing is not None:
+            if not isinstance(
+                existing,
+                dict,
+            ):
+                raise ValueError(
+                    f"Invalid representation "
+                    f"{turn_id}/"
+                    f"{representation_name}"
+                )
+
+            existing_path = existing.get(
+                "path"
+            )
+
+            if (
+                existing_path
+                != expected_relative_path.as_posix()
+            ):
+                raise ValueError(
+                    f"Unexpected representation path "
+                    f"for {turn_id}/"
+                    f"{representation_name}: "
+                    f"{existing_path}"
+                )
+
+            if not expected_destination.is_file():
+                raise ValueError(
+                    f"Representation metadata exists "
+                    f"but file is missing: "
+                    f"{expected_destination}"
+                )
+
+            metadata = existing.get(
+                "metadata"
+            )
+
+            stale = True
+
+            if isinstance(metadata, dict):
+                existing_start = metadata.get(
+                    "canonical_start"
+                )
+                existing_end = metadata.get(
+                    "canonical_end"
+                )
+
+                existing_clip_start = metadata.get(
+                    "clip_start"
+                )
+                existing_clip_end = metadata.get(
+                    "clip_end"
+                )
+
+                if (
+                    isinstance(
+                        existing_start,
+                        (int, float),
+                    )
+                    and isinstance(
+                        existing_end,
+                        (int, float),
+                    )
+                    and isinstance(
+                        existing_clip_start,
+                        (int, float),
+                    )
+                    and isinstance(
+                        existing_clip_end,
+                        (int, float),
+                    )
+                    and float(existing_start)
+                    == canonical_start
+                    and float(existing_end)
+                    == canonical_end
+                    and float(existing_clip_start)
+                    == clip_start
+                    and float(existing_clip_end)
+                    == clip_end
+                ):
+                    stale = False
+
+            if not stale:
+                skipped += 1
+                continue
+
+            replace_existing = stale
+
+        if (
+            expected_destination.exists()
+            and not replace_existing
+        ):
+            raise ValueError(
+                f"Representation file exists "
+                f"without metadata: "
+                f"{expected_destination}"
+            )
+
         materialize_turn_audio(
             storage=storage,
             turn_id=turn_id,
@@ -830,6 +1031,7 @@ def materialize_turns(
             channels=channels,
             clip_start=clip_start,
             clip_end=clip_end,
+            replace_existing=replace_existing,
         )
 
         created += 1
