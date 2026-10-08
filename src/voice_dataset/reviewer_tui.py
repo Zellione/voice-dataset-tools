@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -1132,16 +1133,27 @@ class ReviewerTUI(App[None]):
         if request is None:
             return
 
+        self._set_status(
+            "Updating turn boundaries..."
+        )
+
+        self._apply_boundary_edit(
+            request
+        )
+
+    @work(
+        thread=True,
+        exclusive=True,
+        group="boundary-edit",
+    )
+    def _apply_boundary_edit(
+        self,
+        request: TrimTurnRequest,
+    ) -> None:
         try:
             self.session.trim(
                 source_start=request.source_start,
                 source_end=request.source_end,
-            )
-
-            self._refresh_view()
-
-            self._set_status(
-                "Trimmed turn."
             )
         except (
             ValueError,
@@ -1149,9 +1161,32 @@ class ReviewerTUI(App[None]):
             RuntimeError,
             OSError,
         ) as exc:
-            self._set_status(
-                f"Trim failed: {exc}"
+            self.call_from_thread(
+                self._boundary_edit_failed,
+                str(exc),
             )
+            return
+
+        self.call_from_thread(
+            self._boundary_edit_finished
+        )
+
+    def _boundary_edit_finished(
+        self,
+    ) -> None:
+        self._refresh_view()
+        self._set_status(
+            "Turn boundaries updated."
+        )
+
+    def _boundary_edit_failed(
+        self,
+        message: str,
+    ) -> None:
+        self._refresh_view()
+        self._set_status(
+            f"Boundary edit failed: {message}"
+        )
 
     def action_trim_turn(self) -> None:
         turn = self.session.current()

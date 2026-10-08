@@ -151,6 +151,8 @@ def validate_worker(
 def run_worker(
     worker: Worker,
     arguments: Sequence[str | Path],
+    *,
+    capture_output: bool = False,
 ) -> None:
     validate_worker(worker)
 
@@ -163,10 +165,20 @@ def run_worker(
         ),
     ]
 
+    run_kwargs = {
+        "check": True,
+    }
+
+    if capture_output:
+        run_kwargs.update({
+            "capture_output": True,
+            "text": True,
+        })
+
     try:
         subprocess.run(
             command,
-            check=True,
+            **run_kwargs,
         )
     except subprocess.CalledProcessError as exc:
         raise WorkerError(

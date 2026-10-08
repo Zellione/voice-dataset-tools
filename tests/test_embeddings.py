@@ -488,3 +488,59 @@ def test_embed_turns_runs_worker_when_embedding_is_missing(
             representation="speaker",
             name="ecapa_speaker",
         )
+
+
+def test_embed_turns_can_capture_worker_output(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    storage = make_storage(tmp_path)
+
+    def update(turn):
+        turn["representations"]["speaker"] = {
+            "path": (
+                "turns/turn_000001/"
+                "speaker.wav"
+            ),
+        }
+        return turn
+
+    storage.update_turn(
+        "turn_000001",
+        update,
+    )
+
+    calls = []
+
+    def fake_run_worker(
+        worker,
+        arguments,
+        *,
+        capture_output=False,
+    ):
+        calls.append(
+            capture_output
+        )
+
+        raise RuntimeError(
+            "worker was called"
+        )
+
+    monkeypatch.setattr(
+        "voice_dataset.embeddings.run_worker",
+        fake_run_worker,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="worker was called",
+    ):
+        embed_turns(
+            storage,
+            encoder="ecapa",
+            representation="speaker",
+            name="ecapa_speaker",
+            capture_output=True,
+        )
+
+    assert calls == [True]

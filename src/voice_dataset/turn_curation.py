@@ -167,6 +167,8 @@ def project_curated_turn(
 def prepare_curated_source_turns(
     storage: DatasetStorage,
     source_id: str,
+    *,
+    capture_output: bool = False,
 ) -> None:
     prepare_source_review_audio(
         storage,
@@ -175,6 +177,7 @@ def prepare_curated_source_turns(
     prepare_source_speaker_evidence(
         storage,
         source_id,
+        capture_output=capture_output,
     )
 
 
@@ -630,12 +633,9 @@ def trim_and_prepare_turn(
             "source_start must be before source_end"
         )
 
-    if (
-        new_start < current_start
-        or new_end > current_end
-    ):
+    if new_start < 0:
         raise ValueError(
-            "Trim must stay within current turn range"
+            "source_start must not be negative"
         )
 
     source_id = turn.get("source_id")
@@ -644,6 +644,73 @@ def trim_and_prepare_turn(
         raise ValueError(
             f"Turn has invalid source_id: {turn_id}"
         )
+
+    source_turns = [
+        item
+        for item in storage.turns.load()
+        if item.get("source_id") == source_id
+    ]
+
+    source_turns.sort(
+        key=lambda item: (
+            float(
+                item.get(
+                    "source_start",
+                    0.0,
+                )
+            ),
+            float(
+                item.get(
+                    "source_end",
+                    0.0,
+                )
+            ),
+            str(item.get("id", "")),
+        )
+    )
+
+    turn_ids = [
+        str(item["id"])
+        for item in source_turns
+    ]
+
+    try:
+        turn_index = turn_ids.index(
+            turn_id
+        )
+    except ValueError as exc:
+        raise RuntimeError(
+            "Current turn is missing from "
+            "canonical turn timeline"
+        ) from exc
+
+    if turn_index > 0:
+        previous_turn = source_turns[
+            turn_index - 1
+        ]
+        previous_end = float(
+            previous_turn["source_end"]
+        )
+
+        if new_start < previous_end:
+            raise ValueError(
+                "Boundary edit would overlap "
+                "previous turn"
+            )
+
+    if turn_index + 1 < len(source_turns):
+        next_turn = source_turns[
+            turn_index + 1
+        ]
+        next_start = float(
+            next_turn["source_start"]
+        )
+
+        if new_end > next_start:
+            raise ValueError(
+                "Boundary edit would overlap "
+                "next turn"
+            )
 
     require_source_utterance_reconciliation(
         storage,
@@ -708,6 +775,7 @@ def trim_and_prepare_turn(
     prepare_curated_source_turns(
         storage,
         source_id,
+        capture_output=True,
     )
 
     stored = storage.get_turn(turn_id)

@@ -868,6 +868,7 @@ def embed_turns(
     encoder: str,
     representation: str,
     name: str,
+    capture_output: bool = False,
 ) -> EmbeddingRunResult:
     if encoder not in {"ecapa", "wespeaker"}:
         raise ValueError(
@@ -916,6 +917,7 @@ def embed_turns(
                 "--representation",
                 representation,
             ],
+            capture_output=capture_output,
         )
 
         output = load_embedding_output(

@@ -9,6 +9,7 @@ from voice_dataset.turn_curation import (
     split_and_prepare_turn,
     prepare_curated_source_turns,
     project_curated_turn,
+    trim_and_prepare_turn,
     _project_split,
 )
 
@@ -205,8 +206,11 @@ def test_prepare_curated_source_turns_prepares_review_and_speaker_evidence(
     def fake_prepare_speaker(
         actual_storage,
         source_id,
+        *,
+        capture_output=False,
     ):
         assert actual_storage is storage
+        assert capture_output is False
         calls.append(("speaker", source_id))
 
     monkeypatch.setattr(
@@ -1079,11 +1083,20 @@ def test_trim_and_prepare_turn_updates_end_and_reprepares_source(
 
     prepared = []
 
+    def fake_prepare(
+        storage_arg,
+        source_id,
+        *,
+        capture_output=False,
+    ):
+        assert storage_arg is storage
+        assert capture_output is True
+        prepared.append(source_id)
+
     monkeypatch.setattr(
         "voice_dataset.turn_curation."
         "prepare_curated_source_turns",
-        lambda storage_arg, source_id:
-            prepared.append(source_id),
+        fake_prepare,
     )
 
     from voice_dataset.turn_curation import (
@@ -1174,81 +1187,6 @@ def test_trim_and_prepare_turn_rejects_invalid_range_without_mutation(
             "turn_000001",
             source_start=1.7,
             source_end=1.6,
-        )
-
-    after = storage.get_turn(
-        "turn_000001"
-    )
-
-    assert after == before
-    assert prepared == []
-
-
-def test_trim_and_prepare_turn_rejects_expansion_without_mutation(
-    tmp_path,
-    monkeypatch,
-):
-    storage = _storage_with_qwen(tmp_path)
-
-    storage.turns.append(
-        {
-            "schema_version": 1,
-            "record_type": "turn",
-            "id": "turn_000001",
-            "source_id": "source_001",
-            "source_start": 0.9,
-            "source_end": 1.9,
-            "source_regions": [
-                "region_000001",
-            ],
-            "language": "en",
-            "transcript": "hello there",
-            "assignment": {
-                "status": "unknown",
-                "voice_id": None,
-                "method": None,
-            },
-            "representations": {},
-            "embeddings": {},
-            "metadata": {},
-        }
-    )
-
-    prepared = []
-
-    monkeypatch.setattr(
-        "voice_dataset.turn_curation."
-        "prepare_curated_source_turns",
-        lambda storage_arg, source_id:
-            prepared.append(source_id),
-    )
-
-    from voice_dataset.turn_curation import (
-        trim_and_prepare_turn,
-    )
-
-    before = storage.get_turn(
-        "turn_000001"
-    )
-
-    with pytest.raises(
-        ValueError,
-        match="Trim must stay within current turn range",
-    ):
-        trim_and_prepare_turn(
-            storage,
-            "turn_000001",
-            source_start=0.8,
-        )
-
-    with pytest.raises(
-        ValueError,
-        match="Trim must stay within current turn range",
-    ):
-        trim_and_prepare_turn(
-            storage,
-            "turn_000001",
-            source_end=2.0,
         )
 
     after = storage.get_turn(
@@ -1398,3 +1336,304 @@ def test_trim_and_prepare_turn_requires_reconciliation_before_trim(
 
     assert after == before
     assert prepared == []
+
+
+def test_trim_and_prepare_turn_allows_safe_expansion(
+    tmp_path,
+    monkeypatch,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    storage.turns.append(
+        {
+            "schema_version": 1,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 0.9,
+            "source_end": 1.9,
+            "source_regions": [
+                "region_000001",
+            ],
+            "language": "en",
+            "transcript": "hello there",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {},
+        }
+    )
+
+    storage.turns.append(
+        {
+            "schema_version": 1,
+            "record_type": "turn",
+            "id": "turn_000002",
+            "source_id": "source_001",
+            "source_start": 2.5,
+            "source_end": 3.0,
+            "source_regions": [],
+            "language": "en",
+            "transcript": "later",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {},
+        }
+    )
+
+    prepared = []
+
+    def fake_prepare(
+        storage_arg,
+        source_id,
+        *,
+        capture_output=False,
+    ):
+        assert storage_arg is storage
+        assert capture_output is True
+        prepared.append(source_id)
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        fake_prepare,
+    )
+
+    result = trim_and_prepare_turn(
+        storage,
+        "turn_000001",
+        source_start=0.8,
+        source_end=2.0,
+    )
+
+    assert result["source_start"] == 0.8
+    assert result["source_end"] == 2.0
+
+    assert result["metadata"]["word_range"] == {
+        "start": 0,
+        "end": 1,
+    }
+
+    assert prepared == ["source_001"]
+
+
+def test_trim_and_prepare_turn_rejects_overlap_with_next_turn(
+    tmp_path,
+    monkeypatch,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    storage.turns.append(
+        {
+            "schema_version": 1,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 0.9,
+            "source_end": 1.9,
+            "source_regions": [],
+            "language": "en",
+            "transcript": "hello there",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {},
+        }
+    )
+
+    storage.turns.append(
+        {
+            "schema_version": 1,
+            "record_type": "turn",
+            "id": "turn_000002",
+            "source_id": "source_001",
+            "source_start": 2.0,
+            "source_end": 2.5,
+            "source_regions": [],
+            "language": "en",
+            "transcript": "later",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {},
+        }
+    )
+
+    prepared = []
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        lambda storage_arg, source_id:
+            prepared.append(source_id),
+    )
+
+    before = storage.get_turn(
+        "turn_000001"
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="overlap",
+    ):
+        trim_and_prepare_turn(
+            storage,
+            "turn_000001",
+            source_end=2.1,
+        )
+
+    after = storage.get_turn(
+        "turn_000001"
+    )
+
+    assert after == before
+    assert prepared == []
+
+
+def test_trim_and_prepare_turn_rejects_overlap_with_previous_turn(
+    tmp_path,
+    monkeypatch,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    storage.turns.append(
+        {
+            "schema_version": 1,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 0.4,
+            "source_end": 0.8,
+            "source_regions": [],
+            "language": "en",
+            "transcript": "earlier",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {},
+        }
+    )
+
+    storage.turns.append(
+        {
+            "schema_version": 1,
+            "record_type": "turn",
+            "id": "turn_000002",
+            "source_id": "source_001",
+            "source_start": 0.9,
+            "source_end": 1.9,
+            "source_regions": [],
+            "language": "en",
+            "transcript": "hello there",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {},
+        }
+    )
+
+    prepared = []
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        lambda storage_arg, source_id:
+            prepared.append(source_id),
+    )
+
+    before = storage.get_turn(
+        "turn_000002"
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="overlap",
+    ):
+        trim_and_prepare_turn(
+            storage,
+            "turn_000002",
+            source_start=0.7,
+        )
+
+    after = storage.get_turn(
+        "turn_000002"
+    )
+
+    assert after == before
+    assert prepared == []
+
+
+def test_prepare_curated_source_turns_can_capture_worker_output(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    calls = []
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_source_review_audio",
+        lambda storage_arg, source_id:
+            calls.append(("review", source_id)),
+    )
+
+    def fake_prepare_speaker(
+        storage_arg,
+        source_id,
+        *,
+        capture_output=False,
+    ):
+        calls.append(
+            (
+                "speaker",
+                source_id,
+                capture_output,
+            )
+        )
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_source_speaker_evidence",
+        fake_prepare_speaker,
+    )
+
+    prepare_curated_source_turns(
+        storage,
+        "source_001",
+        capture_output=True,
+    )
+
+    assert calls == [
+        ("review", "source_001"),
+        (
+            "speaker",
+            "source_001",
+            True,
+        ),
+    ]

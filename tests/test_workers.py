@@ -190,3 +190,68 @@ def test_run_worker_wraps_process_failure(
             item,
             [],
         )
+
+
+def test_run_worker_can_capture_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    python = tmp_path / "python"
+    adapter = tmp_path / "adapter.py"
+
+    python.touch()
+    adapter.touch()
+
+    item = workers.Worker(
+        name="test",
+        python=python,
+        adapter=adapter,
+    )
+
+    observed = []
+
+    def fake_run(
+        command,
+        **kwargs,
+    ):
+        observed.append(
+            (
+                command,
+                kwargs,
+            )
+        )
+
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="worker output",
+            stderr="worker warning",
+        )
+
+    monkeypatch.setattr(
+        workers.subprocess,
+        "run",
+        fake_run,
+    )
+
+    workers.run_worker(
+        item,
+        ["argument"],
+        capture_output=True,
+    )
+
+    assert len(observed) == 1
+
+    command, kwargs = observed[0]
+
+    assert command == [
+        str(python),
+        str(adapter),
+        "argument",
+    ]
+
+    assert kwargs == {
+        "check": True,
+        "capture_output": True,
+        "text": True,
+    }

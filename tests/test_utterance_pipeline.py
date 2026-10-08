@@ -1165,3 +1165,104 @@ def test_mark_source_utterance_reconciliation_curated_preserves_plan(
         "source",
         asr_evidence_name="qwen3",
     )
+
+
+def test_prepare_source_speaker_evidence_can_capture_worker_output(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    storage.sources.append(
+        {
+            "schema_version": 1,
+            "record_type": "source",
+            "id": "source_001",
+            "representations": {
+                "center": {
+                    "path": "audio/source.wav",
+                    "kind": "center",
+                    "purposes": [
+                        "speaker_embedding",
+                    ],
+                },
+            },
+            "metadata": {},
+        }
+    )
+
+    calls = []
+
+    monkeypatch.setattr(
+        "voice_dataset.utterance_pipeline."
+        "resolve_source_representation_for_purpose",
+        lambda storage_arg, source_id, purpose: (
+            "center",
+            {
+                "kind": "center",
+            },
+            tmp_path / "source.wav",
+        ),
+    )
+
+    monkeypatch.setattr(
+        "voice_dataset.utterance_pipeline."
+        "materialize_turns",
+        lambda **kwargs: "representation-result",
+    )
+
+    def fake_embed_turns(
+        storage_arg,
+        *,
+        encoder,
+        representation,
+        name,
+        capture_output=False,
+    ):
+        calls.append(
+            (
+                encoder,
+                representation,
+                name,
+                capture_output,
+            )
+        )
+
+        return f"{encoder}-result"
+
+    monkeypatch.setattr(
+        "voice_dataset.utterance_pipeline."
+        "embed_turns",
+        fake_embed_turns,
+    )
+
+    from voice_dataset.utterance_pipeline import (
+        prepare_source_speaker_evidence,
+    )
+
+    result = prepare_source_speaker_evidence(
+        storage,
+        "source_001",
+        capture_output=True,
+    )
+
+    assert calls == [
+        (
+            "ecapa",
+            "speaker",
+            "ecapa_speaker",
+            True,
+        ),
+        (
+            "wespeaker",
+            "speaker",
+            "wespeaker_speaker",
+            True,
+        ),
+    ]
+
+    assert result.representation == (
+        "representation-result"
+    )
+    assert result.ecapa == "ecapa-result"
+    assert result.wespeaker == "wespeaker-result"

@@ -338,6 +338,8 @@ def prepare_source_review_audio(
 def prepare_source_speaker_evidence(
     storage: DatasetStorage,
     source_id: str,
+    *,
+    capture_output: bool = False,
 ) -> PrepareSpeakerEvidenceResult:
     _, source_representation, source_path = (
         resolve_source_representation_for_purpose(
@@ -369,6 +371,7 @@ def prepare_source_speaker_evidence(
         encoder="ecapa",
         representation="speaker",
         name="ecapa_speaker",
+        capture_output=capture_output,
     )
 
     wespeaker = embed_turns(
@@ -376,6 +379,7 @@ def prepare_source_speaker_evidence(
         encoder="wespeaker",
         representation="speaker",
         name="wespeaker_speaker",
+        capture_output=capture_output,
     )
 
     return PrepareSpeakerEvidenceResult(

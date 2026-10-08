@@ -2,6 +2,8 @@ import asyncio
 
 import pytest
 
+import threading
+
 from voice_dataset.reviewer_session import ReviewerSession
 from voice_dataset.reviewer_tui import (
     ConfirmMergeScreen,
@@ -3675,7 +3677,7 @@ async def test_reviewer_tui_trims_current_turn(
         ]
 
         assert (
-            "Trimmed turn"
+            "Turn boundaries updated."
             in str(
                 app.screen.query_one(
                     "#status",
@@ -3744,7 +3746,7 @@ async def test_reviewer_tui_reports_rejected_trim(
         )
 
         assert (
-            "Trim failed: "
+            "Boundary edit failed: "
             "Trim would change continuous ASR words"
             in status
         )
@@ -3756,3 +3758,105 @@ async def test_reviewer_tui_reports_rejected_trim(
         assert turn is not None
         assert turn["source_start"] == 1.0
         assert turn["source_end"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_boundary_edit_runs_in_background(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_trim(
+        *,
+        source_start=None,
+        source_end=None,
+    ):
+        started.set()
+
+        assert release.wait(
+            timeout=5.0,
+        )
+
+        def update(record):
+            record["source_start"] = source_start
+            record["source_end"] = source_end
+            return record
+
+        return storage.update_turn(
+            "turn_000001",
+            update,
+        )
+
+    monkeypatch.setattr(
+        session,
+        "trim",
+        fake_trim,
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("z")
+        await pilot.pause()
+
+        end_input = app.screen.query_one(
+            "#trim-end",
+            Input,
+        )
+        end_input.value = "1.750"
+        end_input.focus()
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert started.wait(
+            timeout=1.0,
+        )
+
+        status = str(
+            app.screen.query_one(
+                "#status",
+                Static,
+            ).render()
+        )
+
+        assert (
+            "Updating turn boundaries"
+            in status
+        )
+
+        release.set()
+
+        for _ in range(20):
+            await pilot.pause()
+
+            status = str(
+                app.screen.query_one(
+                    "#status",
+                    Static,
+                ).render()
+            )
+
+            if "updated" in status.lower():
+                break
+
+        assert (
+            "updated"
+            in status.lower()
+        )
