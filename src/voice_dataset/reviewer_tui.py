@@ -1,6 +1,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
+from rich.text import Text
+
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -842,7 +844,7 @@ class TrimTurnScreen(
     def compose(self) -> ComposeResult:
         with Vertical(id="trim-dialog"):
             yield Static(
-                "Trim Turn",
+                "Edit Boundaries",
                 id="trim-title",
             )
 
@@ -905,6 +907,52 @@ class TrimTurnScreen(
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+class UpdatingTurnAudioScreen(
+    ModalScreen[None]
+):
+    CSS = """
+    UpdatingTurnAudioScreen {
+        align: center middle;
+    }
+
+    #updating-audio-dialog {
+        width: 62;
+        height: auto;
+        padding: 2 3;
+        border: round $primary;
+        background: $surface;
+    }
+
+    #updating-audio-title {
+        text-style: bold;
+        text-align: center;
+        margin-bottom: 1;
+    }
+
+    #updating-audio-content {
+        text-align: center;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(
+            id="updating-audio-dialog"
+        ):
+            yield Static(
+                "Updating turn audio",
+                id="updating-audio-title",
+            )
+
+            yield Static(
+                (
+                    "Rebuilding review audio and "
+                    "speaker evidence.\n\n"
+                    "Please wait."
+                ),
+                id="updating-audio-content",
+            )
 
 
 class ReviewerTUI(App[None]):
@@ -1077,7 +1125,7 @@ class ReviewerTUI(App[None]):
         Binding(
             "z",
             "trim_turn",
-            "Trim",
+            "Boundaries",
         ),
     ]
 
@@ -1126,6 +1174,15 @@ class ReviewerTUI(App[None]):
             key,
         )
 
+    def _close_updating_audio_screen(
+        self,
+    ) -> None:
+        if isinstance(
+            self.screen,
+            UpdatingTurnAudioScreen,
+        ):
+            self.screen.dismiss()
+
     def _trim_requested(
         self,
         request: TrimTurnRequest | None,
@@ -1133,8 +1190,8 @@ class ReviewerTUI(App[None]):
         if request is None:
             return
 
-        self._set_status(
-            "Updating turn boundaries..."
+        self.push_screen(
+            UpdatingTurnAudioScreen()
         )
 
         self._apply_boundary_edit(
@@ -1174,12 +1231,32 @@ class ReviewerTUI(App[None]):
     def _boundary_edit_finished(
         self,
     ) -> None:
+        self._close_updating_audio_screen()
+
+        self.call_after_refresh(
+            self._boundary_edit_finished_ui
+        )
+
+    def _boundary_edit_finished_ui(
+        self,
+    ) -> None:
         self._refresh_view()
         self._set_status(
             "Turn boundaries updated."
         )
 
     def _boundary_edit_failed(
+        self,
+        message: str,
+    ) -> None:
+        self._close_updating_audio_screen()
+
+        self.call_after_refresh(
+            self._boundary_edit_failed_ui,
+            message,
+        )
+
+    def _boundary_edit_failed_ui(
         self,
         message: str,
     ) -> None:
@@ -1209,8 +1286,9 @@ class ReviewerTUI(App[None]):
     def _format_shortcut_group(
         self,
         actions: set[str],
-    ) -> str:
-        items = []
+    ) -> Text:
+        result = Text()
+        first = True
 
         for binding in self.BINDINGS:
             if binding.action not in actions:
@@ -1225,15 +1303,26 @@ class ReviewerTUI(App[None]):
             ):
                 continue
 
+            if not first:
+                result.append("   ")
+
             key = self._shortcut_key(
                 binding
             )
 
-            items.append(
-                f"{key} {binding.description}"
+            result.append(
+                key,
+                style="bold",
+            )
+            result.append(" ")
+            result.append(
+                binding.description,
+                style="dim",
             )
 
-        return "   ".join(items)
+            first = False
+
+        return result
 
     def _refresh_shortcuts(self) -> None:
         self.query_one(

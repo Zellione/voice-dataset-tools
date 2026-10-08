@@ -4,6 +4,8 @@ import pytest
 
 import threading
 
+from rich.text import Text
+
 from voice_dataset.reviewer_session import ReviewerSession
 from voice_dataset.reviewer_tui import (
     ConfirmMergeScreen,
@@ -15,6 +17,7 @@ from voice_dataset.reviewer_tui import (
     VoicePickerScreen,
     TrimTurnRequest,
     TrimTurnScreen,
+    UpdatingTurnAudioScreen,
 )
 from voice_dataset.storage import DatasetStorage
 from voice_dataset.schema import VoiceProfile
@@ -3829,17 +3832,20 @@ async def test_reviewer_tui_boundary_edit_runs_in_background(
             timeout=1.0,
         )
 
-        status = str(
+        assert isinstance(
+            app.screen,
+            UpdatingTurnAudioScreen,
+        )
+
+        content = str(
             app.screen.query_one(
-                "#status",
+                "#updating-audio-content",
                 Static,
             ).render()
         )
 
-        assert (
-            "Updating turn boundaries"
-            in status
-        )
+        assert "review audio" in content
+        assert "speaker evidence" in content
 
         release.set()
 
@@ -3860,3 +3866,190 @@ async def test_reviewer_tui_boundary_edit_runs_in_background(
             "updated"
             in status.lower()
         )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_shows_blocking_audio_rebuild_modal(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_trim(
+        *,
+        source_start=None,
+        source_end=None,
+    ):
+        started.set()
+
+        assert release.wait(
+            timeout=5.0,
+        )
+
+        return storage.get_turn(
+            "turn_000001"
+        )
+
+    monkeypatch.setattr(
+        session,
+        "trim",
+        fake_trim,
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("z")
+        await pilot.pause()
+
+        end_input = app.screen.query_one(
+            "#trim-end",
+            Input,
+        )
+        end_input.value = "1.750"
+        end_input.focus()
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert started.wait(
+            timeout=1.0,
+        )
+
+        assert isinstance(
+            app.screen,
+            UpdatingTurnAudioScreen,
+        )
+
+        title = str(
+            app.screen.query_one(
+                "#updating-audio-title",
+                Static,
+            ).render()
+        )
+
+        content = str(
+            app.screen.query_one(
+                "#updating-audio-content",
+                Static,
+            ).render()
+        )
+
+        assert "Updating turn audio" in title
+        assert "review audio" in content
+        assert "speaker evidence" in content
+        assert "review audio" in content
+        assert "speaker evidence" in content
+
+        release.set()
+
+        for _ in range(30):
+            await pilot.pause()
+
+            if not isinstance(
+                app.screen,
+                UpdatingTurnAudioScreen,
+            ):
+                break
+
+        assert not isinstance(
+            app.screen,
+            UpdatingTurnAudioScreen,
+        )
+
+        status = str(
+            app.screen.query_one(
+                "#status",
+                Static,
+            ).render()
+        )
+
+        assert (
+            "Turn boundaries updated."
+            in status
+        )
+
+
+@pytest.mark.asyncio
+async def test_boundary_editor_uses_boundary_terminology(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("z")
+        await pilot.pause()
+
+        title = str(
+            app.screen.query_one(
+                "#trim-title",
+                Static,
+            ).render()
+        )
+
+        assert title == "Edit Boundaries"
+
+
+def test_reviewer_shortcuts_style_keys_and_descriptions(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    text = app._format_shortcut_group({
+        "show_help",
+        "quit",
+    })
+
+    assert isinstance(text, Text)
+    assert text.plain == "? Help   q Quit"
+
+    styles = [
+        str(span.style)
+        for span in text.spans
+    ]
+
+    assert "bold" in styles
+    assert "dim" in styles
