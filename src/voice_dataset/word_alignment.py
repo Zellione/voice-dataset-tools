@@ -562,18 +562,45 @@ def recover_sat_boundary_alignments(
         LocalAlignmentRecovery
     ] = []
 
+    planned_candidates: list[
+        AlignmentRecoveryCandidate
+    ] = []
+
+    claimed_word_indices: set[int] = set()
+
     for candidate in candidates:
-        recovery = recover_candidate_alignment(
+        candidate_indices = set(
+            candidate.word_indices
+        )
+
+        if (
+            candidate_indices
+            & claimed_word_indices
+        ):
+            continue
+
+        planned_candidates.append(
+            candidate
+        )
+
+        claimed_word_indices.update(
+            candidate.word_indices
+        )
+
+    candidate_recoveries = (
+        recover_alignment_candidates_batch(
             storage,
             source_id,
-            candidate,
+            planned_candidates,
             words,
             representation_name=(
                 representation_name
             ),
             language=language,
         )
+    )
 
+    for recovery in candidate_recoveries:
         if (
             alignment_recovery_is_valid(words, recovery)
             and recovery.words

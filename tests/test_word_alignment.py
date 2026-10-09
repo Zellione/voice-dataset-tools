@@ -3024,3 +3024,122 @@ def test_recover_alignment_candidates_batch_uses_one_qwen_batch(
     assert recoveries[1].words[0]["start"] == (
         pytest.approx(20.0)
     )
+
+
+def test_sat_boundary_recovery_batches_candidates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = DatasetStorage(
+        tmp_path / "dataset"
+    )
+
+    words = [
+        word("one", 10.0, 10.2),
+        word("two", 10.2, 10.4),
+        word("three", 20.0, 20.2),
+        word("four", 20.2, 20.4),
+    ]
+
+    alignment = EffectiveWordAlignment(
+        words=tuple(words),
+        recoveries=(),
+    )
+
+    candidates = [
+        AlignmentRecoveryCandidate(
+            word_indices=(0, 1),
+            start_word_index=0,
+            end_word_index=1,
+            region_id="region_1",
+            region_start=9.9,
+            region_end=10.5,
+            whisper_text="one two",
+            speaker="SPEAKER_0",
+            issue_word_indices=(1,),
+            issue_reasons=(
+                "sat_boundary_inside_region",
+            ),
+        ),
+        AlignmentRecoveryCandidate(
+            word_indices=(2, 3),
+            start_word_index=2,
+            end_word_index=3,
+            region_id="region_2",
+            region_start=19.9,
+            region_end=20.5,
+            whisper_text="three four",
+            speaker="SPEAKER_1",
+            issue_word_indices=(3,),
+            issue_reasons=(
+                "sat_boundary_inside_region",
+            ),
+        ),
+    ]
+
+    monkeypatch.setattr(
+        word_alignment,
+        "collect_region_evidence",
+        lambda *args, **kwargs: [],
+    )
+
+    monkeypatch.setattr(
+        word_alignment,
+        "build_sat_boundary_recovery_candidates",
+        lambda *args, **kwargs: candidates,
+    )
+
+    calls = []
+
+    def fake_batch(
+        storage,
+        source_id,
+        candidates_arg,
+        words_arg,
+        **kwargs,
+    ):
+        calls.append(list(candidates_arg))
+
+        return [
+            LocalAlignmentRecovery(
+                word_indices=(0, 1),
+                region_id="region_1",
+                region_start=9.9,
+                region_end=10.5,
+                text="one two",
+                words=(
+                    word("one", 10.0, 10.2),
+                    word("two", 10.2, 10.5),
+                ),
+            ),
+            LocalAlignmentRecovery(
+                word_indices=(2, 3),
+                region_id="region_2",
+                region_start=19.9,
+                region_end=20.5,
+                text="three four",
+                words=(
+                    word("three", 20.0, 20.2),
+                    word("four", 20.2, 20.5),
+                ),
+            ),
+        ]
+
+    monkeypatch.setattr(
+        word_alignment,
+        "recover_alignment_candidates_batch",
+        fake_batch,
+    )
+
+    result = recover_sat_boundary_alignments(
+        storage,
+        "source_001",
+        alignment,
+        {1, 3},
+        representation_name="center",
+        language="English",
+    )
+
+    assert len(calls) == 1
+    assert len(calls[0]) == 2
+    assert len(result.recoveries) == 2
