@@ -69,26 +69,24 @@ def parse_args() -> argparse.Namespace:
             "must be positive"
         )
 
-    if args.mode == "align" and not args.text:
-        parser.error(
-            "--text is required when --mode=align"
-        )
-
     if (
         args.mode == "align"
-        and args.input is None
+        and args.input is not None
+        and not args.text
     ):
         parser.error(
-            "--mode=align requires --input"
+            "--text is required when aligning "
+            "a single --input"
         )
 
     if (
         args.mode == "align"
         and args.input_manifest is not None
+        and args.text is not None
     ):
         parser.error(
-            "--input-manifest is only valid "
-            "for transcription"
+            "--text cannot be combined with "
+            "--input-manifest"
         )
 
     return args
@@ -161,33 +159,163 @@ def main() -> None:
         )
 
     if args.mode == "align":
-        alignments = model.forced_aligner.align(
-            audio=str(args.input),
-            text=args.text,
-            language=language,
-        )
-
-        if len(alignments) != 1:
-            raise RuntimeError(
-                "Qwen returned unexpected forced alignment "
-                f"batch size: {len(alignments)}"
+        if args.input_manifest is None:
+            alignments = model.forced_aligner.align(
+                audio=str(args.input),
+                text=args.text,
+                language=language,
             )
 
-        alignment = alignments[0]
+            if len(alignments) != 1:
+                raise RuntimeError(
+                    "Qwen returned unexpected forced "
+                    "alignment batch size: "
+                    f"{len(alignments)}"
+                )
 
-        document = {
-            "format": "voice-dataset-forced-alignment-output",
-            "version": 1,
-            "aligner": {
-                "name": "qwen3-forced-aligner",
-                "model": ALIGNER_ID,
-            },
-            "language": language,
-            "text": args.text,
-            "words": _alignment_words(
-                alignment
-            ),
-        }
+            alignment = alignments[0]
+
+            document = {
+                "format": (
+                    "voice-dataset-forced-alignment-output"
+                ),
+                "version": 1,
+                "aligner": {
+                    "name": "qwen3-forced-aligner",
+                    "model": ALIGNER_ID,
+                },
+                "language": language,
+                "text": args.text,
+                "words": _alignment_words(
+                    alignment
+                ),
+            }
+
+        else:
+            manifest = json.loads(
+                args.input_manifest.read_text(
+                    encoding="utf-8"
+                )
+            )
+
+            raw_alignments = manifest.get(
+                "alignments"
+            )
+
+            if not isinstance(
+                raw_alignments,
+                list,
+            ):
+                raise ValueError(
+                    "Alignment manifest has invalid "
+                    "alignments"
+                )
+
+            audio = []
+            texts = []
+            languages = []
+
+            for expected_index, item in enumerate(
+                raw_alignments
+            ):
+                if not isinstance(item, dict):
+                    raise ValueError(
+                        "Alignment manifest item "
+                        "must be an object"
+                    )
+
+                if item.get("index") != expected_index:
+                    raise ValueError(
+                        "Alignment manifest indices "
+                        "must be contiguous"
+                    )
+
+                input_path = Path(
+                    item["path"]
+                )
+
+                if not input_path.is_file():
+                    raise ValueError(
+                        "Alignment audio does not exist: "
+                        f"{input_path}"
+                    )
+
+                item_text = item.get("text")
+
+                if (
+                    not isinstance(item_text, str)
+                    or not item_text.strip()
+                ):
+                    raise ValueError(
+                        "Alignment manifest item "
+                        "has invalid text"
+                    )
+
+                item_language = item.get(
+                    "language"
+                )
+
+                if not isinstance(
+                    item_language,
+                    str,
+                ):
+                    raise ValueError(
+                        "Alignment manifest item "
+                        "has invalid language"
+                    )
+
+                item_language = (
+                    LANGUAGE_ALIASES.get(
+                        item_language.casefold(),
+                        item_language,
+                    )
+                )
+
+                audio.append(
+                    str(input_path)
+                )
+                texts.append(item_text)
+                languages.append(item_language)
+
+            alignments = (
+                model.forced_aligner.align(
+                    audio=audio,
+                    text=texts,
+                    language=languages,
+                )
+            )
+
+            if len(alignments) != len(
+                raw_alignments
+            ):
+                raise RuntimeError(
+                    "Qwen returned unexpected forced "
+                    "alignment batch size"
+                )
+
+            document = {
+                "format": (
+                    "voice-dataset-forced-alignment-"
+                    "batch-output"
+                ),
+                "version": 1,
+                "aligner": {
+                    "name": "qwen3-forced-aligner",
+                    "model": ALIGNER_ID,
+                },
+                "alignments": [
+                    {
+                        "index": index,
+                        "language": languages[index],
+                        "text": texts[index],
+                        "words": _alignment_words(
+                            alignment
+                        ),
+                    }
+                    for index, alignment
+                    in enumerate(alignments)
+                ],
+            }
 
     else:
         if args.input_manifest is None:

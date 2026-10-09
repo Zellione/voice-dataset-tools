@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from voice_dataset.continuous_asr import (
@@ -461,3 +463,168 @@ def test_plan_continuous_asr_chunks_uses_union_of_overlapping_regions(
     # region_000002 extends speech through 80 s.
     assert chunks[0].end == pytest.approx(80.5)
     assert chunks[0].boundary == "speech_gap"
+
+
+def test_load_qwen_alignment_batch_output(
+    tmp_path,
+) -> None:
+    from voice_dataset.continuous_asr import (
+        _load_qwen_alignment_batch_output,
+    )
+
+    path = tmp_path / "batch.json"
+
+    path.write_text(
+        """
+{
+  "format": "voice-dataset-forced-alignment-batch-output",
+  "version": 1,
+  "alignments": [
+    {
+      "index": 0,
+      "language": "English",
+      "text": "Hello.",
+      "words": [
+        {
+          "text": "Hello",
+          "start": 0.1,
+          "end": 0.5
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "language": "English",
+      "text": "World.",
+      "words": [
+        {
+          "text": "World",
+          "start": 0.2,
+          "end": 0.7
+        }
+      ]
+    }
+  ]
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    results = _load_qwen_alignment_batch_output(
+        path
+    )
+
+    assert len(results) == 2
+
+    assert results[0].text == "Hello."
+    assert results[0].words == [
+        word("Hello", 0.1, 0.5),
+    ]
+
+    assert results[1].text == "World."
+    assert results[1].words == [
+        word("World", 0.2, 0.7),
+    ]
+
+
+def test_align_texts_qwen3_runs_one_worker_for_batch(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from voice_dataset.continuous_asr import (
+        ForcedAlignmentRequest,
+        align_texts_qwen3,
+    )
+
+    first = tmp_path / "first.wav"
+    second = tmp_path / "second.wav"
+
+    first.touch()
+    second.touch()
+
+    calls = []
+
+    def fake_run_worker(
+        worker_arg,
+        arguments,
+        **kwargs,
+    ):
+        calls.append(
+            (worker_arg, list(arguments))
+        )
+
+        output_index = arguments.index(
+            "--output"
+        ) + 1
+
+        output = Path(
+            arguments[output_index]
+        )
+
+        output.write_text(
+            """
+{
+  "format": "voice-dataset-forced-alignment-batch-output",
+  "version": 1,
+  "alignments": [
+    {
+      "index": 0,
+      "language": "English",
+      "text": "Hello.",
+      "words": [
+        {
+          "text": "Hello",
+          "start": 0.1,
+          "end": 0.5
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "language": "English",
+      "text": "World.",
+      "words": [
+        {
+          "text": "World",
+          "start": 0.2,
+          "end": 0.7
+        }
+      ]
+    }
+  ]
+}
+""".strip(),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(
+        "voice_dataset.continuous_asr.run_worker",
+        fake_run_worker,
+    )
+
+    results = align_texts_qwen3(
+        [
+            ForcedAlignmentRequest(
+                audio_path=first,
+                text="Hello.",
+                language="English",
+            ),
+            ForcedAlignmentRequest(
+                audio_path=second,
+                text="World.",
+                language="English",
+            ),
+        ],
+        max_inference_batch_size=16,
+    )
+
+    assert len(calls) == 1
+    assert len(results) == 2
+
+    arguments = calls[0][1]
+
+    assert "--mode" in arguments
+    assert "align" in arguments
+    assert "--input-manifest" in arguments
+    assert "--max-inference-batch-size" in arguments
+    assert "16" in arguments

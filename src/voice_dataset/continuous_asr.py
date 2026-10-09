@@ -37,6 +37,13 @@ class ContinuousAsrResult:
 
 
 @dataclass(frozen=True)
+class ForcedAlignmentRequest:
+    audio_path: Path
+    text: str
+    language: str
+
+
+@dataclass(frozen=True)
 class ForcedAlignmentResult:
     language: str | None
     text: str
@@ -977,6 +984,184 @@ def _load_qwen_alignment_output(
         text=text,
         words=words,
     )
+
+
+def _load_qwen_alignment_batch_output(
+    path: Path,
+) -> list[ForcedAlignmentResult]:
+    document = json.loads(
+        path.read_text(encoding="utf-8")
+    )
+
+    if (
+        document.get("format")
+        != "voice-dataset-forced-alignment-batch-output"
+    ):
+        raise ValueError(
+            "Unexpected Qwen forced alignment "
+            "batch output format"
+        )
+
+    if document.get("version") != 1:
+        raise ValueError(
+            "Unsupported Qwen forced alignment "
+            "batch output version"
+        )
+
+    raw_alignments = document.get(
+        "alignments"
+    )
+
+    if not isinstance(raw_alignments, list):
+        raise ValueError(
+            "Qwen forced alignment batch output "
+            "has invalid alignments"
+        )
+
+    results: list[
+        ForcedAlignmentResult
+    ] = []
+
+    for expected_index, raw in enumerate(
+        raw_alignments
+    ):
+        if not isinstance(raw, dict):
+            raise ValueError(
+                "Qwen forced alignment batch item "
+                "must be an object"
+            )
+
+        if raw.get("index") != expected_index:
+            raise ValueError(
+                "Qwen forced alignment batch indices "
+                "must be contiguous"
+            )
+
+        temporary = {
+            "format": (
+                "voice-dataset-forced-alignment-output"
+            ),
+            "version": 1,
+            "language": raw.get("language"),
+            "text": raw.get("text"),
+            "words": raw.get("words"),
+        }
+
+        with tempfile.TemporaryDirectory(
+            prefix="voice-dataset-qwen3-align-load-"
+        ) as temporary_directory:
+            temporary_path = (
+                Path(temporary_directory)
+                / "alignment.json"
+            )
+
+            temporary_path.write_text(
+                json.dumps(
+                    temporary,
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            results.append(
+                _load_qwen_alignment_output(
+                    temporary_path
+                )
+            )
+
+    return results
+
+
+def align_texts_qwen3(
+    requests: list[ForcedAlignmentRequest],
+    *,
+    max_inference_batch_size: int = 8,
+) -> list[ForcedAlignmentResult]:
+    if not requests:
+        return []
+
+    if max_inference_batch_size <= 0:
+        raise ValueError(
+            "Forced alignment batch size "
+            "must be positive"
+        )
+
+    for index, request in enumerate(requests):
+        if not request.text.strip():
+            raise ValueError(
+                "Forced alignment text must not "
+                f"be empty at request {index}"
+            )
+
+        if not request.audio_path.is_file():
+            raise ValueError(
+                "Forced alignment audio does not "
+                f"exist: {request.audio_path}"
+            )
+
+    with tempfile.TemporaryDirectory(
+        prefix="voice-dataset-qwen3-align-batch-"
+    ) as temporary_directory:
+        root = Path(temporary_directory)
+
+        manifest_path = (
+            root / "alignment-manifest.json"
+        )
+        output_path = (
+            root / "forced-alignments.json"
+        )
+
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "alignments": [
+                        {
+                            "index": index,
+                            "path": str(
+                                request.audio_path
+                            ),
+                            "text": request.text,
+                            "language": request.language,
+                        }
+                        for index, request
+                        in enumerate(requests)
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        run_worker(
+            worker("qwen3-asr"),
+            [
+                "--mode",
+                "align",
+                "--input-manifest",
+                manifest_path,
+                "--output",
+                output_path,
+                "--max-inference-batch-size",
+                str(max_inference_batch_size),
+            ],
+        )
+
+        results = (
+            _load_qwen_alignment_batch_output(
+                output_path
+            )
+        )
+
+    if len(results) != len(requests):
+        raise RuntimeError(
+            "Qwen returned unexpected forced "
+            "alignment batch size"
+        )
+
+    return results
 
 
 def align_text_qwen3(
