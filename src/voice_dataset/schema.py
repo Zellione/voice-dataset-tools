@@ -7,7 +7,6 @@ from typing import Any, Literal
 AssignmentStatus = Literal[
     "unknown",
     "assigned",
-    "ignore",
 ]
 
 
@@ -272,6 +271,21 @@ class VoiceAssignment:
         return asdict(self)
 
 
+TurnCurationStatus = Literal[
+    "pending",
+    "accepted",
+    "rejected",
+]
+
+
+@dataclass
+class TurnCuration:
+    status: TurnCurationStatus = "pending"
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
 @dataclass
 class TurnRecord:
     id: str
@@ -298,6 +312,10 @@ class TurnRecord:
 
     assignment: VoiceAssignment = field(
         default_factory=VoiceAssignment
+    )
+
+    curation: TurnCuration = field(
+        default_factory=TurnCuration
     )
 
     review: dict[str, Any] = field(
@@ -340,6 +358,9 @@ class TurnRecord:
 
             "assignment":
                 self.assignment.to_dict(),
+
+            "curation":
+                self.curation.to_dict(),
 
             "review": self.review,
             "metadata": self.metadata,

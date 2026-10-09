@@ -21,11 +21,13 @@ from .turn_curation import (
     merge_and_prepare_turns,
     split_and_prepare_turn,
     trim_and_prepare_turn,
+    mark_turn_accepted,
+    mark_turn_curation_pending,
+    mark_turn_rejected,
 )
 from .voices import (
     assign_turn,
     create_voice,
-    ignore_turn,
     mark_turn_unknown,
 )
 from .speaker_candidates import (
@@ -263,8 +265,8 @@ class ReviewerSession:
             self._require_current_id(),
         )
 
-    def ignore(self) -> dict[str, Any]:
-        return ignore_turn(
+    def reject(self) -> dict[str, Any]:
+        return mark_turn_rejected(
             self.storage,
             self._require_current_id(),
         )
@@ -321,6 +323,14 @@ class ReviewerSession:
                 )
             )
 
+        curation = turn.get("curation") or {}
+
+        if curation.get("status") != "rejected":
+            mark_turn_accepted(
+                self.storage,
+                turn_id,
+            )
+
         mark_turn_reviewed(
             self.storage,
             turn_id,
@@ -355,6 +365,11 @@ class ReviewerSession:
         turn_id = self._require_current_id()
 
         mark_turn_pending(
+            self.storage,
+            turn_id,
+        )
+
+        mark_turn_curation_pending(
             self.storage,
             turn_id,
         )

@@ -437,9 +437,42 @@ def test_session_updates_assignment_status(
 
     assert result["assignment"]["status"] == "unknown"
 
-    result = session.ignore()
 
-    assert result["assignment"]["status"] == "ignore"
+def test_session_rejects_turn_without_changing_assignment(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    voice = create_voice(
+        storage,
+        character="Test Character",
+        language="en",
+    )
+
+    session = ReviewerSession(storage)
+
+    session.assign_voice(
+        voice["id"]
+    )
+
+    result = session.reject()
+
+    assert result["curation"] == {
+        "status": "rejected",
+    }
+
+    assert result["assignment"] == {
+        "status": "assigned",
+        "voice_id": voice["id"],
+        "method": "manual",
+        "confidence": None,
+    }
 
 
 def test_session_assigns_voice_to_current_turn(
@@ -1583,12 +1616,66 @@ def test_session_trim_requires_current_turn(
         )
 
 
+def test_turn_rejection_preserves_speaker_calibration(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    voice = create_voice(
+        storage,
+        character="Voice One",
+        language="en",
+    )
+
+    def add_existing_calibration(record):
+        record["assignment"] = {
+            "status": "assigned",
+            "voice_id": voice["id"],
+            "method": "manual",
+            "confidence": None,
+        }
+
+        review = dict(
+            record.get("review") or {}
+        )
+        review["speaker_calibration"] = {
+            "schema_version": 1,
+            "confirmed_voice_id": voice["id"],
+        }
+
+        record["review"] = review
+        return record
+
+    storage.update_turn(
+        "turn_000001",
+        add_existing_calibration,
+    )
+
+    session = ReviewerSession(storage)
+
+    result = session.reject()
+
+    assert result["curation"]["status"] == "rejected"
+
+    assert (
+        result["review"]["speaker_calibration"][
+            "confirmed_voice_id"
+        ]
+        == voice["id"]
+    )
+
+
 @pytest.mark.parametrize(
     "action",
     [
         "assign",
         "unknown",
-        "ignore",
     ],
 )
 def test_assignment_change_invalidates_speaker_calibration(
@@ -1646,12 +1733,82 @@ def test_assignment_change_invalidates_speaker_calibration(
         result = session.assign_voice(
             other_voice["id"]
         )
-    elif action == "unknown":
-        result = session.mark_unknown()
     else:
-        result = session.ignore()
+        result = session.mark_unknown()
 
     assert (
         "speaker_calibration"
         not in result["review"]
     )
+
+
+def test_mark_reviewed_accepts_pending_turn(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    result = session.mark_reviewed()
+
+    assert result["review"]["status"] == "reviewed"
+    assert result["curation"] == {
+        "status": "accepted",
+    }
+
+
+def test_mark_reviewed_preserves_rejected_turn(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    rejected = session.reject()
+
+    assert rejected["curation"] == {
+        "status": "rejected",
+    }
+
+    result = session.mark_reviewed()
+
+    assert result["review"]["status"] == "reviewed"
+    assert result["curation"] == {
+        "status": "rejected",
+    }
+
+
+def test_mark_pending_reopens_rejected_turn_curation(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    session.reject()
+    session.mark_reviewed()
+
+    result = session.mark_pending()
+
+    assert result["review"]["status"] == "pending"
+    assert result["curation"] == {
+        "status": "pending",
+    }

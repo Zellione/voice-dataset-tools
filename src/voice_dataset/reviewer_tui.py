@@ -96,7 +96,7 @@ class HelpScreen(ModalScreen[None]):
                     "Speaker",
                     "  v         Assign/create voice",
                     "  u         Mark voice unknown",
-                    "  i         Ignore turn",
+                    "  i         Reject turn",
                     "",
                     "Boundary",
                     "  k         Mark complete",
@@ -1079,8 +1079,8 @@ class ReviewerTUI(App[None]):
         ),
         Binding(
             "i",
-            "ignore_turn",
-            "Ignore",
+            "reject_turn",
+            "Reject",
         ),
         Binding(
             "t",
@@ -1145,7 +1145,7 @@ class ReviewerTUI(App[None]):
         "mark_reviewed",
         "mark_pending",
         "mark_unknown",
-        "ignore_turn",
+        "reject_turn",
         "edit_transcript",
         "edit_language",
         "mark_boundary_complete",
@@ -1622,12 +1622,12 @@ class ReviewerTUI(App[None]):
                 f"Action failed: {exc}"
             )
 
-    def action_ignore_turn(self) -> None:
+    def action_reject_turn(self) -> None:
         try:
-            self.session.ignore()
+            self.session.reject()
             self._refresh_view()
             self._set_status(
-                "Turn ignored."
+                "Turn rejected."
             )
         except (
             ValueError,

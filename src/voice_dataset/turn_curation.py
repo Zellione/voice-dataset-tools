@@ -786,3 +786,68 @@ def trim_and_prepare_turn(
         )
 
     return stored
+
+def set_turn_curation_status(
+    storage: DatasetStorage,
+    turn_id: str,
+    status: str,
+) -> dict[str, Any]:
+    if status not in {
+        "pending",
+        "accepted",
+        "rejected",
+    }:
+        raise ValueError(
+            f"Invalid turn curation status: {status}"
+        )
+
+    if storage.get_turn(turn_id) is None:
+        raise KeyError(
+            f"Turn does not exist: {turn_id}"
+        )
+
+    def update(
+        record: dict[str, Any],
+    ) -> dict[str, Any]:
+        record["curation"] = {
+            "status": status,
+        }
+        return record
+
+    return storage.update_turn(
+        turn_id,
+        update,
+    )
+
+
+def mark_turn_rejected(
+    storage: DatasetStorage,
+    turn_id: str,
+) -> dict[str, Any]:
+    return set_turn_curation_status(
+        storage,
+        turn_id,
+        "rejected",
+    )
+
+
+def mark_turn_accepted(
+    storage: DatasetStorage,
+    turn_id: str,
+) -> dict[str, Any]:
+    return set_turn_curation_status(
+        storage,
+        turn_id,
+        "accepted",
+    )
+
+
+def mark_turn_curation_pending(
+    storage: DatasetStorage,
+    turn_id: str,
+) -> dict[str, Any]:
+    return set_turn_curation_status(
+        storage,
+        turn_id,
+        "pending",
+    )

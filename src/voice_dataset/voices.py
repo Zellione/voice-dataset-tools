@@ -119,43 +119,6 @@ def mark_turn_unknown(
     )
 
 
-def ignore_turn(
-    storage: DatasetStorage,
-    turn_id: str,
-    *,
-    method: str = "manual",
-) -> dict[str, Any]:
-    if storage.get_turn(turn_id) is None:
-        raise KeyError(
-            f"Turn does not exist: {turn_id}"
-        )
-
-    def update(
-        record: dict[str, Any],
-    ) -> dict[str, Any]:
-        record["assignment"] = {
-            "status": "ignore",
-            "voice_id": None,
-            "method": method,
-            "confidence": None,
-        }
-
-        review = dict(
-            record.get("review") or {}
-        )
-        review.pop(
-            "speaker_calibration",
-            None,
-        )
-        record["review"] = review
-
-        return record
-
-    return storage.turns.update(
-        turn_id,
-        update,
-    )
-
 
 def set_voice_ignored(
     storage: DatasetStorage,

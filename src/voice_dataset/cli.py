@@ -49,10 +49,10 @@ from .reviewer_tui import run_reviewer_tui
 from .voices import (
     assign_turn,
     create_voice,
-    ignore_turn,
     mark_turn_unknown,
     set_voice_ignored,
 )
+from .turn_curation import mark_turn_rejected
 from .detectors import (
     detect_source_regions,
     import_detector_regions,
@@ -2321,23 +2321,22 @@ def turn_unknown(
     )
 
 
-@turn_app.command("ignore")
-def turn_ignore(
+@turn_app.command("reject")
+def turn_reject(
     turn_id: str,
     dataset: Path = typer.Option(
         Path("datasets/output"),
         help="Dataset directory.",
     ),
 ):
-    """Ignore one specific turn."""
+    """Reject one specific turn."""
 
     storage = storage_for(dataset)
 
     try:
-        ignore_turn(
+        mark_turn_rejected(
             storage,
             turn_id,
-            method="manual",
         )
     except KeyError as exc:
         typer.echo(
@@ -2347,7 +2346,7 @@ def turn_ignore(
         raise typer.Exit(1)
 
     typer.echo(
-        f"{turn_id} -> ignore"
+        f"{turn_id} -> rejected"
     )
 
 
@@ -2902,7 +2901,7 @@ def turn_review(
                 )
 
             elif command == "i":
-                ignore_turn(
+                mark_turn_rejected(
                     storage,
                     turn_id,
                 )

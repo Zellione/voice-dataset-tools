@@ -790,7 +790,7 @@ async def test_reviewer_tui_marks_voice_unknown(
 
 
 @pytest.mark.asyncio
-async def test_reviewer_tui_ignores_turn(
+async def test_reviewer_tui_rejects_turn(
     tmp_path,
 ):
     storage = DatasetStorage(tmp_path)
@@ -818,7 +818,12 @@ async def test_reviewer_tui_ignores_turn(
         )
 
         assert turn is not None
-        assert turn["assignment"]["status"] == "ignore"
+
+        assert turn["curation"] == {
+            "status": "rejected",
+        }
+
+        assert turn["assignment"]["status"] == "unknown"
 
 
 @pytest.mark.asyncio

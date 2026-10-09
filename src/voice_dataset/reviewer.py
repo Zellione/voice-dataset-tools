@@ -424,7 +424,7 @@ def reviewer_help() -> str:
         "  l  set language",
         "  v  assign voice",
         "  u  mark voice unknown",
-        "  i  ignore turn",
+        "  i  reject turn",
         "  a  mark reviewed",
         "  x  mark review pending",
         "  k  mark boundary complete",
