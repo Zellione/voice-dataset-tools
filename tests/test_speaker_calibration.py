@@ -4,6 +4,8 @@ from voice_dataset.speaker_calibration import (
     build_calibration_observation,
     evaluate_calibration_rule,
     filter_calibration_observations,
+    load_calibration_observations,
+    speaker_calibration_observation_from_dict,
     speaker_calibration_observation_to_dict,
     summarize_calibration_observations,
     summarize_speaker_candidates,
@@ -16,6 +18,8 @@ from voice_dataset.speaker_candidates import (
 from voice_dataset.speaker_similarity import (
     VoiceTurnMatch,
 )
+from voice_dataset.schema import TurnRecord
+from voice_dataset.storage import DatasetStorage
 
 
 def test_calibration_observation_serializes_for_storage():
@@ -75,6 +79,273 @@ def test_calibration_observation_serializes_for_storage():
         },
         "total_source_support": 3,
     }
+
+
+def test_calibration_observation_roundtrips_storage():
+    original = SpeakerCalibrationObservation(
+        turn_id="turn_001",
+        source_id="episode_01",
+        confirmed_voice_id="voice_001",
+        predicted_voice_id="voice_002",
+        correct=False,
+        top_score=0.81,
+        runner_up_score=0.43,
+        margin=0.38,
+        encoder_count=2,
+        embedding_scores={
+            "ecapa_speaker": 0.78,
+            "wespeaker_speaker": 0.84,
+        },
+        support={
+            "ecapa_speaker": 5,
+            "wespeaker_speaker": 7,
+        },
+        source_support={
+            "ecapa_speaker": 2,
+            "wespeaker_speaker": 3,
+        },
+        total_source_support=3,
+    )
+
+    encoded = (
+        speaker_calibration_observation_to_dict(
+            original
+        )
+    )
+
+    decoded = (
+        speaker_calibration_observation_from_dict(
+            encoded
+        )
+    )
+
+    assert decoded == original
+
+
+def test_calibration_observation_rejects_unknown_schema_version():
+    record = speaker_calibration_observation_to_dict(
+        SpeakerCalibrationObservation(
+            turn_id="turn_001",
+            source_id="episode_01",
+            confirmed_voice_id="voice_001",
+            predicted_voice_id=None,
+            correct=False,
+            top_score=None,
+            runner_up_score=None,
+            margin=None,
+            encoder_count=0,
+            embedding_scores={},
+            support={},
+            source_support={},
+            total_source_support=0,
+        )
+    )
+
+    record["schema_version"] = 999
+
+    with pytest.raises(
+        ValueError,
+        match="unsupported speaker calibration",
+    ):
+        speaker_calibration_observation_from_dict(
+            record
+        )
+
+
+def test_calibration_observation_rejects_inconsistent_correct_flag():
+    record = speaker_calibration_observation_to_dict(
+        SpeakerCalibrationObservation(
+            turn_id="turn_001",
+            source_id="episode_01",
+            confirmed_voice_id="voice_001",
+            predicted_voice_id="voice_001",
+            correct=True,
+            top_score=0.8,
+            runner_up_score=None,
+            margin=None,
+            encoder_count=1,
+            embedding_scores={},
+            support={},
+            source_support={},
+            total_source_support=1,
+        )
+    )
+
+    record["correct"] = False
+
+    with pytest.raises(
+        ValueError,
+        match="correct flag",
+    ):
+        speaker_calibration_observation_from_dict(
+            record
+        )
+
+
+def _add_calibration_turn(
+    storage: DatasetStorage,
+    *,
+    turn_id: str,
+    source_id: str,
+    confirmed_voice_id: str,
+    review_status: str = "reviewed",
+) -> None:
+    storage.add_turn(
+        TurnRecord(
+            id=turn_id,
+            source_id=source_id,
+            source_start=0.0,
+            source_end=1.0,
+        )
+    )
+
+    observation = SpeakerCalibrationObservation(
+        turn_id=turn_id,
+        source_id=source_id,
+        confirmed_voice_id=confirmed_voice_id,
+        predicted_voice_id=confirmed_voice_id,
+        correct=True,
+        top_score=0.82,
+        runner_up_score=0.41,
+        margin=0.41,
+        encoder_count=2,
+        embedding_scores={
+            "ecapa_speaker": 0.80,
+            "wespeaker_speaker": 0.84,
+        },
+        support={
+            "ecapa_speaker": 2,
+            "wespeaker_speaker": 2,
+        },
+        source_support={
+            "ecapa_speaker": 2,
+            "wespeaker_speaker": 2,
+        },
+        total_source_support=2,
+    )
+
+    def update(record):
+        record["assignment"] = {
+            "status": "assigned",
+            "voice_id": confirmed_voice_id,
+            "method": "manual",
+            "confidence": None,
+        }
+        record["review"] = {
+            "status": review_status,
+            "speaker_calibration":
+                speaker_calibration_observation_to_dict(
+                    observation
+                ),
+        }
+        return record
+
+    storage.update_turn(
+        turn_id,
+        update,
+    )
+
+
+def test_load_calibration_observations_collects_reviewed_turns(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    _add_calibration_turn(
+        storage,
+        turn_id="turn_001",
+        source_id="episode_01",
+        confirmed_voice_id="voice_001",
+    )
+    _add_calibration_turn(
+        storage,
+        turn_id="turn_002",
+        source_id="episode_02",
+        confirmed_voice_id="voice_002",
+    )
+    _add_calibration_turn(
+        storage,
+        turn_id="turn_pending",
+        source_id="episode_03",
+        confirmed_voice_id="voice_003",
+        review_status="pending",
+    )
+
+    observations = load_calibration_observations(
+        storage
+    )
+
+    assert [
+        observation.turn_id
+        for observation in observations
+    ] == [
+        "turn_001",
+        "turn_002",
+    ]
+
+
+def test_load_calibration_observations_rejects_stale_assignment(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    _add_calibration_turn(
+        storage,
+        turn_id="turn_001",
+        source_id="episode_01",
+        confirmed_voice_id="voice_001",
+    )
+
+    def make_stale(record):
+        record["assignment"]["voice_id"] = (
+            "voice_002"
+        )
+        return record
+
+    storage.update_turn(
+        "turn_001",
+        make_stale,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="confirmed voice does not match",
+    ):
+        load_calibration_observations(
+            storage
+        )
+
+
+def test_load_calibration_observations_rejects_mismatched_turn_id(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    _add_calibration_turn(
+        storage,
+        turn_id="turn_001",
+        source_id="episode_01",
+        confirmed_voice_id="voice_001",
+    )
+
+    def corrupt(record):
+        record["review"][
+            "speaker_calibration"
+        ]["turn_id"] = "turn_other"
+        return record
+
+    storage.update_turn(
+        "turn_001",
+        corrupt,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="turn_id does not match",
+    ):
+        load_calibration_observations(
+            storage
+        )
 
 
 def test_summarize_speaker_candidates_records_top1_and_margin():

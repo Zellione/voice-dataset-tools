@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from .speaker_candidates import SpeakerCandidate
+from .storage import DatasetStorage
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,348 @@ def speaker_calibration_observation_to_dict(
         "total_source_support":
             observation.total_source_support,
     }
+
+
+def _require_string(
+    record: dict[str, Any],
+    key: str,
+) -> str:
+    value = record.get(key)
+
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            f"speaker calibration has invalid {key}"
+        )
+
+    return value
+
+
+def _optional_string(
+    record: dict[str, Any],
+    key: str,
+) -> str | None:
+    value = record.get(key)
+
+    if value is None:
+        return None
+
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            f"speaker calibration has invalid {key}"
+        )
+
+    return value
+
+
+def _optional_float(
+    record: dict[str, Any],
+    key: str,
+) -> float | None:
+    value = record.get(key)
+
+    if value is None:
+        return None
+
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+    ):
+        raise ValueError(
+            f"speaker calibration has invalid {key}"
+        )
+
+    return float(value)
+
+
+def _require_non_negative_int(
+    record: dict[str, Any],
+    key: str,
+) -> int:
+    value = record.get(key)
+
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 0
+    ):
+        raise ValueError(
+            f"speaker calibration has invalid {key}"
+        )
+
+    return value
+
+
+def _float_mapping(
+    record: dict[str, Any],
+    key: str,
+) -> dict[str, float]:
+    value = record.get(key)
+
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"speaker calibration has invalid {key}"
+        )
+
+    result: dict[str, float] = {}
+
+    for name, score in value.items():
+        if not isinstance(name, str) or not name:
+            raise ValueError(
+                f"speaker calibration has invalid {key}"
+            )
+
+        if (
+            isinstance(score, bool)
+            or not isinstance(score, (int, float))
+        ):
+            raise ValueError(
+                f"speaker calibration has invalid {key}"
+            )
+
+        result[name] = float(score)
+
+    return result
+
+
+def _int_mapping(
+    record: dict[str, Any],
+    key: str,
+) -> dict[str, int]:
+    value = record.get(key)
+
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"speaker calibration has invalid {key}"
+        )
+
+    result: dict[str, int] = {}
+
+    for name, count in value.items():
+        if not isinstance(name, str) or not name:
+            raise ValueError(
+                f"speaker calibration has invalid {key}"
+            )
+
+        if (
+            isinstance(count, bool)
+            or not isinstance(count, int)
+            or count < 0
+        ):
+            raise ValueError(
+                f"speaker calibration has invalid {key}"
+            )
+
+        result[name] = count
+
+    return result
+
+
+def speaker_calibration_observation_from_dict(
+    record: dict[str, Any],
+) -> SpeakerCalibrationObservation:
+    if not isinstance(record, dict):
+        raise ValueError(
+            "speaker calibration must be an object"
+        )
+
+    schema_version = record.get(
+        "schema_version"
+    )
+
+    if (
+        schema_version
+        != SPEAKER_CALIBRATION_SCHEMA_VERSION
+    ):
+        raise ValueError(
+            "unsupported speaker calibration "
+            f"schema version: {schema_version!r}"
+        )
+
+    turn_id = _require_string(
+        record,
+        "turn_id",
+    )
+    source_id = _require_string(
+        record,
+        "source_id",
+    )
+    confirmed_voice_id = _require_string(
+        record,
+        "confirmed_voice_id",
+    )
+    predicted_voice_id = _optional_string(
+        record,
+        "predicted_voice_id",
+    )
+
+    correct = record.get("correct")
+
+    if not isinstance(correct, bool):
+        raise ValueError(
+            "speaker calibration has invalid correct"
+        )
+
+    expected_correct = (
+        predicted_voice_id
+        == confirmed_voice_id
+    )
+
+    if correct != expected_correct:
+        raise ValueError(
+            "speaker calibration correct flag "
+            "does not match voice IDs"
+        )
+
+    observation = SpeakerCalibrationObservation(
+        turn_id=turn_id,
+        source_id=source_id,
+        confirmed_voice_id=confirmed_voice_id,
+        predicted_voice_id=predicted_voice_id,
+        correct=correct,
+        top_score=_optional_float(
+            record,
+            "top_score",
+        ),
+        runner_up_score=_optional_float(
+            record,
+            "runner_up_score",
+        ),
+        margin=_optional_float(
+            record,
+            "margin",
+        ),
+        encoder_count=_require_non_negative_int(
+            record,
+            "encoder_count",
+        ),
+        embedding_scores=_float_mapping(
+            record,
+            "embedding_scores",
+        ),
+        support=_int_mapping(
+            record,
+            "support",
+        ),
+        source_support=_int_mapping(
+            record,
+            "source_support",
+        ),
+        total_source_support=(
+            _require_non_negative_int(
+                record,
+                "total_source_support",
+            )
+        ),
+    )
+
+    if (
+        observation.predicted_voice_id is None
+        and observation.top_score is not None
+    ):
+        raise ValueError(
+            "speaker calibration without prediction "
+            "must not have top_score"
+        )
+
+    if (
+        observation.margin is not None
+        and (
+            observation.top_score is None
+            or observation.runner_up_score is None
+        )
+    ):
+        raise ValueError(
+            "speaker calibration margin requires "
+            "top and runner-up scores"
+        )
+
+    return observation
+
+
+def load_calibration_observations(
+    storage: DatasetStorage,
+) -> list[SpeakerCalibrationObservation]:
+    observations: list[
+        SpeakerCalibrationObservation
+    ] = []
+
+    for turn in storage.turns.load():
+        review = turn.get("review") or {}
+
+        if not isinstance(review, dict):
+            raise ValueError(
+                f"{turn.get('id', '<unknown>')}: "
+                "review must be an object"
+            )
+
+        if review.get("status") != "reviewed":
+            continue
+
+        calibration = review.get(
+            "speaker_calibration"
+        )
+
+        if calibration is None:
+            continue
+
+        if not isinstance(calibration, dict):
+            raise ValueError(
+                f"{turn.get('id', '<unknown>')}: "
+                "speaker calibration must be an object"
+            )
+
+        observation = (
+            speaker_calibration_observation_from_dict(
+                calibration
+            )
+        )
+
+        turn_id = turn.get("id")
+        source_id = turn.get("source_id")
+
+        if observation.turn_id != turn_id:
+            raise ValueError(
+                f"{turn_id}: speaker calibration "
+                "turn_id does not match turn"
+            )
+
+        if observation.source_id != source_id:
+            raise ValueError(
+                f"{turn_id}: speaker calibration "
+                "source_id does not match turn"
+            )
+
+        assignment = turn.get("assignment") or {}
+
+        if not isinstance(assignment, dict):
+            raise ValueError(
+                f"{turn_id}: assignment must be an object"
+            )
+
+        if assignment.get("status") != "assigned":
+            raise ValueError(
+                f"{turn_id}: reviewed speaker calibration "
+                "requires assigned voice"
+            )
+
+        if assignment.get("method") != "manual":
+            raise ValueError(
+                f"{turn_id}: reviewed speaker calibration "
+                "requires manual assignment"
+            )
+
+        if (
+            assignment.get("voice_id")
+            != observation.confirmed_voice_id
+        ):
+            raise ValueError(
+                f"{turn_id}: speaker calibration "
+                "confirmed voice does not match assignment"
+            )
+
+        observations.append(observation)
+
+    return observations
 
 
 def summarize_speaker_candidates(
