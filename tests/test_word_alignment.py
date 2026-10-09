@@ -1046,16 +1046,65 @@ def test_effective_alignment_recovers_stranded_words_between_anchors(
             ),
         )
 
-    monkeypatch.setattr(
-        word_alignment,
-        "recover_region_alignment",
-        fake_recover_region_alignment,
-    )
+    def fake_recover_alignment_candidates_batch(
+        storage: DatasetStorage,
+        source_id: str,
+        candidates,
+        words: list[dict],
+        *,
+        representation_name: str,
+        language: str,
+        max_inference_batch_size: int = 8,
+    ):
+        assert source_id == "source_001"
+        assert representation_name == "center"
+        assert language == "English"
+
+        recoveries = []
+
+        for candidate in candidates:
+            if candidate.region_id == "region_000011":
+                recoveries.append(
+                    LocalAlignmentRecovery(
+                        word_indices=(5, 6),
+                        region_id=candidate.region_id,
+                        region_start=candidate.region_start,
+                        region_end=candidate.region_end,
+                        text="Bravo sis",
+                        words=(
+                            word("Bravo", 178.231, 178.871),
+                            word("sis", 178.871, 179.431),
+                        ),
+                    )
+                )
+            elif candidate.region_id == "region_000010":
+                assert candidate.word_indices == (3, 4)
+
+                recoveries.append(
+                    LocalAlignmentRecovery(
+                        word_indices=candidate.word_indices,
+                        region_id=candidate.region_id,
+                        region_start=candidate.region_start,
+                        region_end=candidate.region_end,
+                        text="So god",
+                        words=(
+                            word("So", 163.617, 163.937),
+                            word("god", 163.937, 164.177),
+                        ),
+                    )
+                )
+            else:
+                raise AssertionError(
+                    f"unexpected recovery region: "
+                    f"{candidate.region_id}"
+                )
+
+        return recoveries
 
     monkeypatch.setattr(
         word_alignment,
-        "recover_stranded_alignment",
-        fake_recover_stranded_alignment,
+        "recover_alignment_candidates_batch",
+        fake_recover_alignment_candidates_batch,
     )
 
     result = word_alignment.build_effective_word_alignment(
@@ -1454,10 +1503,30 @@ def test_effective_alignment_skips_invalid_stranded_recovery(
             )
         ],
     )
+    def fake_batch_recovery(
+        storage,
+        source_id,
+        candidates,
+        words,
+        **kwargs,
+    ):
+        if not candidates:
+            return []
+
+        assert len(candidates) == 1
+        assert (
+            candidates[0].region_id
+            == "region_stranded"
+        )
+
+        return [
+            invalid_stranded_recovery
+        ]
+
     monkeypatch.setattr(
         word_alignment,
-        "recover_stranded_alignment",
-        lambda *args, **kwargs: invalid_stranded_recovery,
+        "recover_alignment_candidates_batch",
+        fake_batch_recovery,
     )
 
     result = word_alignment.build_effective_word_alignment(
@@ -1513,12 +1582,29 @@ def test_effective_alignment_propagates_stranded_recovery_failure(
         ],
     )
 
-    def fail_recovery(*args, **kwargs):
-        raise RuntimeError("forced aligner failed")
+    def fail_recovery(
+        storage,
+        source_id,
+        candidates,
+        words,
+        **kwargs,
+    ):
+        if not candidates:
+            return []
+
+        assert len(candidates) == 1
+        assert (
+            candidates[0].region_id
+            == "region_stranded"
+        )
+
+        raise RuntimeError(
+            "forced aligner failed"
+        )
 
     monkeypatch.setattr(
         word_alignment,
-        "recover_stranded_alignment",
+        "recover_alignment_candidates_batch",
         fail_recovery,
     )
 
@@ -2794,3 +2880,147 @@ def test_boundary_recovery_planner_respects_claimed_words():
     )
 
     assert planned == []
+
+
+def test_recover_alignment_candidates_batch_uses_one_qwen_batch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from voice_dataset.continuous_asr import (
+        ForcedAlignmentResult,
+    )
+    from voice_dataset.word_alignment import (
+        AlignmentRecoveryCandidate,
+        recover_alignment_candidates_batch,
+    )
+
+    storage = DatasetStorage(
+        tmp_path / "dataset"
+    )
+
+    source_audio = (
+        storage.root / "center.wav"
+    )
+    source_audio.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    source_audio.touch()
+
+    storage.sources.append(
+        {
+            "schema_version": 1,
+            "record_type": "source",
+            "id": "source_001",
+            "representations": {
+                "center": {
+                    "path": "center.wav",
+                    "kind": "center",
+                },
+            },
+            "metadata": {},
+        }
+    )
+
+    words = [
+        word("Hello", 10.0, 10.4),
+        word("world", 20.0, 20.4),
+    ]
+
+    candidates = [
+        AlignmentRecoveryCandidate(
+            word_indices=(0,),
+            start_word_index=0,
+            end_word_index=0,
+            region_id="region_1",
+            region_start=9.9,
+            region_end=10.5,
+            whisper_text="Hello",
+            speaker="SPEAKER_0",
+            issue_word_indices=(0,),
+            issue_reasons=("test",),
+        ),
+        AlignmentRecoveryCandidate(
+            word_indices=(1,),
+            start_word_index=1,
+            end_word_index=1,
+            region_id="region_2",
+            region_start=19.9,
+            region_end=20.5,
+            whisper_text="world",
+            speaker="SPEAKER_1",
+            issue_word_indices=(1,),
+            issue_reasons=("test",),
+        ),
+    ]
+
+    monkeypatch.setattr(
+        word_alignment,
+        "extract_audio_region",
+        lambda **kwargs: Path(
+            kwargs["destination"]
+        ).touch(),
+    )
+
+    calls = []
+
+    def fake_align_texts(
+        requests,
+        *,
+        max_inference_batch_size,
+    ):
+        calls.append(
+            (
+                list(requests),
+                max_inference_batch_size,
+            )
+        )
+
+        return [
+            ForcedAlignmentResult(
+                language="English",
+                text="Hello",
+                words=[
+                    word("Hello", 0.1, 0.4),
+                ],
+            ),
+            ForcedAlignmentResult(
+                language="English",
+                text="world",
+                words=[
+                    word("world", 0.1, 0.4),
+                ],
+            ),
+        ]
+
+    monkeypatch.setattr(
+        word_alignment,
+        "align_texts_qwen3",
+        fake_align_texts,
+    )
+
+    recoveries = (
+        recover_alignment_candidates_batch(
+            storage,
+            "source_001",
+            candidates,
+            words,
+            representation_name="center",
+            language="English",
+            max_inference_batch_size=16,
+        )
+    )
+
+    assert len(calls) == 1
+    assert calls[0][1] == 16
+    assert len(calls[0][0]) == 2
+
+    assert len(recoveries) == 2
+
+    assert recoveries[0].words[0]["start"] == (
+        pytest.approx(10.0)
+    )
+
+    assert recoveries[1].words[0]["start"] == (
+        pytest.approx(20.0)
+    )

@@ -6,7 +6,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from .continuous_asr import align_text_qwen3
+from .continuous_asr import (
+    ForcedAlignmentRequest,
+    align_text_qwen3,
+    align_texts_qwen3,
+)
 from .media import extract_audio_region
 from .sources import resolve_source_representation
 from .storage import DatasetStorage
@@ -143,6 +147,218 @@ def _plan_boundary_recovery_anchors(
     return planned
 
 
+def _candidate_from_region_evidence(
+    evidence: AlignmentRegionEvidence,
+) -> AlignmentRecoveryCandidate:
+    match = evidence.unique_text_match
+
+    if match is None:
+        raise ValueError(
+            "Region alignment recovery requires "
+            "a unique text match"
+        )
+
+    return AlignmentRecoveryCandidate(
+        word_indices=match.word_indices,
+        start_word_index=match.start_word_index,
+        end_word_index=match.end_word_index,
+        region_id=evidence.region_id,
+        region_start=evidence.start,
+        region_end=evidence.end,
+        whisper_text=evidence.whisper_text,
+        speaker=evidence.speaker,
+        issue_word_indices=(),
+        issue_reasons=(
+            "boundary_alignment_probe",
+        ),
+    )
+
+
+def _stranded_to_alignment_candidate(
+    candidate: StrandedAlignmentCandidate,
+) -> AlignmentRecoveryCandidate:
+    return AlignmentRecoveryCandidate(
+        word_indices=candidate.word_indices,
+        start_word_index=(
+            candidate.word_indices[0]
+        ),
+        end_word_index=(
+            candidate.word_indices[-1]
+        ),
+        region_id=candidate.region_id,
+        region_start=candidate.region_start,
+        region_end=candidate.region_end,
+        whisper_text="",
+        speaker=candidate.speaker,
+        issue_word_indices=(
+            candidate.word_indices
+        ),
+        issue_reasons=(
+            "stranded_alignment",
+        ),
+    )
+
+
+def recover_alignment_candidates_batch(
+    storage: DatasetStorage,
+    source_id: str,
+    candidates: list[AlignmentRecoveryCandidate],
+    words: list[dict[str, Any]],
+    *,
+    representation_name: str,
+    language: str,
+    max_inference_batch_size: int = 8,
+) -> list[LocalAlignmentRecovery]:
+    if not candidates:
+        return []
+
+    # Preserve the existing single-item path. Besides being
+    # simple, this keeps individual recovery behavior and
+    # tests unchanged.
+    if len(candidates) == 1:
+        return [
+            recover_candidate_alignment(
+                storage,
+                source_id,
+                candidates[0],
+                words,
+                representation_name=(
+                    representation_name
+                ),
+                language=language,
+            )
+        ]
+
+    _, source_path = resolve_source_representation(
+        storage,
+        source_id,
+        representation_name,
+    )
+
+    with TemporaryDirectory(
+        prefix="voice-dataset-alignment-batch-"
+    ) as temporary_dir:
+        temporary_root = Path(
+            temporary_dir
+        )
+
+        requests: list[
+            ForcedAlignmentRequest
+        ] = []
+
+        texts: list[str] = []
+
+        for index, candidate in enumerate(
+            candidates
+        ):
+            text = " ".join(
+                str(words[word_index]["text"])
+                for word_index
+                in candidate.word_indices
+            )
+
+            if not text.strip():
+                raise ValueError(
+                    "Alignment recovery candidate "
+                    f"{index} has no text"
+                )
+
+            clip_path = (
+                temporary_root
+                / f"candidate_{index:04d}.wav"
+            )
+
+            extract_audio_region(
+                source=source_path,
+                destination=clip_path,
+                start=candidate.region_start,
+                end=candidate.region_end,
+            )
+
+            texts.append(text)
+
+            requests.append(
+                ForcedAlignmentRequest(
+                    audio_path=clip_path,
+                    text=text,
+                    language=language,
+                )
+            )
+
+        alignments = align_texts_qwen3(
+            requests,
+            max_inference_batch_size=(
+                max_inference_batch_size
+            ),
+        )
+
+        if len(alignments) != len(
+            candidates
+        ):
+            raise RuntimeError(
+                "Forced alignment batch result "
+                "count mismatch"
+            )
+
+        recoveries: list[
+            LocalAlignmentRecovery
+        ] = []
+
+        for (
+            candidate,
+            text,
+            alignment,
+        ) in zip(
+            candidates,
+            texts,
+            alignments,
+            strict=True,
+        ):
+            recovered_words = tuple(
+                {
+                    "text": word["text"],
+                    "start": max(
+                        candidate.region_start,
+                        min(
+                            float(word["start"])
+                            + candidate.region_start,
+                            candidate.region_end,
+                        ),
+                    ),
+                    "end": max(
+                        candidate.region_start,
+                        min(
+                            float(word["end"])
+                            + candidate.region_start,
+                            candidate.region_end,
+                        ),
+                    ),
+                }
+                for word in alignment.words
+            )
+
+            recoveries.append(
+                LocalAlignmentRecovery(
+                    word_indices=(
+                        candidate.word_indices
+                    ),
+                    region_id=(
+                        candidate.region_id
+                    ),
+                    region_start=(
+                        candidate.region_start
+                    ),
+                    region_end=(
+                        candidate.region_end
+                    ),
+                    text=text,
+                    words=recovered_words,
+                )
+            )
+
+    return recoveries
+
+
 def build_effective_word_alignment(
     storage: DatasetStorage,
     source_id: str,
@@ -174,6 +390,10 @@ def build_effective_word_alignment(
 
     claimed_word_indices: set[int] = set()
 
+    planned_word_candidates: list[
+        AlignmentRecoveryCandidate
+    ] = []
+
     for candidate in word_candidates:
         candidate_indices = set(
             candidate.word_indices
@@ -185,20 +405,12 @@ def build_effective_word_alignment(
         ):
             continue
 
-        recovery = recover_candidate_alignment(
-            storage,
-            source_id,
-            candidate,
-            words,
-            representation_name=(
-                representation_name
-            ),
-            language=language,
+        planned_word_candidates.append(
+            candidate
         )
 
-        recoveries.append(recovery)
         claimed_word_indices.update(
-            recovery.word_indices
+            candidate.word_indices
         )
 
     boundary_anchors = (
@@ -211,18 +423,50 @@ def build_effective_word_alignment(
         )
     )
 
-    for anchor in boundary_anchors:
-        recovery = recover_region_alignment(
+    boundary_candidates = [
+        _candidate_from_region_evidence(
+            anchor
+        )
+        for anchor in boundary_anchors
+    ]
+
+    initial_candidates = [
+        *planned_word_candidates,
+        *boundary_candidates,
+    ]
+
+    initial_recoveries = (
+        recover_alignment_candidates_batch(
             storage,
             source_id,
-            anchor,
+            initial_candidates,
             words,
             representation_name=(
                 representation_name
             ),
             language=language,
         )
+    )
 
+    word_recovery_count = len(
+        planned_word_candidates
+    )
+
+    word_recoveries = initial_recoveries[
+        :word_recovery_count
+    ]
+
+    candidate_boundary_recoveries = (
+        initial_recoveries[
+            word_recovery_count:
+        ]
+    )
+
+    recoveries.extend(
+        word_recoveries
+    )
+
+    for recovery in candidate_boundary_recoveries:
         comparison = (
             compare_alignment_recovery(
                 words,
@@ -235,18 +479,9 @@ def build_effective_word_alignment(
         ):
             continue
 
-        recovery_indices = set(
-            recovery.word_indices
-        )
-
-        if recovery_indices & claimed_word_indices:
-            continue
-
         recoveries.append(recovery)
-        boundary_recoveries.append(recovery)
-
-        claimed_word_indices.update(
-            recovery.word_indices
+        boundary_recoveries.append(
+            recovery
         )
 
     stranded_candidates = (
@@ -257,18 +492,27 @@ def build_effective_word_alignment(
         )
     )
 
-    for candidate in stranded_candidates:
-        recovery = recover_stranded_alignment(
+    stranded_alignment_candidates = [
+        _stranded_to_alignment_candidate(
+            candidate
+        )
+        for candidate in stranded_candidates
+    ]
+
+    stranded_recoveries = (
+        recover_alignment_candidates_batch(
             storage,
             source_id,
-            candidate,
+            stranded_alignment_candidates,
             words,
             representation_name=(
                 representation_name
             ),
             language=language,
         )
+    )
 
+    for recovery in stranded_recoveries:
         if alignment_recovery_is_valid(
             words,
             recovery,
