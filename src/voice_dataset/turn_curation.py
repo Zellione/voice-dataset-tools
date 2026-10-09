@@ -851,3 +851,46 @@ def mark_turn_curation_pending(
         turn_id,
         "pending",
     )
+
+
+def migrate_legacy_ignored_turns(
+    storage: DatasetStorage,
+) -> int:
+    records = storage.turns.load()
+    migrated_count = 0
+
+    for record in records:
+        assignment = record.get("assignment")
+
+        if not isinstance(assignment, dict):
+            continue
+
+        if assignment.get("status") != "ignore":
+            continue
+
+        record["assignment"] = {
+            "status": "unknown",
+            "voice_id": None,
+            "method": None,
+            "confidence": None,
+        }
+
+        record["curation"] = {
+            "status": "rejected",
+        }
+
+        review = dict(
+            record.get("review") or {}
+        )
+        review.pop(
+            "speaker_calibration",
+            None,
+        )
+        record["review"] = review
+
+        migrated_count += 1
+
+    if migrated_count:
+        storage.turns.replace(records)
+
+    return migrated_count

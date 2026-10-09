@@ -11,6 +11,7 @@ from voice_dataset.turn_curation import (
     project_curated_turn,
     trim_and_prepare_turn,
     _project_split,
+    migrate_legacy_ignored_turns,
 )
 
 
@@ -1637,3 +1638,152 @@ def test_prepare_curated_source_turns_can_capture_worker_output(
             True,
         ),
     ]
+
+
+def test_migrate_legacy_ignored_turns(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "record_type": "turn",
+            "id": "turn_legacy_ignore",
+            "source_id": "source_001",
+            "source_start": 0.0,
+            "source_end": 1.0,
+            "source_regions": [],
+            "language": "en",
+            "transcript": "legacy ignored",
+            "representations": {},
+            "embeddings": {},
+            "assignment": {
+                "status": "ignore",
+                "voice_id": None,
+                "method": "manual",
+                "confidence": None,
+            },
+            "review": {
+                "status": "reviewed",
+                "speaker_calibration": {
+                    "schema_version": 1,
+                    "confirmed_voice_id": "voice_001",
+                },
+            },
+            "metadata": {},
+        }
+    )
+
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "record_type": "turn",
+            "id": "turn_normal",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 2.0,
+            "source_regions": [],
+            "language": "en",
+            "transcript": "normal",
+            "representations": {},
+            "embeddings": {},
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+                "confidence": None,
+            },
+            "curation": {
+                "status": "pending",
+            },
+            "review": {
+                "status": "pending",
+            },
+            "metadata": {},
+        }
+    )
+
+    migrated = migrate_legacy_ignored_turns(
+        storage
+    )
+
+    assert migrated == 1
+
+    legacy = storage.get_turn(
+        "turn_legacy_ignore"
+    )
+
+    assert legacy is not None
+
+    assert legacy["assignment"] == {
+        "status": "unknown",
+        "voice_id": None,
+        "method": None,
+        "confidence": None,
+    }
+
+    assert legacy["curation"] == {
+        "status": "rejected",
+    }
+
+    assert legacy["review"]["status"] == "reviewed"
+    assert (
+        "speaker_calibration"
+        not in legacy["review"]
+    )
+
+    normal = storage.get_turn(
+        "turn_normal"
+    )
+
+    assert normal is not None
+    assert normal["curation"] == {
+        "status": "pending",
+    }
+
+
+def test_migrate_legacy_ignored_turns_is_idempotent(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "record_type": "turn",
+            "id": "turn_legacy_ignore",
+            "source_id": "source_001",
+            "source_start": 0.0,
+            "source_end": 1.0,
+            "source_regions": [],
+            "language": None,
+            "transcript": None,
+            "representations": {},
+            "embeddings": {},
+            "assignment": {
+                "status": "ignore",
+                "voice_id": None,
+                "method": "manual",
+                "confidence": None,
+            },
+            "review": {
+                "status": "pending",
+            },
+            "metadata": {},
+        }
+    )
+
+    first = migrate_legacy_ignored_turns(
+        storage
+    )
+    after_first = storage.turns.path.read_bytes()
+
+    second = migrate_legacy_ignored_turns(
+        storage
+    )
+    after_second = storage.turns.path.read_bytes()
+
+    assert first == 1
+    assert second == 0
+    assert after_second == after_first

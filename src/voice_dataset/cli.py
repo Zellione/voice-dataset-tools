@@ -52,7 +52,10 @@ from .voices import (
     mark_turn_unknown,
     set_voice_ignored,
 )
-from .turn_curation import mark_turn_rejected
+from .turn_curation import (
+    mark_turn_rejected,
+    migrate_legacy_ignored_turns,
+)
 from .detectors import (
     detect_source_regions,
     import_detector_regions,
@@ -2352,6 +2355,29 @@ def turn_reject(
 
 if __name__ == "__main__":
     app()
+
+
+@turn_app.command("migrate-legacy-ignore")
+def turn_migrate_legacy_ignore(
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Migrate legacy ignored turns to rejected curation."""
+
+    storage = storage_for(dataset)
+
+    migrated_count = migrate_legacy_ignored_turns(
+        storage
+    )
+
+    typer.echo(
+        f"Migrated {migrated_count} legacy "
+        "ignored turn"
+        + ("" if migrated_count == 1 else "s")
+        + "."
+    )
 
 
 @turn_app.command("review")
