@@ -274,10 +274,12 @@ class VoicePickerScreen(
         *,
         voices: list[dict],
         candidates: tuple = (),
+        review_mode: str = "none",
     ) -> None:
         super().__init__()
         self.voices = voices
         self.candidates = candidates
+        self.review_mode = review_mode
 
         self._voices_by_id = {
             str(voice["id"]): voice
@@ -358,13 +360,19 @@ class VoicePickerScreen(
     ]
 
     def compose(self) -> ComposeResult:
-        candidate_ids = {
-            candidate.voice_id
-            for candidate in self.candidates
-        }
+        top_candidate_id = (
+            self.candidates[0].voice_id
+            if self.candidates
+            else None
+        )
 
         summary_lines = [
-            "Suggested voices are listed first.",
+            (
+                "Speaker recommendation: "
+                f"{self.review_mode}"
+            ),
+            "",
+            "Candidate voices are listed first.",
             "",
             "All voices",
         ]
@@ -392,17 +400,19 @@ class VoicePickerScreen(
                 or "-"
             )
 
-            suggested = (
-                "  [suggested]"
-                if voice_id in candidate_ids
-                else ""
-            )
+            marker = ""
+
+            if voice_id == top_candidate_id:
+                if self.review_mode == "prefill":
+                    marker = "  [prefill]"
+                elif self.review_mode == "suggest":
+                    marker = "  [suggested]"
 
             options.append(
                 Option(
                     f"{voice_id}  "
                     f"{character}"
-                    f"{suggested}",
+                    f"{marker}",
                     id=voice_id,
                 )
             )
@@ -437,6 +447,34 @@ class VoicePickerScreen(
             ),
             id="voice-shortcuts",
         )
+
+    def on_mount(self) -> None:
+        if not self.voice_ids:
+            return
+
+        options = self.query_one(
+            "#voice-options",
+            OptionList,
+        )
+
+        if (
+            self.review_mode == "prefill"
+            and self.candidates
+        ):
+            prefill_voice_id = (
+                self.candidates[0].voice_id
+            )
+
+            try:
+                index = self.voice_ids.index(
+                    prefill_voice_id
+                )
+            except ValueError:
+                options.highlighted = None
+            else:
+                options.highlighted = index
+        else:
+            options.highlighted = None
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -1567,6 +1605,11 @@ class ReviewerTUI(App[None]):
                     .voices.load()
                 ),
                 candidates=candidates,
+                review_mode=(
+                    view.speaker_review_mode
+                    if view is not None
+                    else "none"
+                ),
             ),
             self._voice_selected,
         )
@@ -2273,12 +2316,19 @@ class ReviewerTUI(App[None]):
         parameters: tuple,
     ) -> bool | None:
         if action == "previous_turn":
-            return self.session.position > 1
+            position = self.session.position
+
+            return (
+                position is not None
+                and position > 1
+            )
 
         if action == "next_turn":
+            position = self.session.position
+
             return (
-                self.session.position
-                < self.session.total
+                position is not None
+                and position < self.session.total
             )
 
         if action == "accept_alignment_recovery":
@@ -2735,7 +2785,13 @@ class ReviewerTUI(App[None]):
         if not view.speaker_candidates:
             return "No speaker candidates."
 
-        lines: list[str] = []
+        lines: list[str] = [
+            (
+                "Recommendation: "
+                f"{view.speaker_review_mode}"
+            ),
+            "",
+        ]
 
         for index, candidate in enumerate(
             view.speaker_candidates,

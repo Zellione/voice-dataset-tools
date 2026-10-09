@@ -8,6 +8,9 @@ from voice_dataset.speaker_candidates import (
     EmbeddingVoiceCandidate,
     SpeakerCandidate,
 )
+from voice_dataset.speaker_calibration import (
+    SpeakerCalibrationRule,
+)
 from voice_dataset.speaker_similarity import (
     VoiceTurnMatch,
 )
@@ -1812,3 +1815,39 @@ def test_mark_pending_reopens_rejected_turn_curation(
     assert result["curation"] == {
         "status": "pending",
     }
+
+
+def test_session_requires_both_speaker_review_rules(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    with pytest.raises(
+        ValueError,
+        match="must be configured together",
+    ):
+        ReviewerSession(
+            storage,
+            suggest_rule=SpeakerCalibrationRule(),
+        )
+
+
+def test_session_current_view_defaults_to_no_speaker_review_mode(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    view = session.current_view(
+        embedding_names=(),
+    )
+
+    assert view is not None
+    assert view.speaker_review_mode == "none"

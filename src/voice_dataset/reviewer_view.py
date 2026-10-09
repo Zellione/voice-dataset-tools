@@ -74,6 +74,8 @@ class ReviewerTurnView:
         ...,
     ]
 
+    speaker_review_mode: str
+
     alignment: ReviewerAlignmentView
 
     edge_recovery: ReviewerEdgeRecoveryView | None
@@ -164,6 +166,7 @@ def build_reviewer_turn_view(
     total: int,
     voices: dict[str, dict[str, Any]],
     speaker_candidates: list[SpeakerCandidate],
+    speaker_review_mode: str = "none",
 ) -> ReviewerTurnView:
     start = float(turn["source_start"])
     end = float(turn["source_end"])
@@ -530,4 +533,5 @@ def build_reviewer_turn_view(
             )
             for candidate in speaker_candidates
         ),
+        speaker_review_mode=speaker_review_mode,
     )

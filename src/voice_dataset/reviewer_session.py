@@ -36,7 +36,10 @@ from .speaker_candidates import (
     combine_embedding_candidates,
 )
 from .speaker_calibration import (
+    SpeakerCalibrationRule,
     build_calibration_observation,
+    classify_speaker_review_mode,
+    load_calibration_observations,
     speaker_calibration_observation_to_dict,
 )
 from .speaker_similarity import rank_voice_matches
@@ -50,11 +53,24 @@ class ReviewerSession:
         source_id: str | None = None,
         auto_review_only: bool = False,
         embedding_names: tuple[str, ...] = (),
+        suggest_rule: SpeakerCalibrationRule | None = None,
+        prefill_rule: SpeakerCalibrationRule | None = None,
     ) -> None:
         self.storage = storage
         self.source_id = source_id
         self.auto_review_only = auto_review_only
         self.embedding_names = embedding_names
+        self.suggest_rule = suggest_rule
+        self.prefill_rule = prefill_rule
+
+        if (
+            (suggest_rule is None)
+            != (prefill_rule is None)
+        ):
+            raise ValueError(
+                "suggest_rule and prefill_rule "
+                "must be configured together"
+            )
         self._turn_ids: list[str] = []
         self._current_turn_id: str | None = None
 
@@ -609,8 +625,35 @@ class ReviewerSession:
 
         candidates = self.speaker_candidates(
             embedding_names=embedding_names,
-            limit=speaker_limit,
         )
+
+        speaker_review_mode = "none"
+
+        if (
+            self.suggest_rule is not None
+            and self.prefill_rule is not None
+        ):
+            observations = (
+                load_calibration_observations(
+                    self.storage
+                )
+            )
+
+            speaker_review_mode = (
+                classify_speaker_review_mode(
+                    candidates=candidates,
+                    observations=observations,
+                    suggest_rule=self.suggest_rule,
+                    prefill_rule=self.prefill_rule,
+                )
+            )
+
+        display_candidates = candidates
+
+        if speaker_limit is not None:
+            display_candidates = candidates[
+                :speaker_limit
+            ]
 
         voices = {
             str(voice["id"]): voice
@@ -622,5 +665,6 @@ class ReviewerSession:
             position=self.position,
             total=self.total,
             voices=voices,
-            speaker_candidates=candidates,
+            speaker_candidates=display_candidates,
+            speaker_review_mode=speaker_review_mode,
         )

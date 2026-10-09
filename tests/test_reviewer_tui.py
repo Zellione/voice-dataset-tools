@@ -582,6 +582,15 @@ async def test_voice_picker_assigns_selected_voice(
         await pilot.press("v")
         await pilot.pause()
 
+        options = app.screen.query_one(
+            "#voice-options",
+            OptionList,
+        )
+
+        assert options.highlighted is None
+
+        options.highlighted = 0
+
         await pilot.press("enter")
         await pilot.pause()
 
@@ -4058,3 +4067,119 @@ def test_reviewer_shortcuts_style_keys_and_descriptions(
 
     assert "bold" in styles
     assert "dim" in styles
+
+
+@pytest.mark.asyncio
+async def test_voice_picker_suggest_does_not_prefill_selection(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    storage.voices.append(
+        {
+            "schema_version": 1,
+            "record_type": "voice_profile",
+            "id": "voice_001",
+            "character": "Silco",
+            "language": "en",
+            "aliases": [],
+            "ignored": False,
+            "notes": None,
+            "metadata": {},
+        }
+    )
+
+    candidate = type(
+        "Candidate",
+        (),
+        {
+            "voice_id": "voice_001",
+        },
+    )()
+
+    app = ReviewerTUI(
+        ReviewerSession(storage),
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        app.push_screen(
+            VoicePickerScreen(
+                voices=storage.voices.load(),
+                candidates=(candidate,),
+                review_mode="suggest",
+            )
+        )
+
+        await pilot.pause()
+
+        options = app.screen.query_one(
+            "#voice-options",
+            OptionList,
+        )
+
+        assert options.highlighted is None
+
+
+@pytest.mark.asyncio
+async def test_voice_picker_prefill_selects_top_candidate(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    for voice_id, character in (
+        ("voice_001", "Silco"),
+        ("voice_002", "Vander"),
+    ):
+        storage.voices.append(
+            {
+                "schema_version": 1,
+                "record_type": "voice_profile",
+                "id": voice_id,
+                "character": character,
+                "language": "en",
+                "aliases": [],
+                "ignored": False,
+                "notes": None,
+                "metadata": {},
+            }
+        )
+
+    candidate = type(
+        "Candidate",
+        (),
+        {
+            "voice_id": "voice_002",
+        },
+    )()
+
+    app = ReviewerTUI(
+        ReviewerSession(storage),
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        app.push_screen(
+            VoicePickerScreen(
+                voices=storage.voices.load(),
+                candidates=(candidate,),
+                review_mode="prefill",
+            )
+        )
+
+        await pilot.pause()
+
+        options = app.screen.query_one(
+            "#voice-options",
+            OptionList,
+        )
+
+        assert options.highlighted is not None
+
+        selected = options.get_option_at_index(
+            options.highlighted
+        )
+
+        assert selected.id == "voice_002"

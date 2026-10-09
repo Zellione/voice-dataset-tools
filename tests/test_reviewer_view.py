@@ -491,3 +491,21 @@ def test_build_reviewer_turn_view_maps_assigned_voice_character():
     assert view.assignment.status == "assigned"
     assert view.assignment.voice_id == "voice_001"
     assert view.assignment.character == "Vander"
+
+
+def test_build_reviewer_turn_view_maps_speaker_review_mode():
+    view = build_reviewer_turn_view(
+        {
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 2.0,
+        },
+        position=1,
+        total=1,
+        voices={},
+        speaker_candidates=[],
+        speaker_review_mode="prefill",
+    )
+
+    assert view.speaker_review_mode == "prefill"
