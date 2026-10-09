@@ -2411,6 +2411,7 @@ def turn_review(
             storage,
             source_id=source_id,
             auto_review_only=auto_review_only,
+            embedding_names=embedding_names,
         )
 
         if session.total == 0:

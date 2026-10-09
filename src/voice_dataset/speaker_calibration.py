@@ -55,6 +55,42 @@ class SpeakerCalibrationStats:
     top1_accuracy: float | None
 
 
+SPEAKER_CALIBRATION_SCHEMA_VERSION = 1
+
+
+def speaker_calibration_observation_to_dict(
+    observation: SpeakerCalibrationObservation,
+) -> dict:
+    return {
+        "schema_version":
+            SPEAKER_CALIBRATION_SCHEMA_VERSION,
+        "turn_id": observation.turn_id,
+        "source_id": observation.source_id,
+        "confirmed_voice_id":
+            observation.confirmed_voice_id,
+        "predicted_voice_id":
+            observation.predicted_voice_id,
+        "correct": observation.correct,
+        "top_score": observation.top_score,
+        "runner_up_score":
+            observation.runner_up_score,
+        "margin": observation.margin,
+        "encoder_count":
+            observation.encoder_count,
+        "embedding_scores": dict(
+            observation.embedding_scores
+        ),
+        "support": dict(
+            observation.support
+        ),
+        "source_support": dict(
+            observation.source_support
+        ),
+        "total_source_support":
+            observation.total_source_support,
+    }
+
+
 def summarize_speaker_candidates(
     candidates: list[SpeakerCandidate],
 ) -> SpeakerCandidateSummary:

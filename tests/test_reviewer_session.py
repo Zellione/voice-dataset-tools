@@ -8,6 +8,9 @@ from voice_dataset.speaker_candidates import (
     EmbeddingVoiceCandidate,
     SpeakerCandidate,
 )
+from voice_dataset.speaker_similarity import (
+    VoiceTurnMatch,
+)
 
 
 def add_turn(
@@ -253,6 +256,168 @@ def test_session_updates_review_status(
     result = session.mark_pending()
 
     assert result["review"]["status"] == "pending"
+
+
+def test_session_persists_speaker_calibration_when_reviewed(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_id="episode_01",
+        source_start=1.0,
+    )
+
+    voice = create_voice(
+        storage,
+        character="Test Character",
+        language="en",
+    )
+
+    session = ReviewerSession(
+        storage,
+        embedding_names=(
+            "ecapa_speaker",
+            "wespeaker_speaker",
+        ),
+    )
+
+    session.assign_voice(
+        voice["id"]
+    )
+
+    candidates = [
+        SpeakerCandidate(
+            voice_id=voice["id"],
+            score=0.81,
+            encoder_count=2,
+            embedding_scores=(
+                EmbeddingVoiceCandidate(
+                    voice_id=voice["id"],
+                    embedding_name="ecapa_speaker",
+                    score=0.78,
+                    support=2,
+                    matches=(
+                        VoiceTurnMatch(
+                            turn_id="turn_ref_001",
+                            similarity=0.90,
+                            source_id="episode_02",
+                        ),
+                    ),
+                ),
+                EmbeddingVoiceCandidate(
+                    voice_id=voice["id"],
+                    embedding_name="wespeaker_speaker",
+                    score=0.84,
+                    support=2,
+                    matches=(
+                        VoiceTurnMatch(
+                            turn_id="turn_ref_002",
+                            similarity=0.91,
+                            source_id="episode_03",
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        SpeakerCandidate(
+            voice_id="voice_other",
+            score=0.43,
+            encoder_count=2,
+            embedding_scores=(),
+        ),
+    ]
+
+    monkeypatch.setattr(
+        session,
+        "speaker_candidates",
+        lambda **kwargs: candidates,
+    )
+
+    result = session.mark_reviewed()
+
+    assert result["review"]["status"] == "reviewed"
+
+    calibration = result["review"][
+        "speaker_calibration"
+    ]
+
+    assert calibration["schema_version"] == 1
+    assert calibration["turn_id"] == "turn_000001"
+    assert calibration["source_id"] == "episode_01"
+
+    assert (
+        calibration["confirmed_voice_id"]
+        == voice["id"]
+    )
+    assert (
+        calibration["predicted_voice_id"]
+        == voice["id"]
+    )
+
+    assert calibration["correct"] is True
+
+    assert calibration[
+        "top_score"
+    ] == pytest.approx(0.81)
+
+    assert calibration[
+        "runner_up_score"
+    ] == pytest.approx(0.43)
+
+    assert calibration[
+        "margin"
+    ] == pytest.approx(0.38)
+
+    assert calibration["encoder_count"] == 2
+
+    assert (
+        calibration["total_source_support"]
+        == 2
+    )
+
+
+def test_session_pending_clears_speaker_calibration(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    def add_calibration(record):
+        review = dict(
+            record.get("review") or {}
+        )
+
+        review["speaker_calibration"] = {
+            "schema_version": 1,
+        }
+
+        record["review"] = review
+        return record
+
+    storage.update_turn(
+        "turn_000001",
+        add_calibration,
+    )
+
+    session = ReviewerSession(storage)
+
+    result = session.mark_pending()
+
+    assert result["review"]["status"] == "pending"
+
+    assert (
+        "speaker_calibration"
+        not in result["review"]
+    )
 
 
 def test_session_updates_assignment_status(
@@ -1416,3 +1581,77 @@ def test_session_trim_requires_current_turn(
         session.trim(
             source_end=1.0,
         )
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        "assign",
+        "unknown",
+        "ignore",
+    ],
+)
+def test_assignment_change_invalidates_speaker_calibration(
+    tmp_path,
+    action,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    voice = create_voice(
+        storage,
+        character="Voice One",
+        language="en",
+    )
+
+    other_voice = create_voice(
+        storage,
+        character="Voice Two",
+        language="en",
+    )
+
+    def add_existing_calibration(record):
+        record["assignment"] = {
+            "status": "assigned",
+            "voice_id": voice["id"],
+            "method": "manual",
+            "confidence": None,
+        }
+
+        review = dict(
+            record.get("review") or {}
+        )
+        review["status"] = "reviewed"
+        review["speaker_calibration"] = {
+            "schema_version": 1,
+            "confirmed_voice_id": voice["id"],
+        }
+
+        record["review"] = review
+        return record
+
+    storage.update_turn(
+        "turn_000001",
+        add_existing_calibration,
+    )
+
+    session = ReviewerSession(storage)
+
+    if action == "assign":
+        result = session.assign_voice(
+            other_voice["id"]
+        )
+    elif action == "unknown":
+        result = session.mark_unknown()
+    else:
+        result = session.ignore()
+
+    assert (
+        "speaker_calibration"
+        not in result["review"]
+    )

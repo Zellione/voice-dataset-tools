@@ -4,6 +4,7 @@ from voice_dataset.speaker_calibration import (
     build_calibration_observation,
     evaluate_calibration_rule,
     filter_calibration_observations,
+    speaker_calibration_observation_to_dict,
     summarize_calibration_observations,
     summarize_speaker_candidates,
     SpeakerCalibrationObservation,
@@ -15,6 +16,65 @@ from voice_dataset.speaker_candidates import (
 from voice_dataset.speaker_similarity import (
     VoiceTurnMatch,
 )
+
+
+def test_calibration_observation_serializes_for_storage():
+    observation = SpeakerCalibrationObservation(
+        turn_id="turn_001",
+        source_id="episode_01",
+        confirmed_voice_id="voice_001",
+        predicted_voice_id="voice_001",
+        correct=True,
+        top_score=0.81,
+        runner_up_score=0.43,
+        margin=0.38,
+        encoder_count=2,
+        embedding_scores={
+            "ecapa_speaker": 0.78,
+            "wespeaker_speaker": 0.84,
+        },
+        support={
+            "ecapa_speaker": 5,
+            "wespeaker_speaker": 7,
+        },
+        source_support={
+            "ecapa_speaker": 2,
+            "wespeaker_speaker": 3,
+        },
+        total_source_support=3,
+    )
+
+    result = (
+        speaker_calibration_observation_to_dict(
+            observation
+        )
+    )
+
+    assert result == {
+        "schema_version": 1,
+        "turn_id": "turn_001",
+        "source_id": "episode_01",
+        "confirmed_voice_id": "voice_001",
+        "predicted_voice_id": "voice_001",
+        "correct": True,
+        "top_score": pytest.approx(0.81),
+        "runner_up_score": pytest.approx(0.43),
+        "margin": pytest.approx(0.38),
+        "encoder_count": 2,
+        "embedding_scores": {
+            "ecapa_speaker": pytest.approx(0.78),
+            "wespeaker_speaker": pytest.approx(0.84),
+        },
+        "support": {
+            "ecapa_speaker": 5,
+            "wespeaker_speaker": 7,
+        },
+        "source_support": {
+            "ecapa_speaker": 2,
+            "wespeaker_speaker": 3,
+        },
+        "total_source_support": 3,
+    }
 
 
 def test_summarize_speaker_candidates_records_top1_and_margin():

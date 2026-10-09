@@ -66,6 +66,15 @@ def assign_turn(
             "confidence": confidence,
         }
 
+        review = dict(
+            record.get("review") or {}
+        )
+        review.pop(
+            "speaker_calibration",
+            None,
+        )
+        record["review"] = review
+
         return record
 
     return storage.turns.update(
@@ -92,6 +101,15 @@ def mark_turn_unknown(
             "method": None,
             "confidence": None,
         }
+
+        review = dict(
+            record.get("review") or {}
+        )
+        review.pop(
+            "speaker_calibration",
+            None,
+        )
+        record["review"] = review
 
         return record
 
@@ -121,6 +139,15 @@ def ignore_turn(
             "method": method,
             "confidence": None,
         }
+
+        review = dict(
+            record.get("review") or {}
+        )
+        review.pop(
+            "speaker_calibration",
+            None,
+        )
+        record["review"] = review
 
         return record
 

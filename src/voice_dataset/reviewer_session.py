@@ -33,6 +33,10 @@ from .speaker_candidates import (
     aggregate_voice_matches,
     combine_embedding_candidates,
 )
+from .speaker_calibration import (
+    build_calibration_observation,
+    speaker_calibration_observation_to_dict,
+)
 from .speaker_similarity import rank_voice_matches
 
 
@@ -43,10 +47,12 @@ class ReviewerSession:
         *,
         source_id: str | None = None,
         auto_review_only: bool = False,
+        embedding_names: tuple[str, ...] = (),
     ) -> None:
         self.storage = storage
         self.source_id = source_id
         self.auto_review_only = auto_review_only
+        self.embedding_names = embedding_names
         self._turn_ids: list[str] = []
         self._current_turn_id: str | None = None
 
@@ -264,15 +270,113 @@ class ReviewerSession:
         )
 
     def mark_reviewed(self) -> dict[str, Any]:
-        return mark_turn_reviewed(
+        turn_id = self._require_current_id()
+
+        turn = self.current()
+
+        if turn is None:
+            raise RuntimeError(
+                "Current turn is missing from storage"
+            )
+
+        assignment = turn.get("assignment") or {}
+        calibration = None
+
+        if assignment.get("status") == "assigned":
+            voice_id = assignment.get("voice_id")
+            source_id = turn.get("source_id")
+
+            if not isinstance(
+                voice_id,
+                str,
+            ) or not voice_id:
+                raise RuntimeError(
+                    "Assigned turn has invalid voice_id"
+                )
+
+            if not isinstance(
+                source_id,
+                str,
+            ) or not source_id:
+                raise RuntimeError(
+                    "Current turn has invalid source_id"
+                )
+
+            candidates = self.speaker_candidates(
+                embedding_names=self.embedding_names,
+            )
+
+            observation = (
+                build_calibration_observation(
+                    turn_id=turn_id,
+                    source_id=source_id,
+                    confirmed_voice_id=voice_id,
+                    candidates=candidates,
+                )
+            )
+
+            calibration = (
+                speaker_calibration_observation_to_dict(
+                    observation
+                )
+            )
+
+        mark_turn_reviewed(
             self.storage,
-            self._require_current_id(),
+            turn_id,
+        )
+
+        def update(
+            record: dict[str, Any],
+        ) -> dict[str, Any]:
+            review = dict(
+                record.get("review") or {}
+            )
+
+            if calibration is None:
+                review.pop(
+                    "speaker_calibration",
+                    None,
+                )
+            else:
+                review["speaker_calibration"] = (
+                    calibration
+                )
+
+            record["review"] = review
+            return record
+
+        return self.storage.update_turn(
+            turn_id,
+            update,
         )
 
     def mark_pending(self) -> dict[str, Any]:
-        return mark_turn_pending(
+        turn_id = self._require_current_id()
+
+        mark_turn_pending(
             self.storage,
-            self._require_current_id(),
+            turn_id,
+        )
+
+        def update(
+            record: dict[str, Any],
+        ) -> dict[str, Any]:
+            review = dict(
+                record.get("review") or {}
+            )
+
+            review.pop(
+                "speaker_calibration",
+                None,
+            )
+
+            record["review"] = review
+            return record
+
+        return self.storage.update_turn(
+            turn_id,
+            update,
         )
 
     def mark_boundary_complete(
