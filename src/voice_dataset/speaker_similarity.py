@@ -23,6 +23,7 @@ class SpeakerSimilarity:
 class VoiceTurnMatch:
     turn_id: str
     similarity: float
+    source_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -333,6 +334,13 @@ def rank_voice_matches(
             embedding_name,
         )
 
+        source_id = reference_turn.get(
+            "source_id"
+        )
+
+        if not isinstance(source_id, str):
+            source_id = None
+
         matches_by_voice.setdefault(
             voice_id,
             [],
@@ -340,6 +348,7 @@ def rank_voice_matches(
             VoiceTurnMatch(
                 turn_id=reference_turn_id,
                 similarity=similarity.similarity,
+                source_id=source_id,
             )
         )
 

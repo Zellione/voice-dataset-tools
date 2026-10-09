@@ -480,6 +480,14 @@ def test_rank_voice_matches_groups_manual_references(
         0.0
     )
 
+    assert [
+        match.source_id
+        for match in results[0].matches
+    ] == [
+        "source_001",
+        "source_001",
+    ]
+
 
 def test_rank_voice_matches_skips_unknown_turns(
     tmp_path: Path,
