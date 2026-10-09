@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .media import extract_audio_region
 from .sources import resolve_source_representation
 from .storage import DatasetStorage
 from .workers import run_worker, worker
@@ -19,11 +20,20 @@ _TOKEN_RE = re.compile(r"\w+(?:['’]\w+)*", re.UNICODE)
 
 
 @dataclass(frozen=True)
+class ContinuousAsrChunk:
+    index: int
+    start: float
+    end: float
+    boundary: str
+
+
+@dataclass(frozen=True)
 class ContinuousAsrResult:
     language: str | None
     text: str
     words: list[dict[str, Any]]
     utterances: list[dict[str, Any]]
+    chunks: tuple[ContinuousAsrChunk, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -31,6 +41,328 @@ class ForcedAlignmentResult:
     language: str | None
     text: str
     words: list[dict[str, Any]]
+
+
+CONTINUOUS_ASR_TARGET_CHUNK_SECONDS = 60.0
+CONTINUOUS_ASR_BOUNDARY_SEARCH_SECONDS = 15.0
+CONTINUOUS_ASR_MAX_CHUNK_SECONDS = 240.0
+CONTINUOUS_ASR_MIN_SPEECH_GAP_SECONDS = 0.50
+
+CONTINUOUS_ASR_MAX_WORD_DURATION_SECONDS = 5.0
+CONTINUOUS_ASR_MAX_ZERO_DURATION_RUN = 2
+
+
+def _region_whisper_text(
+    region: dict[str, Any],
+) -> str | None:
+    transcripts = region.get("transcripts")
+
+    if not isinstance(transcripts, dict):
+        return None
+
+    whisper = transcripts.get("whisper")
+
+    if not isinstance(whisper, dict):
+        return None
+
+    text = whisper.get("text")
+
+    if not isinstance(text, str):
+        return None
+
+    text = text.strip()
+
+    return text or None
+
+
+def _region_ends_sentence(
+    region: dict[str, Any],
+) -> bool:
+    text = _region_whisper_text(region)
+
+    if text is None:
+        return False
+
+    return text.rstrip().endswith(
+        (".", "!", "?")
+    )
+
+
+def plan_continuous_asr_chunks(
+    storage: DatasetStorage,
+    source_id: str,
+    *,
+    duration: float,
+    target_seconds: float = (
+        CONTINUOUS_ASR_TARGET_CHUNK_SECONDS
+    ),
+    search_seconds: float = (
+        CONTINUOUS_ASR_BOUNDARY_SEARCH_SECONDS
+    ),
+    max_chunk_seconds: float = (
+        CONTINUOUS_ASR_MAX_CHUNK_SECONDS
+    ),
+    minimum_gap_seconds: float = (
+        CONTINUOUS_ASR_MIN_SPEECH_GAP_SECONDS
+    ),
+) -> list[ContinuousAsrChunk]:
+    if duration <= 0:
+        raise ValueError(
+            "Continuous ASR source duration "
+            "must be positive"
+        )
+
+    if target_seconds <= 0:
+        raise ValueError(
+            "Continuous ASR target chunk size "
+            "must be positive"
+        )
+
+    if search_seconds < 0:
+        raise ValueError(
+            "Continuous ASR boundary search "
+            "must not be negative"
+        )
+
+    if max_chunk_seconds < target_seconds:
+        raise ValueError(
+            "Continuous ASR max chunk size "
+            "must be at least the target size"
+        )
+
+    if minimum_gap_seconds < 0:
+        raise ValueError(
+            "Continuous ASR minimum gap "
+            "must not be negative"
+        )
+
+    regions = [
+        region
+        for region in storage.regions.load()
+        if region.get("source_id") == source_id
+    ]
+
+    regions.sort(
+        key=lambda region: (
+            float(region["source_start"]),
+            float(region["source_end"]),
+            region["id"],
+        )
+    )
+
+    boundaries: list[
+        tuple[float, str]
+    ] = []
+
+    for previous, following in zip(
+        regions,
+        regions[1:],
+    ):
+        previous_end = float(
+            previous["source_end"]
+        )
+        following_start = float(
+            following["source_start"]
+        )
+
+        gap = following_start - previous_end
+
+        if gap < minimum_gap_seconds:
+            continue
+
+        boundary = (
+            previous_end
+            + gap / 2.0
+        )
+
+        reason = (
+            "sentence_gap"
+            if _region_ends_sentence(previous)
+            else "speech_gap"
+        )
+
+        boundaries.append(
+            (boundary, reason)
+        )
+
+    chunks: list[ContinuousAsrChunk] = []
+    start = 0.0
+
+    while start < duration:
+        remaining = duration - start
+
+        if remaining <= target_seconds + search_seconds:
+            chunks.append(
+                ContinuousAsrChunk(
+                    index=len(chunks),
+                    start=start,
+                    end=duration,
+                    boundary="source_end",
+                )
+            )
+            break
+
+        target = start + target_seconds
+
+        preferred_low = max(
+            start + 1.0,
+            target - search_seconds,
+        )
+        preferred_high = min(
+            duration,
+            target + search_seconds,
+            start + max_chunk_seconds,
+        )
+
+        preferred = [
+            candidate
+            for candidate in boundaries
+            if (
+                preferred_low
+                <= candidate[0]
+                <= preferred_high
+            )
+        ]
+
+        if preferred:
+            sentence_candidates = [
+                candidate
+                for candidate in preferred
+                if candidate[1] == "sentence_gap"
+            ]
+
+            pool = (
+                sentence_candidates
+                or preferred
+            )
+
+            end, reason = min(
+                pool,
+                key=lambda candidate: abs(
+                    candidate[0] - target
+                ),
+            )
+        else:
+            extension = [
+                candidate
+                for candidate in boundaries
+                if (
+                    preferred_high
+                    < candidate[0]
+                    <= start + max_chunk_seconds
+                )
+            ]
+
+            if not extension:
+                raise ValueError(
+                    "Continuous ASR could not find a "
+                    "safe speech boundary between "
+                    f"{preferred_low:.3f}s and "
+                    f"{start + max_chunk_seconds:.3f}s; "
+                    "refusing to split inside continuous "
+                    "speech"
+                )
+
+            sentence_candidates = [
+                candidate
+                for candidate in extension
+                if (
+                    candidate[1]
+                    == "sentence_gap"
+                )
+            ]
+
+            pool = (
+                sentence_candidates
+                or extension
+            )
+
+            end, reason = min(
+                pool,
+                key=lambda candidate: (
+                    candidate[0]
+                ),
+            )
+
+        if end <= start:
+            raise RuntimeError(
+                "Continuous ASR chunk planner "
+                "did not advance"
+            )
+
+        chunks.append(
+            ContinuousAsrChunk(
+                index=len(chunks),
+                start=start,
+                end=end,
+                boundary=reason,
+            )
+        )
+
+        start = end
+
+    return chunks
+
+
+def _validate_word_timeline(
+    words: list[dict[str, Any]],
+) -> None:
+    previous_start = -1.0
+    zero_duration_run = 0
+
+    for index, word in enumerate(words):
+        start = float(word["start"])
+        end = float(word["end"])
+
+        if start < 0:
+            raise ValueError(
+                "Continuous ASR word has negative "
+                f"start at index {index}: {start}"
+            )
+
+        if end < start:
+            raise ValueError(
+                "Continuous ASR word has negative "
+                f"duration at index {index}: "
+                f"{start}-{end}"
+            )
+
+        if start + 1e-6 < previous_start:
+            raise ValueError(
+                "Continuous ASR timestamps are not "
+                "monotonic at word "
+                f"{index}: {start} < "
+                f"{previous_start}"
+            )
+
+        duration = end - start
+
+        if (
+            duration
+            > CONTINUOUS_ASR_MAX_WORD_DURATION_SECONDS
+        ):
+            raise ValueError(
+                "Continuous ASR word duration is "
+                "implausibly long at index "
+                f"{index}: {duration:.3f}s"
+            )
+
+        if duration <= 1e-6:
+            zero_duration_run += 1
+
+            if (
+                zero_duration_run
+                > CONTINUOUS_ASR_MAX_ZERO_DURATION_RUN
+            ):
+                raise ValueError(
+                    "Continuous ASR has too many "
+                    "consecutive zero-duration words "
+                    f"ending at index {index}"
+                )
+        else:
+            zero_duration_run = 0
+
+        previous_start = start
 
 
 def _tokens(text: str) -> list[str]:
@@ -272,10 +604,7 @@ def _load_qwen_output(
             "Invalid continuous ASR output format"
         )
 
-    if document.get("version") != 1:
-        raise ValueError(
-            "Unsupported continuous ASR output version"
-        )
+    version = document.get("version")
 
     transcriber = document.get("transcriber")
 
@@ -290,89 +619,233 @@ def _load_qwen_output(
             f"{transcriber.get('model')!r}"
         )
 
-    text = document.get("text")
+    if version == 1:
+        text = document.get("text")
 
-    if not isinstance(text, str):
-        raise ValueError(
-            "Continuous ASR text must be a string"
-        )
-
-    language = document.get("language")
-
-    if (
-        language is not None
-        and not isinstance(language, str)
-    ):
-        raise ValueError(
-            "Continuous ASR language must be "
-            "a string or null"
-        )
-
-    words_value = document.get("words")
-
-    if not isinstance(words_value, list):
-        raise ValueError(
-            "Continuous ASR words must be a list"
-        )
-
-    words: list[dict[str, Any]] = []
-
-    for index, item in enumerate(words_value):
-        if not isinstance(item, dict):
+        if not isinstance(text, str):
             raise ValueError(
-                f"Continuous ASR word {index} "
-                "must be an object"
+                "Continuous ASR text must be a string"
             )
 
-        word_text = item.get("text")
-        start = item.get("start")
-        end = item.get("end")
-
-        if not isinstance(word_text, str):
-            raise ValueError(
-                f"Continuous ASR word {index} "
-                "has invalid text"
-            )
+        language = document.get("language")
 
         if (
-            isinstance(start, bool)
-            or not isinstance(start, (int, float))
-            or isinstance(end, bool)
-            or not isinstance(end, (int, float))
+            language is not None
+            and not isinstance(language, str)
         ):
             raise ValueError(
-                f"Continuous ASR word {index} "
-                "has invalid timestamps"
+                "Continuous ASR language must be "
+                "a string or null"
+            )
+
+        raw_words = document.get("words")
+
+        if not isinstance(raw_words, list):
+            raise ValueError(
+                "Continuous ASR words must be a list"
+            )
+
+        words = [
+            {
+                "text": str(item["text"]),
+                "start": float(item["start"]),
+                "end": float(item["end"]),
+            }
+            for item in raw_words
+        ]
+
+        _validate_word_timeline(words)
+
+        return ContinuousAsrResult(
+            language=language,
+            text=text,
+            words=words,
+            utterances=_derive_utterances(
+                text,
+                words,
+            ),
+        )
+
+    if version != 2:
+        raise ValueError(
+            "Unsupported continuous ASR output "
+            f"version: {version!r}"
+        )
+
+    raw_chunks = document.get("chunks")
+
+    if not isinstance(raw_chunks, list):
+        raise ValueError(
+            "Chunked continuous ASR output "
+            "must contain chunks"
+        )
+
+    combined_text: list[str] = []
+    combined_words: list[dict[str, Any]] = []
+    chunk_records: list[
+        ContinuousAsrChunk
+    ] = []
+    languages: set[str] = set()
+
+    for expected_index, item in enumerate(
+        raw_chunks
+    ):
+        if not isinstance(item, dict):
+            raise ValueError(
+                "Continuous ASR chunk must "
+                "be an object"
+            )
+
+        index = item.get("index")
+        start = item.get("start")
+        end = item.get("end")
+        boundary = item.get("boundary")
+        language = item.get("language")
+        chunk_text = item.get("text")
+        raw_words = item.get("words")
+
+        if index != expected_index:
+            raise ValueError(
+                "Continuous ASR chunk indices "
+                "must be contiguous"
+            )
+
+        if not isinstance(
+            start,
+            (int, float),
+        ):
+            raise ValueError(
+                "Continuous ASR chunk has "
+                "invalid start"
+            )
+
+        if not isinstance(
+            end,
+            (int, float),
+        ):
+            raise ValueError(
+                "Continuous ASR chunk has "
+                "invalid end"
             )
 
         start = float(start)
         end = float(end)
 
-        if start < 0 or end < start:
+        if start < 0 or end <= start:
             raise ValueError(
-                f"Continuous ASR word {index} "
-                "has invalid range: "
-                f"{start}-{end}"
+                "Continuous ASR chunk has "
+                f"invalid geometry: {start}-{end}"
             )
 
-        words.append(
-            {
-                "text": word_text,
-                "start": start,
-                "end": end,
-            }
+        if not isinstance(boundary, str):
+            raise ValueError(
+                "Continuous ASR chunk has "
+                "invalid boundary"
+            )
+
+        if (
+            language is not None
+            and not isinstance(language, str)
+        ):
+            raise ValueError(
+                "Continuous ASR chunk has "
+                "invalid language"
+            )
+
+        if isinstance(language, str):
+            languages.add(language)
+
+        if not isinstance(chunk_text, str):
+            raise ValueError(
+                "Continuous ASR chunk has "
+                "invalid text"
+            )
+
+        if not isinstance(raw_words, list):
+            raise ValueError(
+                "Continuous ASR chunk has "
+                "invalid words"
+            )
+
+        local_words: list[
+            dict[str, Any]
+        ] = []
+
+        for word in raw_words:
+            if not isinstance(word, dict):
+                raise ValueError(
+                    "Continuous ASR word must "
+                    "be an object"
+                )
+
+            local_words.append(
+                {
+                    "text": str(word["text"]),
+                    "start": float(word["start"]),
+                    "end": float(word["end"]),
+                }
+            )
+
+        _validate_word_timeline(
+            local_words
         )
 
-    utterances = _derive_utterances(
-        text,
-        words,
+        global_words = [
+            {
+                "text": word["text"],
+                "start": word["start"] + start,
+                "end": word["end"] + start,
+            }
+            for word in local_words
+        ]
+
+        combined_words.extend(
+            global_words
+        )
+
+        if chunk_text.strip():
+            combined_text.append(
+                chunk_text.strip()
+            )
+
+        chunk_records.append(
+            ContinuousAsrChunk(
+                index=index,
+                start=start,
+                end=end,
+                boundary=boundary,
+            )
+        )
+
+    _validate_word_timeline(
+        combined_words
+    )
+
+    if len(languages) > 1:
+        raise ValueError(
+            "Continuous ASR chunks disagree "
+            f"on language: {sorted(languages)!r}"
+        )
+
+    text = " ".join(
+        combined_text
+    ).strip()
+
+    language = (
+        next(iter(languages))
+        if languages
+        else None
     )
 
     return ContinuousAsrResult(
         language=language,
         text=text,
-        words=words,
-        utterances=utterances,
+        words=combined_words,
+        utterances=_derive_utterances(
+            text,
+            combined_words,
+        ),
+        chunks=tuple(chunk_records),
     )
 
 
@@ -534,26 +1007,114 @@ def transcribe_source_qwen3(
     representation_name: str,
     evidence_name: str = "qwen3",
     language: str | None = None,
+    max_inference_batch_size: int = 8,
 ) -> ContinuousAsrResult:
-    _, source_path = resolve_source_representation(
+    source_representation, source_path = (
+        resolve_source_representation(
+            storage,
+            source_id,
+            representation_name,
+        )
+    )
+
+    duration = source_representation.get(
+        "duration"
+    )
+
+    if not isinstance(
+        duration,
+        (int, float),
+    ):
+        raise ValueError(
+            "Continuous ASR source "
+            "representation has no duration"
+        )
+
+    duration = float(duration)
+
+    chunks = plan_continuous_asr_chunks(
         storage,
         source_id,
-        representation_name,
+        duration=duration,
     )
 
     with tempfile.TemporaryDirectory(
         prefix="voice-dataset-qwen3-"
     ) as temporary_directory:
+        root = Path(
+            temporary_directory
+        )
+
+        chunk_directory = (
+            root / "chunks"
+        )
+        chunk_directory.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        manifest_chunks = []
+
+        for chunk in chunks:
+            chunk_path = (
+                chunk_directory
+                / f"chunk_{chunk.index:04d}.wav"
+            )
+
+            print(
+                "Qwen chunk "
+                f"{chunk.index + 1}/{len(chunks)}: "
+                f"{chunk.start:.3f}-"
+                f"{chunk.end:.3f}s "
+                f"({chunk.end - chunk.start:.3f}s, "
+                f"{chunk.boundary})",
+                flush=True,
+            )
+
+            extract_audio_region(
+                source=source_path,
+                destination=chunk_path,
+                start=chunk.start,
+                end=chunk.end,
+            )
+
+            manifest_chunks.append(
+                {
+                    "index": chunk.index,
+                    "path": str(chunk_path),
+                    "start": chunk.start,
+                    "end": chunk.end,
+                    "boundary": chunk.boundary,
+                }
+            )
+
+        manifest_path = (
+            root / "chunks.json"
+        )
+
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "chunks": manifest_chunks,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
         output_path = (
-            Path(temporary_directory)
-            / "continuous-asr.json"
+            root / "continuous-asr.json"
         )
 
         arguments: list[str | Path] = [
-            "--input",
-            source_path,
+            "--input-manifest",
+            manifest_path,
             "--output",
             output_path,
+            "--max-inference-batch-size",
+            str(max_inference_batch_size),
         ]
 
         if language is not None:
