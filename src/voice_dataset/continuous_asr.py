@@ -150,20 +150,65 @@ def plan_continuous_asr_chunks(
         )
     )
 
+    speech_blocks: list[
+        tuple[float, float, dict[str, Any]]
+    ] = []
+
+    for region in regions:
+        region_start = float(
+            region["source_start"]
+        )
+        region_end = float(
+            region["source_end"]
+        )
+
+        if region_end <= region_start:
+            continue
+
+        if not speech_blocks:
+            speech_blocks.append(
+                (
+                    region_start,
+                    region_end,
+                    region,
+                )
+            )
+            continue
+
+        (
+            block_start,
+            block_end,
+            block_last_region,
+        ) = speech_blocks[-1]
+
+        if region_start <= block_end:
+            if region_end >= block_end:
+                speech_blocks[-1] = (
+                    block_start,
+                    region_end,
+                    region,
+                )
+            continue
+
+        speech_blocks.append(
+            (
+                region_start,
+                region_end,
+                region,
+            )
+        )
+
     boundaries: list[
         tuple[float, str]
     ] = []
 
     for previous, following in zip(
-        regions,
-        regions[1:],
+        speech_blocks,
+        speech_blocks[1:],
     ):
-        previous_end = float(
-            previous["source_end"]
-        )
-        following_start = float(
-            following["source_start"]
-        )
+        previous_end = previous[1]
+        following_start = following[0]
+        previous_last_region = previous[2]
 
         gap = following_start - previous_end
 
@@ -177,7 +222,9 @@ def plan_continuous_asr_chunks(
 
         reason = (
             "sentence_gap"
-            if _region_ends_sentence(previous)
+            if _region_ends_sentence(
+                previous_last_region
+            )
             else "speech_gap"
         )
 

@@ -424,3 +424,46 @@ def test_plan_continuous_asr_chunks_allows_source_end_after_extension(
     assert chunks[1].start == pytest.approx(80.5)
     assert chunks[1].end == pytest.approx(200.0)
     assert chunks[1].boundary == "source_end"
+
+
+def test_plan_continuous_asr_chunks_uses_union_of_overlapping_regions(
+    tmp_path,
+) -> None:
+    storage = DatasetStorage(tmp_path)
+
+    _add_region(
+        storage,
+        "region_000001",
+        0.0,
+        50.0,
+        "First part.",
+    )
+
+    _add_region(
+        storage,
+        "region_000002",
+        45.0,
+        80.0,
+        "Overlapping speech continues",
+    )
+
+    _add_region(
+        storage,
+        "region_000003",
+        81.0,
+        140.0,
+        "Next block.",
+    )
+
+    chunks = plan_continuous_asr_chunks(
+        storage,
+        "source_001",
+        duration=160.0,
+        target_seconds=60.0,
+        search_seconds=30.0,
+    )
+
+    # The apparent 50-81 s gap is not safe because
+    # region_000002 extends speech through 80 s.
+    assert chunks[0].end == pytest.approx(80.5)
+    assert chunks[0].boundary == "speech_gap"
