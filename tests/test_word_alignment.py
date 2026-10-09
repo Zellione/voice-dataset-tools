@@ -3675,3 +3675,38 @@ def test_zero_duration_region_fallback_prefers_matching_run(
         4,
         5,
     )
+
+
+def test_effective_alignment_suppresses_unrecovered_long_word(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    words = [
+        word("hand", 0.0, 56.16),
+        word("next", 60.0, 60.4),
+    ]
+
+    monkeypatch.setattr(
+        word_alignment,
+        "collect_region_evidence",
+        lambda *args, **kwargs: [],
+    )
+
+    monkeypatch.setattr(
+        word_alignment,
+        "recover_alignment_candidates_batch",
+        lambda *args, **kwargs: [],
+    )
+
+    result = (
+        word_alignment.build_effective_word_alignment(
+            storage=None,
+            source_id="source",
+            words=words,
+            representation_name="center",
+            language="English",
+        )
+    )
+
+    assert result.suppressed_word_indices == (
+        0,
+    )

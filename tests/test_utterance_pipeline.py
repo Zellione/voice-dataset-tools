@@ -1377,3 +1377,66 @@ def test_apply_source_utterance_turns_preflights_all_candidates(
         "utterance_reconciliation"
         not in source["metadata"]
     )
+
+
+def test_utterance_candidates_split_at_alignment_gap(
+) -> None:
+    from voice_dataset.utterance_candidates import (
+        build_utterance_candidates,
+    )
+
+    words = [
+        SpeakerAttributedWord(
+            index=376,
+            text="That",
+            start=814.389,
+            end=814.469,
+            overlaps=(),
+            speaker="SPEAKER_06",
+            assignment_method=(
+                "single_overlapping_region"
+            ),
+        ),
+        SpeakerAttributedWord(
+            index=377,
+            text="last",
+            start=833.029,
+            end=833.429,
+            overlaps=(),
+            speaker="SPEAKER_06",
+            assignment_method=(
+                "single_overlapping_region"
+            ),
+        ),
+        SpeakerAttributedWord(
+            index=378,
+            text="time",
+            start=833.429,
+            end=833.749,
+            overlaps=(),
+            speaker="SPEAKER_06",
+            assignment_method=(
+                "single_overlapping_region"
+            ),
+        ),
+    ]
+
+    candidates = build_utterance_candidates(
+        words,
+        boundary_after_word_indices=set(),
+    )
+
+    assert len(candidates) == 2
+
+    assert candidates[0].word_indices == (
+        376,
+    )
+    assert (
+        candidates[0].end_boundary
+        == "alignment_gap"
+    )
+
+    assert candidates[1].word_indices == (
+        377,
+        378,
+    )

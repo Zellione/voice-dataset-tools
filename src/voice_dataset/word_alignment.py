@@ -824,17 +824,19 @@ def build_effective_word_alignment(
         recoveries,
     )
 
-    zero_duration_indices = {
+    invalid_duration_indices = {
         index
         for issue in issues
         if (
             "zero_word_duration"
             in issue.reasons
+            or "excessive_word_duration"
+            in issue.reasons
         )
         for index in issue.word_indices
     }
 
-    recovered_positive_indices = {
+    recovered_valid_duration_indices = {
         index
         for recovery in recoveries
         for index, recovered_word in zip(
@@ -843,16 +845,19 @@ def build_effective_word_alignment(
             strict=True,
         )
         if (
-            float(recovered_word["end"])
-            - float(recovered_word["start"])
-            > 1e-6
+            1e-6
+            < (
+                float(recovered_word["end"])
+                - float(recovered_word["start"])
+            )
+            <= MAX_WORD_DURATION_SECONDS
         )
     }
 
     suppressed_word_indices = tuple(
         sorted(
-            zero_duration_indices
-            - recovered_positive_indices
+            invalid_duration_indices
+            - recovered_valid_duration_indices
         )
     )
 

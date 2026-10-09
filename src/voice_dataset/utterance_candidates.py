@@ -148,23 +148,38 @@ def build_utterance_candidates(
             in boundary_after_word_indices
         )
 
+        alignment_gap = (
+            next_word.start - word.end
+            > MAX_INTER_WORD_ALIGNMENT_GAP
+        )
+
         if (
             not direct_speaker_change
             and not sat_boundary
+            and not alignment_gap
         ):
             continue
 
-        if (
-            direct_speaker_change
-            and sat_boundary
-        ):
-            end_boundary = (
-                "speaker_change+sat"
+        boundary_reasons = []
+
+        if direct_speaker_change:
+            boundary_reasons.append(
+                "speaker_change"
             )
-        elif direct_speaker_change:
-            end_boundary = "speaker_change"
-        else:
-            end_boundary = "sat"
+
+        if sat_boundary:
+            boundary_reasons.append(
+                "sat"
+            )
+
+        if alignment_gap:
+            boundary_reasons.append(
+                "alignment_gap"
+            )
+
+        end_boundary = "+".join(
+            boundary_reasons
+        )
 
         candidates.append(
             _make_candidate(
