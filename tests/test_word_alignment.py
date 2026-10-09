@@ -2650,3 +2650,147 @@ def test_post_recovery_word_is_claimed_by_other_region() -> None:
         conflicts,
         evidence,
     ) == ()
+
+
+def test_boundary_recovery_planner_deduplicates_same_region():
+    from voice_dataset.word_alignment import (
+        AlignmentIssue,
+        AlignmentRegionEvidence,
+        AlignmentTextMatch,
+        _plan_boundary_recovery_anchors,
+    )
+
+    match = AlignmentTextMatch(
+        start_word_index=142,
+        end_word_index=142,
+        word_indices=(142,),
+        tokens=("thanks",),
+    )
+
+    evidence = AlignmentRegionEvidence(
+        region_id="region_000051",
+        start=411.7,
+        end=412.3,
+        speaker="SPEAKER_00",
+        whisper_text="Thanks.",
+        whisper_tokens=("thanks",),
+        text_matches=(match,),
+    )
+
+    issues = [
+        AlignmentIssue(
+            word_indices=(),
+            reasons=("excessive_inter_word_gap",),
+            boundary_after_word_index=141,
+        ),
+        AlignmentIssue(
+            word_indices=(),
+            reasons=("excessive_inter_word_gap",),
+            boundary_after_word_index=142,
+        ),
+    ]
+
+    planned = _plan_boundary_recovery_anchors(
+        issues,
+        [evidence],
+        claimed_word_indices=set(),
+    )
+
+    assert planned == [evidence]
+
+
+def test_boundary_recovery_planner_rejects_ambiguous_regions():
+    from voice_dataset.word_alignment import (
+        AlignmentIssue,
+        AlignmentRegionEvidence,
+        AlignmentTextMatch,
+        _plan_boundary_recovery_anchors,
+    )
+
+    match = AlignmentTextMatch(
+        start_word_index=142,
+        end_word_index=142,
+        word_indices=(142,),
+        tokens=("thanks",),
+    )
+
+    first = AlignmentRegionEvidence(
+        region_id="region_000051",
+        start=411.7,
+        end=412.3,
+        speaker="SPEAKER_00",
+        whisper_text="Thanks.",
+        whisper_tokens=("thanks",),
+        text_matches=(match,),
+    )
+
+    second = AlignmentRegionEvidence(
+        region_id="region_000130",
+        start=800.0,
+        end=800.6,
+        speaker="SPEAKER_01",
+        whisper_text="Thanks.",
+        whisper_tokens=("thanks",),
+        text_matches=(match,),
+    )
+
+    issues = [
+        AlignmentIssue(
+            word_indices=(),
+            reasons=("excessive_inter_word_gap",),
+            boundary_after_word_index=141,
+        ),
+        AlignmentIssue(
+            word_indices=(),
+            reasons=("excessive_inter_word_gap",),
+            boundary_after_word_index=142,
+        ),
+    ]
+
+    planned = _plan_boundary_recovery_anchors(
+        issues,
+        [first, second],
+        claimed_word_indices=set(),
+    )
+
+    assert planned == []
+
+
+def test_boundary_recovery_planner_respects_claimed_words():
+    from voice_dataset.word_alignment import (
+        AlignmentIssue,
+        AlignmentRegionEvidence,
+        AlignmentTextMatch,
+        _plan_boundary_recovery_anchors,
+    )
+
+    match = AlignmentTextMatch(
+        start_word_index=142,
+        end_word_index=142,
+        word_indices=(142,),
+        tokens=("thanks",),
+    )
+
+    evidence = AlignmentRegionEvidence(
+        region_id="region_000051",
+        start=411.7,
+        end=412.3,
+        speaker="SPEAKER_00",
+        whisper_text="Thanks.",
+        whisper_tokens=("thanks",),
+        text_matches=(match,),
+    )
+
+    planned = _plan_boundary_recovery_anchors(
+        [
+            AlignmentIssue(
+                word_indices=(),
+                reasons=("excessive_inter_word_gap",),
+                boundary_after_word_index=141,
+            ),
+        ],
+        [evidence],
+        claimed_word_indices={142},
+    )
+
+    assert planned == []

@@ -67,6 +67,82 @@ class EffectiveWordAlignment:
     suppressed_word_indices: tuple[int, ...] = ()
 
 
+def _plan_boundary_recovery_anchors(
+    issues: list[AlignmentIssue],
+    region_evidence: list[AlignmentRegionEvidence],
+    *,
+    claimed_word_indices: set[int],
+) -> list[AlignmentRegionEvidence]:
+    candidates: dict[
+        tuple[int, ...],
+        dict[str, AlignmentRegionEvidence],
+    ] = {}
+
+    for issue in issues:
+        boundary = issue.boundary_after_word_index
+
+        if boundary is None:
+            continue
+
+        boundary_evidence = (
+            collect_boundary_text_evidence(
+                boundary,
+                region_evidence,
+            )
+        )
+
+        for anchor in (
+            *boundary_evidence.left,
+            *boundary_evidence.right,
+        ):
+            match = anchor.unique_text_match
+
+            if match is None:
+                continue
+
+            word_indices = match.word_indices
+
+            if any(
+                index in claimed_word_indices
+                for index in word_indices
+            ):
+                continue
+
+            by_region = candidates.setdefault(
+                word_indices,
+                {},
+            )
+
+            # The same region can appear from both sides
+            # of adjacent gap issues. Keep it only once.
+            by_region[anchor.region_id] = anchor
+
+    planned: list[
+        AlignmentRegionEvidence
+    ] = []
+
+    for word_indices, by_region in candidates.items():
+        # Multiple distinct regions claiming exactly the
+        # same word range are ambiguous evidence. Do not
+        # guess which occurrence is correct.
+        if len(by_region) != 1:
+            continue
+
+        planned.append(
+            next(iter(by_region.values()))
+        )
+
+    planned.sort(
+        key=lambda evidence: (
+            evidence.unique_text_match.start_word_index,
+            evidence.unique_text_match.end_word_index,
+            evidence.region_id,
+        )
+    )
+
+    return planned
+
+
 def build_effective_word_alignment(
     storage: DatasetStorage,
     source_id: str,
@@ -96,7 +172,19 @@ def build_effective_word_alignment(
         region_evidence,
     )
 
+    claimed_word_indices: set[int] = set()
+
     for candidate in word_candidates:
+        candidate_indices = set(
+            candidate.word_indices
+        )
+
+        if (
+            candidate_indices
+            & claimed_word_indices
+        ):
+            continue
+
         recovery = recover_candidate_alignment(
             storage,
             source_id,
@@ -109,51 +197,57 @@ def build_effective_word_alignment(
         )
 
         recoveries.append(recovery)
+        claimed_word_indices.update(
+            recovery.word_indices
+        )
 
-    for issue in issues:
-        boundary = issue.boundary_after_word_index
+    boundary_anchors = (
+        _plan_boundary_recovery_anchors(
+            issues,
+            region_evidence,
+            claimed_word_indices=(
+                claimed_word_indices
+            ),
+        )
+    )
 
-        if boundary is None:
+    for anchor in boundary_anchors:
+        recovery = recover_region_alignment(
+            storage,
+            source_id,
+            anchor,
+            words,
+            representation_name=(
+                representation_name
+            ),
+            language=language,
+        )
+
+        comparison = (
+            compare_alignment_recovery(
+                words,
+                recovery,
+            )
+        )
+
+        if alignment_spans_overlap(
+            comparison
+        ):
             continue
 
-        boundary_evidence = (
-            collect_boundary_text_evidence(
-                boundary,
-                region_evidence,
-            )
+        recovery_indices = set(
+            recovery.word_indices
         )
 
-        anchors = (
-            *boundary_evidence.left,
-            *boundary_evidence.right,
+        if recovery_indices & claimed_word_indices:
+            continue
+
+        recoveries.append(recovery)
+        boundary_recoveries.append(recovery)
+
+        claimed_word_indices.update(
+            recovery.word_indices
         )
-
-        for anchor in anchors:
-            recovery = recover_region_alignment(
-                storage,
-                source_id,
-                anchor,
-                words,
-                representation_name=(
-                    representation_name
-                ),
-                language=language,
-            )
-
-            comparison = (
-                compare_alignment_recovery(
-                    words,
-                    recovery,
-                )
-            )
-
-            if alignment_spans_overlap(
-                comparison
-            ):
-                continue
-
-            recoveries.append(recovery)
-            boundary_recoveries.append(recovery)
 
     stranded_candidates = (
         find_stranded_alignment_candidates(
