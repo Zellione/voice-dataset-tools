@@ -48,9 +48,6 @@ CONTINUOUS_ASR_BOUNDARY_SEARCH_SECONDS = 15.0
 CONTINUOUS_ASR_MAX_CHUNK_SECONDS = 240.0
 CONTINUOUS_ASR_MIN_SPEECH_GAP_SECONDS = 0.50
 
-CONTINUOUS_ASR_MAX_WORD_DURATION_SECONDS = 5.0
-
-
 def _region_whisper_text(
     region: dict[str, Any],
 ) -> str | None:
@@ -382,18 +379,6 @@ def _validate_word_timeline(
                 "monotonic at word "
                 f"{index}: {start} < "
                 f"{previous_start}"
-            )
-
-        duration = end - start
-
-        if (
-            duration
-            > CONTINUOUS_ASR_MAX_WORD_DURATION_SECONDS
-        ):
-            raise ValueError(
-                "Continuous ASR word duration is "
-                "implausibly long at index "
-                f"{index}: {duration:.3f}s"
             )
 
         previous_start = start

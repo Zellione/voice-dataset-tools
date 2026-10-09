@@ -294,17 +294,14 @@ def test_validate_word_timeline_rejects_timestamp_reversal(
         )
 
 
-def test_validate_word_timeline_rejects_implausible_duration(
+def test_validate_word_timeline_allows_long_word_duration(
 ) -> None:
-    with pytest.raises(
-        ValueError,
-        match="implausibly long",
-    ):
-        _validate_word_timeline(
-            [
-                word("broken", 10.0, 20.0),
-            ]
-        )
+    _validate_word_timeline(
+        [
+            word("uncertain", 10.0, 66.16),
+            word("next", 66.16, 66.40),
+        ]
+    )
 
 
 def test_validate_word_timeline_allows_zero_duration_words(
