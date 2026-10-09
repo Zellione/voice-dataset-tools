@@ -82,6 +82,7 @@ preload_cuda_libraries()
 from .ingest import ingest as ingest_source
 from .speaker_similarity import rank_voice_matches
 from .speaker_calibration import (
+    SpeakerCalibrationRule,
     build_speaker_calibration_report,
     load_calibration_observations,
 )
@@ -2417,7 +2418,7 @@ def turn_speaker_calibration_report(
 
     typer.echo()
     typer.echo(
-        "margin  sources  enc  eligible  "
+        "margin  refs  sources  enc  eligible  "
         "errors  precision  coverage"
     )
 
@@ -2439,6 +2440,7 @@ def turn_speaker_calibration_report(
 
         typer.echo(
             f"{rule.minimum_margin:6.2f}  "
+            f"{rule.minimum_reference_support:4d}  "
             f"{rule.minimum_source_support:7d}  "
             f"{rule.minimum_encoder_count:3d}  "
             f"{evaluation.eligible_count:8d}  "
@@ -2505,6 +2507,22 @@ def turn_review(
             source_id=source_id,
             auto_review_only=auto_review_only,
             embedding_names=embedding_names,
+            suggest_rule=SpeakerCalibrationRule(
+                minimum_margin=0.15,
+                minimum_reference_support=2,
+                minimum_source_support=1,
+                minimum_encoder_count=2,
+                minimum_precision=0.80,
+                minimum_eligible_count=3,
+            ),
+            prefill_rule=SpeakerCalibrationRule(
+                minimum_margin=0.30,
+                minimum_reference_support=4,
+                minimum_source_support=1,
+                minimum_encoder_count=2,
+                minimum_precision=0.95,
+                minimum_eligible_count=5,
+            ),
         )
 
         if session.total == 0:

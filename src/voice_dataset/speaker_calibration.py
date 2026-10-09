@@ -70,6 +70,7 @@ class SpeakerCalibrationEvaluation:
 @dataclass(frozen=True)
 class SpeakerCalibrationRule:
     minimum_margin: float | None = None
+    minimum_reference_support: int | None = None
     minimum_source_support: int | None = None
     minimum_encoder_count: int | None = None
 
@@ -619,6 +620,15 @@ def summarize_calibration_observations(
     )
 
 
+def minimum_support_count(
+    support: dict[str, int],
+) -> int:
+    if not support:
+        return 0
+
+    return min(support.values())
+
+
 def speaker_summary_matches_rule(
     summary: SpeakerCandidateSummary,
     rule: SpeakerCalibrationRule,
@@ -633,6 +643,14 @@ def speaker_summary_matches_rule(
             or summary.margin
             < rule.minimum_margin
         )
+    ):
+        return False
+
+    if (
+        rule.minimum_reference_support is not None
+        and minimum_support_count(
+            summary.support
+        ) < rule.minimum_reference_support
     ):
         return False
 
@@ -678,6 +696,7 @@ def filter_calibration_observations(
     ],
     *,
     minimum_margin: float | None = None,
+    minimum_reference_support: int | None = None,
     minimum_source_support: int | None = None,
     minimum_encoder_count: int | None = None,
 ) -> list[SpeakerCalibrationObservation]:
@@ -694,6 +713,14 @@ def filter_calibration_observations(
                 or observation.margin
                 < minimum_margin
             )
+        ):
+            continue
+
+        if (
+            minimum_reference_support is not None
+            and minimum_support_count(
+                observation.support
+            ) < minimum_reference_support
         ):
             continue
 
@@ -722,12 +749,16 @@ def evaluate_calibration_rule(
     ],
     *,
     minimum_margin: float | None = None,
+    minimum_reference_support: int | None = None,
     minimum_source_support: int | None = None,
     minimum_encoder_count: int | None = None,
 ) -> SpeakerCalibrationEvaluation:
     eligible = filter_calibration_observations(
         observations,
         minimum_margin=minimum_margin,
+        minimum_reference_support=(
+            minimum_reference_support
+        ),
         minimum_source_support=minimum_source_support,
         minimum_encoder_count=minimum_encoder_count,
     )
@@ -775,6 +806,9 @@ def evaluate_speaker_calibration_rule(
     return evaluate_calibration_rule(
         observations,
         minimum_margin=rule.minimum_margin,
+        minimum_reference_support=(
+            rule.minimum_reference_support
+        ),
         minimum_source_support=(
             rule.minimum_source_support
         ),
@@ -851,6 +885,11 @@ def build_speaker_calibration_report(
         0.40,
         0.50,
     ),
+    reference_support_values: tuple[int, ...] = (
+        1,
+        2,
+        4,
+    ),
     source_support_values: tuple[int, ...] = (
         1,
         2,
@@ -866,31 +905,35 @@ def build_speaker_calibration_report(
     ] = []
 
     for margin in margins:
-        for source_support in source_support_values:
-            for encoder_count in encoder_counts:
-                rule = SpeakerCalibrationRule(
-                    minimum_margin=margin,
-                    minimum_source_support=(
-                        source_support
-                    ),
-                    minimum_encoder_count=(
-                        encoder_count
-                    ),
-                )
-
-                evaluation = (
-                    evaluate_speaker_calibration_rule(
-                        observations,
-                        rule,
+        for reference_support in reference_support_values:
+            for source_support in source_support_values:
+                for encoder_count in encoder_counts:
+                    rule = SpeakerCalibrationRule(
+                        minimum_margin=margin,
+                        minimum_reference_support=(
+                            reference_support
+                        ),
+                        minimum_source_support=(
+                            source_support
+                        ),
+                        minimum_encoder_count=(
+                            encoder_count
+                        ),
                     )
-                )
 
-                rows.append(
-                    SpeakerCalibrationReportRow(
-                        rule=rule,
-                        evaluation=evaluation,
+                    evaluation = (
+                        evaluate_speaker_calibration_rule(
+                            observations,
+                            rule,
+                        )
                     )
-                )
+
+                    rows.append(
+                        SpeakerCalibrationReportRow(
+                            rule=rule,
+                            evaluation=evaluation,
+                        )
+                    )
 
     rows.sort(
         key=lambda row: (
@@ -911,6 +954,10 @@ def build_speaker_calibration_report(
             if row.rule.minimum_margin
             is not None
             else 0.0,
+            row.rule.minimum_reference_support
+            if row.rule.minimum_reference_support
+            is not None
+            else 0,
             row.rule.minimum_source_support
             if row.rule.minimum_source_support
             is not None

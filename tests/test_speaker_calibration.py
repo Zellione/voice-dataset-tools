@@ -18,6 +18,7 @@ from voice_dataset.speaker_calibration import (
     SpeakerCalibrationObservation,
     SpeakerCalibrationReportRow,
     SpeakerCalibrationRule,
+    SpeakerCandidateSummary,
 )
 from voice_dataset.speaker_candidates import (
     EmbeddingVoiceCandidate,
@@ -1119,6 +1120,7 @@ def _policy_observation(
     turn_id: str,
     correct: bool,
     margin: float,
+    reference_support: int = 3,
     source_support: int = 3,
     encoder_count: int = 2,
 ) -> SpeakerCalibrationObservation:
@@ -1137,7 +1139,13 @@ def _policy_observation(
         margin=margin,
         encoder_count=encoder_count,
         embedding_scores={},
-        support={},
+        support={
+            name: reference_support
+            for name in (
+                "ecapa_speaker",
+                "wespeaker_speaker",
+            )[:encoder_count]
+        },
         source_support={},
         total_source_support=source_support,
     )
@@ -1146,6 +1154,7 @@ def _policy_observation(
 def _policy_candidates(
     *,
     margin: float,
+    reference_support: int = 3,
     source_support: int = 3,
     encoder_count: int = 2,
 ) -> list[SpeakerCandidate]:
@@ -1158,19 +1167,25 @@ def _policy_candidates(
         for index in range(source_support)
     )
 
+    embedding_names = (
+        "ecapa_speaker",
+        "wespeaker_speaker",
+    )[:encoder_count]
+
     return [
         SpeakerCandidate(
             voice_id="voice_001",
             score=0.90,
             encoder_count=encoder_count,
-            embedding_scores=(
+            embedding_scores=tuple(
                 EmbeddingVoiceCandidate(
                     voice_id="voice_001",
-                    embedding_name="ecapa_speaker",
+                    embedding_name=name,
                     score=0.90,
-                    support=source_support,
+                    support=reference_support,
                     matches=matches,
-                ),
+                )
+                for name in embedding_names
             ),
         ),
         SpeakerCandidate(
@@ -1423,6 +1438,7 @@ def test_build_speaker_calibration_report_builds_rule_grid():
     rows = build_speaker_calibration_report(
         observations,
         margins=(0.0, 0.30),
+        reference_support_values=(1,),
         source_support_values=(1, 2),
         encoder_counts=(1, 2),
     )
@@ -1465,6 +1481,7 @@ def test_build_speaker_calibration_report_sorts_best_rules_first():
     rows = build_speaker_calibration_report(
         observations,
         margins=(0.0, 0.30),
+        reference_support_values=(1,),
         source_support_values=(1,),
         encoder_counts=(1,),
     )
@@ -1509,6 +1526,7 @@ def test_build_speaker_calibration_report_keeps_zero_coverage_rules():
     rows = build_speaker_calibration_report(
         observations,
         margins=(0.50,),
+        reference_support_values=(4,),
         source_support_values=(3,),
         encoder_counts=(2,),
     )
@@ -1522,3 +1540,52 @@ def test_build_speaker_calibration_report_keeps_zero_coverage_rules():
     assert row.evaluation.coverage == pytest.approx(
         0.0
     )
+
+
+def test_speaker_summary_rule_uses_minimum_reference_support_per_encoder():
+    summary = SpeakerCandidateSummary(
+        top_voice_id="voice_001",
+        top_score=0.90,
+        runner_up_voice_id="voice_002",
+        runner_up_score=0.40,
+        margin=0.50,
+        encoder_count=2,
+        embedding_scores={
+            "ecapa_speaker": 0.91,
+            "wespeaker_speaker": 0.89,
+        },
+        support={
+            "ecapa_speaker": 8,
+            "wespeaker_speaker": 1,
+        },
+        source_support={},
+        total_source_support=1,
+    )
+
+    assert not speaker_summary_matches_rule(
+        summary,
+        SpeakerCalibrationRule(
+            minimum_reference_support=2,
+        ),
+    )
+
+
+def test_filter_calibration_observations_uses_reference_support():
+    observation = _policy_observation(
+        turn_id="001",
+        correct=True,
+        margin=0.50,
+        reference_support=3,
+    )
+
+    assert filter_calibration_observations(
+        [observation],
+        minimum_reference_support=3,
+    ) == [
+        observation
+    ]
+
+    assert filter_calibration_observations(
+        [observation],
+        minimum_reference_support=4,
+    ) == []
