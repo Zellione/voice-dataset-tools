@@ -77,6 +77,12 @@ class SpeakerCalibrationRule:
     minimum_eligible_count: int = 1
 
 
+@dataclass(frozen=True)
+class SpeakerCalibrationReportRow:
+    rule: SpeakerCalibrationRule
+    evaluation: SpeakerCalibrationEvaluation
+
+
 SpeakerReviewMode = Literal[
     "none",
     "suggest",
@@ -830,3 +836,90 @@ def classify_speaker_review_mode(
         return "suggest"
 
     return "none"
+
+
+def build_speaker_calibration_report(
+    observations: list[
+        SpeakerCalibrationObservation
+    ],
+    *,
+    margins: tuple[float, ...] = (
+        0.0,
+        0.10,
+        0.20,
+        0.30,
+        0.40,
+        0.50,
+    ),
+    source_support_values: tuple[int, ...] = (
+        1,
+        2,
+        3,
+    ),
+    encoder_counts: tuple[int, ...] = (
+        1,
+        2,
+    ),
+) -> list[SpeakerCalibrationReportRow]:
+    rows: list[
+        SpeakerCalibrationReportRow
+    ] = []
+
+    for margin in margins:
+        for source_support in source_support_values:
+            for encoder_count in encoder_counts:
+                rule = SpeakerCalibrationRule(
+                    minimum_margin=margin,
+                    minimum_source_support=(
+                        source_support
+                    ),
+                    minimum_encoder_count=(
+                        encoder_count
+                    ),
+                )
+
+                evaluation = (
+                    evaluate_speaker_calibration_rule(
+                        observations,
+                        rule,
+                    )
+                )
+
+                rows.append(
+                    SpeakerCalibrationReportRow(
+                        rule=rule,
+                        evaluation=evaluation,
+                    )
+                )
+
+    rows.sort(
+        key=lambda row: (
+            -(
+                row.evaluation.precision
+                if row.evaluation.precision
+                is not None
+                else -1.0
+            ),
+            -(
+                row.evaluation.coverage
+                if row.evaluation.coverage
+                is not None
+                else -1.0
+            ),
+            -row.evaluation.eligible_count,
+            row.rule.minimum_margin
+            if row.rule.minimum_margin
+            is not None
+            else 0.0,
+            row.rule.minimum_source_support
+            if row.rule.minimum_source_support
+            is not None
+            else 0,
+            row.rule.minimum_encoder_count
+            if row.rule.minimum_encoder_count
+            is not None
+            else 0,
+        )
+    )
+
+    return rows

@@ -2,6 +2,7 @@ import pytest
 
 from voice_dataset.speaker_calibration import (
     build_calibration_observation,
+    build_speaker_calibration_report,
     calibration_rule_is_trusted,
     classify_speaker_review_mode,
     evaluate_calibration_rule,
@@ -15,6 +16,7 @@ from voice_dataset.speaker_calibration import (
     summarize_speaker_candidates,
     SpeakerCalibrationEvaluation,
     SpeakerCalibrationObservation,
+    SpeakerCalibrationReportRow,
     SpeakerCalibrationRule,
 )
 from voice_dataset.speaker_candidates import (
@@ -1398,3 +1400,125 @@ def test_classify_speaker_review_mode_returns_none_when_current_evidence_is_weak
     )
 
     assert mode == "none"
+
+
+def test_build_speaker_calibration_report_builds_rule_grid():
+    observations = [
+        _policy_observation(
+            turn_id="001",
+            correct=True,
+            margin=0.50,
+            source_support=3,
+            encoder_count=2,
+        ),
+        _policy_observation(
+            turn_id="002",
+            correct=False,
+            margin=0.15,
+            source_support=1,
+            encoder_count=1,
+        ),
+    ]
+
+    rows = build_speaker_calibration_report(
+        observations,
+        margins=(0.0, 0.30),
+        source_support_values=(1, 2),
+        encoder_counts=(1, 2),
+    )
+
+    assert len(rows) == 8
+    assert all(
+        isinstance(
+            row,
+            SpeakerCalibrationReportRow,
+        )
+        for row in rows
+    )
+
+
+def test_build_speaker_calibration_report_sorts_best_rules_first():
+    observations = [
+        _policy_observation(
+            turn_id="001",
+            correct=True,
+            margin=0.60,
+            source_support=3,
+            encoder_count=2,
+        ),
+        _policy_observation(
+            turn_id="002",
+            correct=True,
+            margin=0.50,
+            source_support=3,
+            encoder_count=2,
+        ),
+        _policy_observation(
+            turn_id="003",
+            correct=False,
+            margin=0.10,
+            source_support=1,
+            encoder_count=1,
+        ),
+    ]
+
+    rows = build_speaker_calibration_report(
+        observations,
+        margins=(0.0, 0.30),
+        source_support_values=(1,),
+        encoder_counts=(1,),
+    )
+
+    assert len(rows) == 2
+
+    best = rows[0]
+    weaker = rows[1]
+
+    assert best.rule.minimum_margin == pytest.approx(
+        0.30
+    )
+    assert best.evaluation.precision == pytest.approx(
+        1.0
+    )
+    assert best.evaluation.coverage == pytest.approx(
+        2 / 3
+    )
+
+    assert weaker.rule.minimum_margin == pytest.approx(
+        0.0
+    )
+    assert weaker.evaluation.precision == pytest.approx(
+        2 / 3
+    )
+    assert weaker.evaluation.coverage == pytest.approx(
+        1.0
+    )
+
+
+def test_build_speaker_calibration_report_keeps_zero_coverage_rules():
+    observations = [
+        _policy_observation(
+            turn_id="001",
+            correct=True,
+            margin=0.10,
+            source_support=1,
+            encoder_count=1,
+        ),
+    ]
+
+    rows = build_speaker_calibration_report(
+        observations,
+        margins=(0.50,),
+        source_support_values=(3,),
+        encoder_counts=(2,),
+    )
+
+    assert len(rows) == 1
+
+    row = rows[0]
+
+    assert row.evaluation.eligible_count == 0
+    assert row.evaluation.precision is None
+    assert row.evaluation.coverage == pytest.approx(
+        0.0
+    )

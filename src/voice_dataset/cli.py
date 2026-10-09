@@ -81,6 +81,10 @@ preload_cuda_libraries()
 
 from .ingest import ingest as ingest_source
 from .speaker_similarity import rank_voice_matches
+from .speaker_calibration import (
+    build_speaker_calibration_report,
+    load_calibration_observations,
+)
 from .continuous_asr import transcribe_source_qwen3
 from .utterance_pipeline import (
     apply_source_utterance_turns,
@@ -2378,6 +2382,70 @@ def turn_migrate_legacy_ignore(
         + ("" if migrated_count == 1 else "s")
         + "."
     )
+
+
+@turn_app.command("speaker-calibration-report")
+def turn_speaker_calibration_report(
+    dataset: Path = typer.Option(
+        Path("datasets/output"),
+        help="Dataset directory.",
+    ),
+):
+    """Report empirical speaker calibration rule quality."""
+
+    storage = storage_for(dataset)
+
+    observations = load_calibration_observations(
+        storage
+    )
+
+    typer.echo(
+        "Speaker calibration observations: "
+        f"{len(observations)}"
+    )
+
+    if not observations:
+        typer.echo(
+            "No persisted speaker calibration "
+            "observations."
+        )
+        return
+
+    rows = build_speaker_calibration_report(
+        observations
+    )
+
+    typer.echo()
+    typer.echo(
+        "margin  sources  enc  eligible  "
+        "errors  precision  coverage"
+    )
+
+    for row in rows:
+        rule = row.rule
+        evaluation = row.evaluation
+
+        precision = (
+            f"{evaluation.precision * 100:8.2f}%"
+            if evaluation.precision is not None
+            else "       -"
+        )
+
+        coverage = (
+            f"{evaluation.coverage * 100:7.2f}%"
+            if evaluation.coverage is not None
+            else "      -"
+        )
+
+        typer.echo(
+            f"{rule.minimum_margin:6.2f}  "
+            f"{rule.minimum_source_support:7d}  "
+            f"{rule.minimum_encoder_count:3d}  "
+            f"{evaluation.eligible_count:8d}  "
+            f"{evaluation.error_count:6d}  "
+            f"{precision}  "
+            f"{coverage}"
+        )
 
 
 @turn_app.command("review")
