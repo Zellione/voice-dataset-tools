@@ -61,7 +61,8 @@ def test_detect_alignment_issue_for_long_word(
     )
 
 
-def test_detect_alignment_issue_for_large_gap() -> None:
+def test_detect_alignment_issues_for_zero_run_and_large_gap(
+) -> None:
     words = [
         word("god", 92.400, 92.400),
         word("Bravo", 92.400, 92.400),
@@ -71,13 +72,28 @@ def test_detect_alignment_issue_for_large_gap() -> None:
 
     issues = detect_alignment_issues(words)
 
-    assert len(issues) == 1
+    assert len(issues) == 2
 
-    issue = issues[0]
+    zero_issue = issues[0]
 
-    assert issue.word_indices == ()
-    assert issue.boundary_after_word_index == 2
-    assert issue.reasons == (
+    assert zero_issue.word_indices == (
+        0,
+        1,
+        2,
+    )
+    assert (
+        zero_issue.boundary_after_word_index
+        is None
+    )
+    assert zero_issue.reasons == (
+        "zero_word_duration",
+    )
+
+    gap_issue = issues[1]
+
+    assert gap_issue.word_indices == ()
+    assert gap_issue.boundary_after_word_index == 2
+    assert gap_issue.reasons == (
         "excessive_inter_word_gap",
     )
 
@@ -176,7 +192,8 @@ def test_text_match_reports_ambiguity() -> None:
     ]
 
 
-def test_gap_issue_does_not_create_word_recovery_candidate() -> None:
+def test_zero_duration_issue_creates_word_recovery_candidate(
+) -> None:
     from voice_dataset.word_alignment import (
         AlignmentRegionEvidence,
         AlignmentTextMatch,
@@ -186,10 +203,16 @@ def test_gap_issue_does_not_create_word_recovery_candidate() -> None:
     words = [
         word("Bravo", 92.400, 92.400),
         word("sis", 92.400, 92.400),
-        word("Councillors", 185.426, 185.986),
+        word(
+            "Councillors",
+            185.426,
+            185.986,
+        ),
     ]
 
-    issues = detect_alignment_issues(words)
+    issues = detect_alignment_issues(
+        words
+    )
 
     evidence = [
         AlignmentRegionEvidence(
@@ -198,13 +221,85 @@ def test_gap_issue_does_not_create_word_recovery_candidate() -> None:
             end=179.868,
             speaker="SPEAKER_02",
             whisper_text="Bravo, sis.",
-            whisper_tokens=("bravo", "sis"),
+            whisper_tokens=(
+                "bravo",
+                "sis",
+            ),
             text_matches=(
                 AlignmentTextMatch(
                     start_word_index=0,
                     end_word_index=1,
                     word_indices=(0, 1),
-                    tokens=("bravo", "sis"),
+                    tokens=(
+                        "bravo",
+                        "sis",
+                    ),
+                ),
+            ),
+        )
+    ]
+
+    candidates = build_recovery_candidates(
+        issues,
+        evidence,
+    )
+
+    assert len(candidates) == 1
+
+    candidate = candidates[0]
+
+    assert candidate.word_indices == (
+        0,
+        1,
+    )
+    assert candidate.issue_word_indices == (
+        0,
+        1,
+    )
+    assert candidate.issue_reasons == (
+        "zero_word_duration",
+    )
+
+
+def test_gap_issue_alone_does_not_create_word_recovery_candidate(
+) -> None:
+    from voice_dataset.word_alignment import (
+        AlignmentIssue,
+        AlignmentRegionEvidence,
+        AlignmentTextMatch,
+        build_recovery_candidates,
+    )
+
+    issues = [
+        AlignmentIssue(
+            word_indices=(),
+            reasons=(
+                "excessive_inter_word_gap",
+            ),
+            boundary_after_word_index=1,
+        )
+    ]
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_000011",
+            start=178.231,
+            end=179.868,
+            speaker="SPEAKER_02",
+            whisper_text="Bravo, sis.",
+            whisper_tokens=(
+                "bravo",
+                "sis",
+            ),
+            text_matches=(
+                AlignmentTextMatch(
+                    start_word_index=0,
+                    end_word_index=1,
+                    word_indices=(0, 1),
+                    tokens=(
+                        "bravo",
+                        "sis",
+                    ),
                 ),
             ),
         )
@@ -3143,3 +3238,440 @@ def test_sat_boundary_recovery_batches_candidates(
     assert len(calls) == 1
     assert len(calls[0]) == 2
     assert len(result.recoveries) == 2
+
+
+def test_detect_alignment_issues_groups_zero_duration_runs(
+) -> None:
+    words = [
+        word("one", 10.0, 10.0),
+        word("two", 10.0, 10.0),
+        word("normal", 10.1, 10.4),
+        word("three", 10.4, 10.4),
+        word("four", 10.4, 10.4),
+        word("five", 10.4, 10.4),
+    ]
+
+    issues = detect_alignment_issues(
+        words
+    )
+
+    zero_issues = [
+        issue
+        for issue in issues
+        if (
+            "zero_word_duration"
+            in issue.reasons
+        )
+    ]
+
+    assert [
+        issue.word_indices
+        for issue in zero_issues
+    ] == [
+        (0, 1),
+        (3, 4, 5),
+    ]
+
+
+def test_word_recovery_can_anchor_stranded_candidate(
+) -> None:
+    words = [
+        word("left", 10.0, 10.4),
+        word("stranded", 10.4, 10.4),
+        word("right", 30.0, 30.0),
+    ]
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_left",
+            start=9.9,
+            end=10.5,
+            speaker="SPEAKER_0",
+            whisper_text="left",
+            whisper_tokens=("left",),
+            text_matches=(
+                AlignmentTextMatch(
+                    start_word_index=0,
+                    end_word_index=0,
+                    word_indices=(0,),
+                    tokens=("left",),
+                ),
+            ),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_stranded",
+            start=20.0,
+            end=21.0,
+            speaker="SPEAKER_1",
+            whisper_text="something else",
+            whisper_tokens=("something", "else"),
+            text_matches=(),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_right",
+            start=29.9,
+            end=30.5,
+            speaker="SPEAKER_2",
+            whisper_text="right",
+            whisper_tokens=("right",),
+            text_matches=(
+                AlignmentTextMatch(
+                    start_word_index=2,
+                    end_word_index=2,
+                    word_indices=(2,),
+                    tokens=("right",),
+                ),
+            ),
+        ),
+    ]
+
+    recovered_right = LocalAlignmentRecovery(
+        word_indices=(2,),
+        region_id="region_right",
+        region_start=29.9,
+        region_end=30.5,
+        text="right",
+        words=(
+            word("right", 30.0, 30.4),
+        ),
+    )
+
+    candidates = find_stranded_alignment_candidates(
+        words,
+        evidence,
+        [recovered_right],
+    )
+
+    assert candidates == [
+        StrandedAlignmentCandidate(
+            word_indices=(1,),
+            region_id="region_stranded",
+            region_start=20.0,
+            region_end=21.0,
+            speaker="SPEAKER_1",
+        )
+    ]
+
+
+def test_zero_duration_region_fallback_uses_unique_region(
+) -> None:
+    from voice_dataset.word_alignment import (
+        AlignmentIssue,
+        AlignmentRegionEvidence,
+        build_zero_duration_region_recovery_candidates,
+    )
+
+    words = [
+        word("before", 9.8, 10.1),
+        word("got", 10.2, 10.4),
+        word("to", 10.4, 10.4),
+        word("stay", 10.4, 10.7),
+        word("after", 11.2, 11.5),
+    ]
+
+    issue = AlignmentIssue(
+        word_indices=(2,),
+        reasons=(
+            "zero_word_duration",
+        ),
+    )
+
+    evidence = AlignmentRegionEvidence(
+        region_id="region_1",
+        start=10.1,
+        end=10.8,
+        speaker="SPEAKER_0",
+        whisper_text="Got to stay.",
+        whisper_tokens=(
+            "got",
+            "to",
+            "stay",
+        ),
+        text_matches=(),
+    )
+
+    claimed: set[int] = set()
+
+    candidates = (
+        build_zero_duration_region_recovery_candidates(
+            words,
+            [issue],
+            [evidence],
+            claimed_word_indices=claimed,
+        )
+    )
+
+    assert len(candidates) == 1
+
+    candidate = candidates[0]
+
+    assert candidate.word_indices == (
+        1,
+        2,
+        3,
+    )
+    assert candidate.region_id == "region_1"
+    assert candidate.issue_word_indices == (
+        2,
+    )
+    assert candidate.issue_reasons == (
+        "zero_word_duration_region_fallback",
+    )
+
+    assert claimed == {
+        1,
+        2,
+        3,
+    }
+
+
+def test_zero_duration_region_fallback_requires_unique_region(
+) -> None:
+    from voice_dataset.word_alignment import (
+        AlignmentIssue,
+        AlignmentRegionEvidence,
+        build_zero_duration_region_recovery_candidates,
+    )
+
+    words = [
+        word("hello", 10.5, 10.5),
+    ]
+
+    issue = AlignmentIssue(
+        word_indices=(0,),
+        reasons=(
+            "zero_word_duration",
+        ),
+    )
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_1",
+            start=10.0,
+            end=11.0,
+            speaker="SPEAKER_0",
+            whisper_text="Hello.",
+            whisper_tokens=("hello",),
+            text_matches=(),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_2",
+            start=10.2,
+            end=10.8,
+            speaker="SPEAKER_1",
+            whisper_text="Different.",
+            whisper_tokens=("different",),
+            text_matches=(),
+        ),
+    ]
+
+    assert (
+        build_zero_duration_region_recovery_candidates(
+            words,
+            [issue],
+            evidence,
+            claimed_word_indices=set(),
+        )
+        == []
+    )
+
+
+def test_zero_duration_region_fallback_does_not_overlap_claimed_run(
+) -> None:
+    from voice_dataset.word_alignment import (
+        AlignmentIssue,
+        AlignmentRegionEvidence,
+        build_zero_duration_region_recovery_candidates,
+    )
+
+    words = [
+        word("one", 10.2, 10.2),
+        word("two", 10.2, 10.2),
+    ]
+
+    issue = AlignmentIssue(
+        word_indices=(0, 1),
+        reasons=(
+            "zero_word_duration",
+        ),
+    )
+
+    evidence = AlignmentRegionEvidence(
+        region_id="region_1",
+        start=10.0,
+        end=10.5,
+        speaker="SPEAKER_0",
+        whisper_text="one two",
+        whisper_tokens=("one", "two"),
+        text_matches=(),
+    )
+
+    assert (
+        build_zero_duration_region_recovery_candidates(
+            words,
+            [issue],
+            [evidence],
+            claimed_word_indices={1},
+        )
+        == []
+    )
+
+
+def test_alignment_text_similarity_accepts_asr_variation(
+) -> None:
+    from voice_dataset.word_alignment import (
+        _alignment_texts_are_similar,
+    )
+
+    assert _alignment_texts_are_similar(
+        "Come on Mauser I need you",
+        "Come on, Mouser. I need you.",
+    )
+
+    assert _alignment_texts_are_similar(
+        "What the hell are you thinking",
+        "What the hell were you thinking?",
+    )
+
+    assert _alignment_texts_are_similar(
+        "That workshop belonged to the Keremans",
+        "That workshop belonged to the Kermans.",
+    )
+
+
+def test_alignment_text_similarity_rejects_unrelated_text(
+) -> None:
+    from voice_dataset.word_alignment import (
+        _alignment_texts_are_similar,
+    )
+
+    assert not _alignment_texts_are_similar(
+        "Come on",
+        "You'll be fine. Just get back on the roof.",
+    )
+
+    assert not _alignment_texts_are_similar(
+        "yeah",
+        "No, no, no!",
+    )
+
+    assert not _alignment_texts_are_similar(
+        "Oh crap",
+        "Thank you.",
+    )
+
+
+def test_zero_duration_region_fallback_rejects_text_mismatch(
+) -> None:
+    from voice_dataset.word_alignment import (
+        AlignmentIssue,
+        AlignmentRegionEvidence,
+        build_zero_duration_region_recovery_candidates,
+    )
+
+    words = [
+        word("Oh", 10.2, 10.2),
+        word("crap", 10.2, 10.2),
+    ]
+
+    issue = AlignmentIssue(
+        word_indices=(0, 1),
+        reasons=(
+            "zero_word_duration",
+        ),
+    )
+
+    evidence = AlignmentRegionEvidence(
+        region_id="region_1",
+        start=10.0,
+        end=10.5,
+        speaker="SPEAKER_0",
+        whisper_text="Thank you.",
+        whisper_tokens=(
+            "thank",
+            "you",
+        ),
+        text_matches=(),
+    )
+
+    assert (
+        build_zero_duration_region_recovery_candidates(
+            words,
+            [issue],
+            [evidence],
+            claimed_word_indices=set(),
+        )
+        == []
+    )
+
+
+def test_alignment_text_similarity_accepts_hyphenation_variant(
+) -> None:
+    from voice_dataset.word_alignment import (
+        _alignment_texts_are_similar,
+    )
+
+    assert _alignment_texts_are_similar(
+        "Woohoo",
+        "Woo-hoo!",
+    )
+
+
+def test_zero_duration_region_fallback_prefers_matching_run(
+) -> None:
+    from voice_dataset.word_alignment import (
+        AlignmentIssue,
+        AlignmentRegionEvidence,
+        build_zero_duration_region_recovery_candidates,
+    )
+
+    words = [
+        word("no", 10.1, 10.3),
+        word("no", 10.3, 10.3),
+        word("no", 10.3, 10.3),
+        word("no", 10.3, 10.3),
+        word("no", 10.3, 10.3),
+        word("no", 10.3, 10.3),
+        word("no", 10.3, 10.5),
+    ]
+
+    issue = AlignmentIssue(
+        word_indices=(1, 2, 3, 4, 5),
+        reasons=(
+            "zero_word_duration",
+        ),
+    )
+
+    evidence = AlignmentRegionEvidence(
+        region_id="region_1",
+        start=10.0,
+        end=10.6,
+        speaker="SPEAKER_0",
+        whisper_text="No no no no no",
+        whisper_tokens=(
+            "no",
+            "no",
+            "no",
+            "no",
+            "no",
+        ),
+        text_matches=(),
+    )
+
+    candidates = (
+        build_zero_duration_region_recovery_candidates(
+            words,
+            [issue],
+            [evidence],
+            claimed_word_indices=set(),
+        )
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].word_indices == (
+        1,
+        2,
+        3,
+        4,
+        5,
+    )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -359,6 +360,284 @@ def recover_alignment_candidates_batch(
     return recoveries
 
 
+ZERO_DURATION_REGION_MIN_TOKEN_SIMILARITY = 0.65
+ZERO_DURATION_REGION_MIN_CHARACTER_SIMILARITY = 0.82
+
+
+def _alignment_text_similarity(
+    left: str,
+    right: str,
+) -> tuple[float, float]:
+    left_tokens = _lexical_tokens(
+        left
+    )
+    right_tokens = _lexical_tokens(
+        right
+    )
+
+    if not left_tokens or not right_tokens:
+        return 0.0, 0.0
+
+    token_similarity = SequenceMatcher(
+        None,
+        left_tokens,
+        right_tokens,
+        autojunk=False,
+    ).ratio()
+
+    left_characters = "".join(
+        left_tokens
+    )
+    right_characters = "".join(
+        right_tokens
+    )
+
+    character_similarity = SequenceMatcher(
+        None,
+        left_characters,
+        right_characters,
+        autojunk=False,
+    ).ratio()
+
+    return (
+        token_similarity,
+        character_similarity,
+    )
+
+
+def _alignment_texts_are_similar(
+    left: str,
+    right: str,
+) -> bool:
+    (
+        token_similarity,
+        character_similarity,
+    ) = _alignment_text_similarity(
+        left,
+        right,
+    )
+
+    return (
+        character_similarity >= 0.95
+        or (
+            token_similarity
+            >= ZERO_DURATION_REGION_MIN_TOKEN_SIMILARITY
+            and character_similarity
+            >= ZERO_DURATION_REGION_MIN_CHARACTER_SIMILARITY
+        )
+    )
+
+
+def build_zero_duration_region_recovery_candidates(
+    words: list[dict[str, Any]],
+    issues: list[AlignmentIssue],
+    region_evidence: list[AlignmentRegionEvidence],
+    *,
+    claimed_word_indices: set[int],
+) -> list[AlignmentRecoveryCandidate]:
+    candidates: list[
+        AlignmentRecoveryCandidate
+    ] = []
+
+    seen: set[
+        tuple[int, int, str]
+    ] = set()
+
+    for issue in issues:
+        if (
+            "zero_word_duration"
+            not in issue.reasons
+        ):
+            continue
+
+        if not issue.word_indices:
+            continue
+
+        run_indices = set(
+            issue.word_indices
+        )
+
+        # Exact text-based recovery always wins. For a
+        # partially claimed run, do not create an
+        # overlapping geometry-based recovery.
+        if (
+            run_indices
+            & claimed_word_indices
+        ):
+            continue
+
+        timestamps = [
+            float(words[index]["start"])
+            for index in issue.word_indices
+        ]
+
+        containing_regions = [
+            evidence
+            for evidence in region_evidence
+            if all(
+                evidence.start - 1e-6
+                <= timestamp
+                <= evidence.end + 1e-6
+                for timestamp in timestamps
+            )
+        ]
+
+        if len(containing_regions) != 1:
+            continue
+
+        evidence = containing_regions[0]
+
+        start_index = (
+            issue.word_indices[0]
+        )
+        end_index = (
+            issue.word_indices[-1]
+        )
+
+        run_text = " ".join(
+            str(words[index]["text"])
+            for index in issue.word_indices
+        )
+
+        run_matches_region = (
+            _alignment_texts_are_similar(
+                run_text,
+                evidence.whisper_text,
+            )
+        )
+
+        def inside_region(
+            index: int,
+        ) -> bool:
+            word = words[index]
+
+            word_start = float(
+                word["start"]
+            )
+            word_end = float(
+                word["end"]
+            )
+
+            return (
+                word_start
+                >= evidence.start - 1e-6
+                and word_end
+                <= evidence.end + 1e-6
+            )
+
+        if not run_matches_region:
+            # The zero-duration fragment may be one
+            # broken word inside an otherwise correctly
+            # recognized local phrase. Expand only in
+            # that case and validate the complete phrase.
+            while start_index > 0:
+                previous = start_index - 1
+
+                if (
+                    previous
+                    in claimed_word_indices
+                ):
+                    break
+
+                if not inside_region(
+                    previous
+                ):
+                    break
+
+                start_index = previous
+
+            while (
+                end_index + 1
+                < len(words)
+            ):
+                following = end_index + 1
+
+                if (
+                    following
+                    in claimed_word_indices
+                ):
+                    break
+
+                if not inside_region(
+                    following
+                ):
+                    break
+
+                end_index = following
+
+        word_indices = tuple(
+            range(
+                start_index,
+                end_index + 1,
+            )
+        )
+
+        if any(
+            index in claimed_word_indices
+            for index in word_indices
+        ):
+            continue
+
+        candidate_text = " ".join(
+            str(words[index]["text"])
+            for index in word_indices
+        )
+
+        if not _alignment_texts_are_similar(
+            candidate_text,
+            evidence.whisper_text,
+        ):
+            continue
+
+        key = (
+            start_index,
+            end_index,
+            evidence.region_id,
+        )
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+
+        candidates.append(
+            AlignmentRecoveryCandidate(
+                word_indices=word_indices,
+                start_word_index=(
+                    start_index
+                ),
+                end_word_index=(
+                    end_index
+                ),
+                region_id=(
+                    evidence.region_id
+                ),
+                region_start=(
+                    evidence.start
+                ),
+                region_end=(
+                    evidence.end
+                ),
+                whisper_text=(
+                    evidence.whisper_text
+                ),
+                speaker=evidence.speaker,
+                issue_word_indices=(
+                    issue.word_indices
+                ),
+                issue_reasons=(
+                    "zero_word_duration_region_fallback",
+                ),
+            )
+        )
+
+        claimed_word_indices.update(
+            word_indices
+        )
+
+    return candidates
+
+
 def build_effective_word_alignment(
     storage: DatasetStorage,
     source_id: str,
@@ -413,6 +692,22 @@ def build_effective_word_alignment(
             candidate.word_indices
         )
 
+    zero_region_candidates = (
+        build_zero_duration_region_recovery_candidates(
+            words,
+            issues,
+            region_evidence,
+            claimed_word_indices=(
+                claimed_word_indices
+            ),
+        )
+    )
+
+    non_boundary_candidates = [
+        *planned_word_candidates,
+        *zero_region_candidates,
+    ]
+
     boundary_anchors = (
         _plan_boundary_recovery_anchors(
             issues,
@@ -431,7 +726,7 @@ def build_effective_word_alignment(
     ]
 
     initial_candidates = [
-        *planned_word_candidates,
+        *non_boundary_candidates,
         *boundary_candidates,
     ]
 
@@ -449,7 +744,7 @@ def build_effective_word_alignment(
     )
 
     word_recovery_count = len(
-        planned_word_candidates
+        non_boundary_candidates
     )
 
     word_recoveries = initial_recoveries[
@@ -484,11 +779,16 @@ def build_effective_word_alignment(
             recovery
         )
 
+    stranded_anchor_recoveries = [
+        *word_recoveries,
+        *boundary_recoveries,
+    ]
+
     stranded_candidates = (
         find_stranded_alignment_candidates(
             words,
             region_evidence,
-            boundary_recoveries,
+            stranded_anchor_recoveries,
         )
     )
 
@@ -524,9 +824,44 @@ def build_effective_word_alignment(
         recoveries,
     )
 
+    zero_duration_indices = {
+        index
+        for issue in issues
+        if (
+            "zero_word_duration"
+            in issue.reasons
+        )
+        for index in issue.word_indices
+    }
+
+    recovered_positive_indices = {
+        index
+        for recovery in recoveries
+        for index, recovered_word in zip(
+            recovery.word_indices,
+            recovery.words,
+            strict=True,
+        )
+        if (
+            float(recovered_word["end"])
+            - float(recovered_word["start"])
+            > 1e-6
+        )
+    }
+
+    suppressed_word_indices = tuple(
+        sorted(
+            zero_duration_indices
+            - recovered_positive_indices
+        )
+    )
+
     return EffectiveWordAlignment(
         words=tuple(effective_words),
         recoveries=tuple(recoveries),
+        suppressed_word_indices=(
+            suppressed_word_indices
+        ),
     )
 
 
@@ -1422,18 +1757,44 @@ def detect_alignment_issues(
 ) -> list[AlignmentIssue]:
     issues: list[AlignmentIssue] = []
 
+    zero_duration_run: list[int] = []
+
+    def flush_zero_duration_run() -> None:
+        if not zero_duration_run:
+            return
+
+        issues.append(
+            AlignmentIssue(
+                word_indices=tuple(
+                    zero_duration_run
+                ),
+                reasons=(
+                    "zero_word_duration",
+                ),
+            )
+        )
+
+        zero_duration_run.clear()
+
     for position, word in enumerate(words):
         start = float(word["start"])
         end = float(word["end"])
+        duration = end - start
 
-        if (
-            end - start
-            > MAX_WORD_DURATION_SECONDS
-        ):
+        if duration <= 1e-6:
+            zero_duration_run.append(
+                position
+            )
+        else:
+            flush_zero_duration_run()
+
+        if duration > MAX_WORD_DURATION_SECONDS:
             issues.append(
                 AlignmentIssue(
                     word_indices=(position,),
-                    reasons=("excessive_word_duration",),
+                    reasons=(
+                        "excessive_word_duration",
+                    ),
                 )
             )
 
@@ -1460,6 +1821,8 @@ def detect_alignment_issues(
                     ),
                 )
             )
+
+    flush_zero_duration_run()
 
     return issues
 
