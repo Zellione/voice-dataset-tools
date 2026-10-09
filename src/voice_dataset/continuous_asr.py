@@ -49,7 +49,6 @@ CONTINUOUS_ASR_MAX_CHUNK_SECONDS = 240.0
 CONTINUOUS_ASR_MIN_SPEECH_GAP_SECONDS = 0.50
 
 CONTINUOUS_ASR_MAX_WORD_DURATION_SECONDS = 5.0
-CONTINUOUS_ASR_MAX_ZERO_DURATION_RUN = 2
 
 
 def _region_whisper_text(
@@ -359,7 +358,6 @@ def _validate_word_timeline(
     words: list[dict[str, Any]],
 ) -> None:
     previous_start = -1.0
-    zero_duration_run = 0
 
     for index, word in enumerate(words):
         start = float(word["start"])
@@ -397,21 +395,6 @@ def _validate_word_timeline(
                 "implausibly long at index "
                 f"{index}: {duration:.3f}s"
             )
-
-        if duration <= 1e-6:
-            zero_duration_run += 1
-
-            if (
-                zero_duration_run
-                > CONTINUOUS_ASR_MAX_ZERO_DURATION_RUN
-            ):
-                raise ValueError(
-                    "Continuous ASR has too many "
-                    "consecutive zero-duration words "
-                    f"ending at index {index}"
-                )
-        else:
-            zero_duration_run = 0
 
         previous_start = start
 

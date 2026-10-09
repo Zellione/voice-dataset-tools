@@ -307,19 +307,16 @@ def test_validate_word_timeline_rejects_implausible_duration(
         )
 
 
-def test_validate_word_timeline_rejects_long_zero_duration_run(
+def test_validate_word_timeline_allows_zero_duration_words(
 ) -> None:
-    with pytest.raises(
-        ValueError,
-        match="zero-duration",
-    ):
-        _validate_word_timeline(
-            [
-                word("one", 10.0, 10.0),
-                word("two", 10.0, 10.0),
-                word("three", 10.0, 10.0),
-            ]
-        )
+    _validate_word_timeline(
+        [
+            word("one", 10.0, 10.0),
+            word("two", 10.0, 10.0),
+            word("three", 10.0, 10.0),
+            word("four", 10.0, 10.4),
+        ]
+    )
 
 
 def test_load_chunked_qwen_output_offsets_words(
