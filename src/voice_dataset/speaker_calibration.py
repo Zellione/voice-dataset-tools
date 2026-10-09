@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from .speaker_candidates import SpeakerCandidate
 from .storage import DatasetStorage
@@ -65,6 +65,23 @@ class SpeakerCalibrationEvaluation:
     error_count: int
     precision: float | None
     coverage: float | None
+
+
+@dataclass(frozen=True)
+class SpeakerCalibrationRule:
+    minimum_margin: float | None = None
+    minimum_source_support: int | None = None
+    minimum_encoder_count: int | None = None
+
+    minimum_precision: float = 0.0
+    minimum_eligible_count: int = 1
+
+
+SpeakerReviewMode = Literal[
+    "none",
+    "suggest",
+    "prefill",
+]
 
 
 SPEAKER_CALIBRATION_SCHEMA_VERSION = 1
@@ -596,6 +613,59 @@ def summarize_calibration_observations(
     )
 
 
+def speaker_summary_matches_rule(
+    summary: SpeakerCandidateSummary,
+    rule: SpeakerCalibrationRule,
+) -> bool:
+    if summary.top_voice_id is None:
+        return False
+
+    if (
+        rule.minimum_margin is not None
+        and (
+            summary.margin is None
+            or summary.margin
+            < rule.minimum_margin
+        )
+    ):
+        return False
+
+    if (
+        rule.minimum_source_support is not None
+        and summary.total_source_support
+        < rule.minimum_source_support
+    ):
+        return False
+
+    if (
+        rule.minimum_encoder_count is not None
+        and summary.encoder_count
+        < rule.minimum_encoder_count
+    ):
+        return False
+
+    return True
+
+
+def calibration_rule_is_trusted(
+    evaluation: SpeakerCalibrationEvaluation,
+    rule: SpeakerCalibrationRule,
+) -> bool:
+    if (
+        evaluation.eligible_count
+        < rule.minimum_eligible_count
+    ):
+        return False
+
+    if evaluation.precision is None:
+        return False
+
+    return (
+        evaluation.precision
+        >= rule.minimum_precision
+    )
+
+
 def filter_calibration_observations(
     observations: list[
         SpeakerCalibrationObservation
@@ -688,3 +758,75 @@ def evaluate_calibration_rule(
         precision=precision,
         coverage=coverage,
     )
+
+
+def evaluate_speaker_calibration_rule(
+    observations: list[
+        SpeakerCalibrationObservation
+    ],
+    rule: SpeakerCalibrationRule,
+) -> SpeakerCalibrationEvaluation:
+    return evaluate_calibration_rule(
+        observations,
+        minimum_margin=rule.minimum_margin,
+        minimum_source_support=(
+            rule.minimum_source_support
+        ),
+        minimum_encoder_count=(
+            rule.minimum_encoder_count
+        ),
+    )
+
+
+def classify_speaker_review_mode(
+    *,
+    candidates: list[SpeakerCandidate],
+    observations: list[
+        SpeakerCalibrationObservation
+    ],
+    suggest_rule: SpeakerCalibrationRule,
+    prefill_rule: SpeakerCalibrationRule,
+) -> SpeakerReviewMode:
+    summary = summarize_speaker_candidates(
+        candidates
+    )
+
+    prefill_evaluation = (
+        evaluate_speaker_calibration_rule(
+            observations,
+            prefill_rule,
+        )
+    )
+
+    if (
+        speaker_summary_matches_rule(
+            summary,
+            prefill_rule,
+        )
+        and calibration_rule_is_trusted(
+            prefill_evaluation,
+            prefill_rule,
+        )
+    ):
+        return "prefill"
+
+    suggest_evaluation = (
+        evaluate_speaker_calibration_rule(
+            observations,
+            suggest_rule,
+        )
+    )
+
+    if (
+        speaker_summary_matches_rule(
+            summary,
+            suggest_rule,
+        )
+        and calibration_rule_is_trusted(
+            suggest_evaluation,
+            suggest_rule,
+        )
+    ):
+        return "suggest"
+
+    return "none"

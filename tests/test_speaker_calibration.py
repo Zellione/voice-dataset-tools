@@ -2,15 +2,20 @@ import pytest
 
 from voice_dataset.speaker_calibration import (
     build_calibration_observation,
+    calibration_rule_is_trusted,
+    classify_speaker_review_mode,
     evaluate_calibration_rule,
+    evaluate_speaker_calibration_rule,
     filter_calibration_observations,
     load_calibration_observations,
     speaker_calibration_observation_from_dict,
     speaker_calibration_observation_to_dict,
+    speaker_summary_matches_rule,
     summarize_calibration_observations,
     summarize_speaker_candidates,
     SpeakerCalibrationEvaluation,
     SpeakerCalibrationObservation,
+    SpeakerCalibrationRule,
 )
 from voice_dataset.speaker_candidates import (
     EmbeddingVoiceCandidate,
@@ -1105,3 +1110,291 @@ def test_evaluate_calibration_rule_handles_empty_observations():
     assert evaluation.error_count == 0
     assert evaluation.precision is None
     assert evaluation.coverage is None
+
+
+def _policy_observation(
+    *,
+    turn_id: str,
+    correct: bool,
+    margin: float,
+    source_support: int = 3,
+    encoder_count: int = 2,
+) -> SpeakerCalibrationObservation:
+    return SpeakerCalibrationObservation(
+        turn_id=turn_id,
+        source_id=f"source_{turn_id}",
+        confirmed_voice_id=(
+            "voice_001"
+            if correct
+            else "voice_002"
+        ),
+        predicted_voice_id="voice_001",
+        correct=correct,
+        top_score=0.90,
+        runner_up_score=0.90 - margin,
+        margin=margin,
+        encoder_count=encoder_count,
+        embedding_scores={},
+        support={},
+        source_support={},
+        total_source_support=source_support,
+    )
+
+
+def _policy_candidates(
+    *,
+    margin: float,
+    source_support: int = 3,
+    encoder_count: int = 2,
+) -> list[SpeakerCandidate]:
+    matches = tuple(
+        VoiceTurnMatch(
+            turn_id=f"ref_{index}",
+            similarity=0.90,
+            source_id=f"episode_{index}",
+        )
+        for index in range(source_support)
+    )
+
+    return [
+        SpeakerCandidate(
+            voice_id="voice_001",
+            score=0.90,
+            encoder_count=encoder_count,
+            embedding_scores=(
+                EmbeddingVoiceCandidate(
+                    voice_id="voice_001",
+                    embedding_name="ecapa_speaker",
+                    score=0.90,
+                    support=source_support,
+                    matches=matches,
+                ),
+            ),
+        ),
+        SpeakerCandidate(
+            voice_id="voice_002",
+            score=0.90 - margin,
+            encoder_count=encoder_count,
+            embedding_scores=(),
+        ),
+    ]
+
+
+def test_speaker_summary_matches_rule_checks_current_evidence():
+    summary = summarize_speaker_candidates(
+        _policy_candidates(
+            margin=0.40,
+            source_support=3,
+            encoder_count=2,
+        )
+    )
+
+    rule = SpeakerCalibrationRule(
+        minimum_margin=0.30,
+        minimum_source_support=2,
+        minimum_encoder_count=2,
+    )
+
+    assert speaker_summary_matches_rule(
+        summary,
+        rule,
+    )
+
+
+def test_calibration_rule_is_trusted_requires_precision_and_sample_count():
+    rule = SpeakerCalibrationRule(
+        minimum_precision=0.95,
+        minimum_eligible_count=10,
+    )
+
+    assert not calibration_rule_is_trusted(
+        SpeakerCalibrationEvaluation(
+            total_count=20,
+            eligible_count=9,
+            correct_count=9,
+            error_count=0,
+            precision=1.0,
+            coverage=0.45,
+        ),
+        rule,
+    )
+
+    assert not calibration_rule_is_trusted(
+        SpeakerCalibrationEvaluation(
+            total_count=20,
+            eligible_count=10,
+            correct_count=9,
+            error_count=1,
+            precision=0.90,
+            coverage=0.50,
+        ),
+        rule,
+    )
+
+    assert calibration_rule_is_trusted(
+        SpeakerCalibrationEvaluation(
+            total_count=20,
+            eligible_count=10,
+            correct_count=10,
+            error_count=0,
+            precision=1.0,
+            coverage=0.50,
+        ),
+        rule,
+    )
+
+
+def test_evaluate_speaker_calibration_rule_uses_rule_thresholds():
+    observations = [
+        _policy_observation(
+            turn_id="001",
+            correct=True,
+            margin=0.50,
+        ),
+        _policy_observation(
+            turn_id="002",
+            correct=False,
+            margin=0.10,
+        ),
+    ]
+
+    rule = SpeakerCalibrationRule(
+        minimum_margin=0.30,
+        minimum_source_support=2,
+        minimum_encoder_count=2,
+    )
+
+    evaluation = evaluate_speaker_calibration_rule(
+        observations,
+        rule,
+    )
+
+    assert evaluation.total_count == 2
+    assert evaluation.eligible_count == 1
+    assert evaluation.correct_count == 1
+    assert evaluation.error_count == 0
+    assert evaluation.precision == pytest.approx(
+        1.0
+    )
+    assert evaluation.coverage == pytest.approx(
+        0.5
+    )
+
+
+def test_classify_speaker_review_mode_prefers_prefill():
+    observations = [
+        _policy_observation(
+            turn_id=str(index),
+            correct=True,
+            margin=0.50,
+        )
+        for index in range(10)
+    ]
+
+    mode = classify_speaker_review_mode(
+        candidates=_policy_candidates(
+            margin=0.50,
+        ),
+        observations=observations,
+        suggest_rule=SpeakerCalibrationRule(
+            minimum_margin=0.20,
+            minimum_source_support=1,
+            minimum_encoder_count=1,
+            minimum_precision=0.80,
+            minimum_eligible_count=3,
+        ),
+        prefill_rule=SpeakerCalibrationRule(
+            minimum_margin=0.40,
+            minimum_source_support=2,
+            minimum_encoder_count=2,
+            minimum_precision=0.95,
+            minimum_eligible_count=5,
+        ),
+    )
+
+    assert mode == "prefill"
+
+
+def test_classify_speaker_review_mode_falls_back_to_suggest():
+    observations = [
+        _policy_observation(
+            turn_id=str(index),
+            correct=True,
+            margin=0.25,
+        )
+        for index in range(6)
+    ]
+
+    mode = classify_speaker_review_mode(
+        candidates=_policy_candidates(
+            margin=0.25,
+        ),
+        observations=observations,
+        suggest_rule=SpeakerCalibrationRule(
+            minimum_margin=0.20,
+            minimum_source_support=1,
+            minimum_encoder_count=1,
+            minimum_precision=0.80,
+            minimum_eligible_count=3,
+        ),
+        prefill_rule=SpeakerCalibrationRule(
+            minimum_margin=0.40,
+            minimum_source_support=2,
+            minimum_encoder_count=2,
+            minimum_precision=0.95,
+            minimum_eligible_count=5,
+        ),
+    )
+
+    assert mode == "suggest"
+
+
+def test_classify_speaker_review_mode_returns_none_without_calibration():
+    mode = classify_speaker_review_mode(
+        candidates=_policy_candidates(
+            margin=0.50,
+        ),
+        observations=[],
+        suggest_rule=SpeakerCalibrationRule(
+            minimum_margin=0.20,
+            minimum_precision=0.80,
+            minimum_eligible_count=1,
+        ),
+        prefill_rule=SpeakerCalibrationRule(
+            minimum_margin=0.40,
+            minimum_precision=0.95,
+            minimum_eligible_count=1,
+        ),
+    )
+
+    assert mode == "none"
+
+
+def test_classify_speaker_review_mode_returns_none_when_current_evidence_is_weak():
+    observations = [
+        _policy_observation(
+            turn_id=str(index),
+            correct=True,
+            margin=0.50,
+        )
+        for index in range(10)
+    ]
+
+    mode = classify_speaker_review_mode(
+        candidates=_policy_candidates(
+            margin=0.05,
+        ),
+        observations=observations,
+        suggest_rule=SpeakerCalibrationRule(
+            minimum_margin=0.20,
+            minimum_precision=0.80,
+            minimum_eligible_count=3,
+        ),
+        prefill_rule=SpeakerCalibrationRule(
+            minimum_margin=0.40,
+            minimum_precision=0.95,
+            minimum_eligible_count=5,
+        ),
+    )
+
+    assert mode == "none"
