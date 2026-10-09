@@ -3710,3 +3710,335 @@ def test_effective_alignment_suppresses_unrecovered_long_word(
     assert result.suppressed_word_indices == (
         0,
     )
+
+
+def test_lexical_geometry_recovery_uses_ordered_good_anchors(
+) -> None:
+    from voice_dataset.word_alignment import (
+        AlignmentRegionEvidence,
+        AlignmentTextMatch,
+        build_lexical_geometry_recovery_candidates,
+    )
+
+    words = [
+        word("We're", 277.620, 277.700),
+        word("almost", 277.700, 278.100),
+        word("there", 278.100, 278.180),
+        word("Hey", 282.817, 284.427),
+        word("powder", 286.037, 287.647),
+        word("It's", 299.367, 299.447),
+        word("nice", 299.527, 299.687),
+    ]
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_prev",
+            start=277.557,
+            end=278.502,
+            speaker="SPEAKER_02",
+            whisper_text="We're almost there.",
+            whisper_tokens=(
+                "we're",
+                "almost",
+                "there",
+            ),
+            text_matches=(
+                AlignmentTextMatch(
+                    start_word_index=0,
+                    end_word_index=2,
+                    word_indices=(0, 1, 2),
+                    tokens=(
+                        "we're",
+                        "almost",
+                        "there",
+                    ),
+                ),
+            ),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_bad",
+            start=291.378,
+            end=292.019,
+            speaker="SPEAKER_03",
+            whisper_text="Hey, Powder!",
+            whisper_tokens=(
+                "hey",
+                "powder",
+            ),
+            text_matches=(
+                AlignmentTextMatch(
+                    start_word_index=3,
+                    end_word_index=4,
+                    word_indices=(3, 4),
+                    tokens=(
+                        "hey",
+                        "powder",
+                    ),
+                ),
+            ),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_next",
+            start=299.292,
+            end=300.676,
+            speaker="SPEAKER_02",
+            whisper_text="It's nice.",
+            whisper_tokens=(
+                "it's",
+                "nice",
+            ),
+            text_matches=(
+                AlignmentTextMatch(
+                    start_word_index=5,
+                    end_word_index=6,
+                    word_indices=(5, 6),
+                    tokens=(
+                        "it's",
+                        "nice",
+                    ),
+                ),
+            ),
+        ),
+    ]
+
+    claimed = set()
+
+    candidates = (
+        build_lexical_geometry_recovery_candidates(
+            words,
+            evidence,
+            claimed_word_indices=claimed,
+        )
+    )
+
+    assert len(candidates) == 1
+
+    candidate = candidates[0]
+
+    assert candidate.region_id == "region_bad"
+    assert candidate.word_indices == (3, 4)
+    assert candidate.issue_reasons == (
+        "lexical_geometry_mismatch",
+    )
+
+    assert claimed == {3, 4}
+
+
+def test_lexical_geometry_recovery_rejects_out_of_order_match(
+) -> None:
+    from voice_dataset.word_alignment import (
+        AlignmentRegionEvidence,
+        AlignmentTextMatch,
+        build_lexical_geometry_recovery_candidates,
+    )
+
+    words = [
+        word("Thanks", 411.761, 412.161),
+        word("before", 889.900, 890.200),
+        word("after", 905.600, 905.900),
+    ]
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_prev",
+            start=889.867,
+            end=890.300,
+            speaker="SPEAKER_01",
+            whisper_text="before",
+            whisper_tokens=("before",),
+            text_matches=(
+                AlignmentTextMatch(
+                    start_word_index=1,
+                    end_word_index=1,
+                    word_indices=(1,),
+                    tokens=("before",),
+                ),
+            ),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_bad",
+            start=900.886,
+            end=900.970,
+            speaker="SPEAKER_02",
+            whisper_text="Thanks again.",
+            whisper_tokens=(
+                "thanks",
+                "again",
+            ),
+            text_matches=(
+                AlignmentTextMatch(
+                    start_word_index=0,
+                    end_word_index=0,
+                    word_indices=(0,),
+                    tokens=(
+                        "thanks",
+                        "again",
+                    ),
+                ),
+            ),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_next",
+            start=905.543,
+            end=906.000,
+            speaker="SPEAKER_03",
+            whisper_text="after",
+            whisper_tokens=("after",),
+            text_matches=(
+                AlignmentTextMatch(
+                    start_word_index=2,
+                    end_word_index=2,
+                    word_indices=(2,),
+                    tokens=("after",),
+                ),
+            ),
+        ),
+    ]
+
+    assert (
+        build_lexical_geometry_recovery_candidates(
+            words,
+            evidence,
+            claimed_word_indices=set(),
+        )
+        == []
+    )
+
+
+def test_lexical_geometry_recovery_respects_claimed_words(
+) -> None:
+    from voice_dataset.word_alignment import (
+        AlignmentRegionEvidence,
+        AlignmentTextMatch,
+        build_lexical_geometry_recovery_candidates,
+    )
+
+    words = [
+        word("before", 10.0, 10.4),
+        word("Hey", 12.0, 13.0),
+        word("powder", 14.0, 15.0),
+        word("after", 20.0, 20.4),
+    ]
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_prev",
+            start=10.0,
+            end=10.4,
+            speaker="A",
+            whisper_text="before",
+            whisper_tokens=("before",),
+            text_matches=(
+                AlignmentTextMatch(
+                    0,
+                    0,
+                    (0,),
+                    ("before",),
+                ),
+            ),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_bad",
+            start=16.0,
+            end=17.0,
+            speaker="B",
+            whisper_text="Hey powder",
+            whisper_tokens=("hey", "powder"),
+            text_matches=(
+                AlignmentTextMatch(
+                    1,
+                    2,
+                    (1, 2),
+                    ("hey", "powder"),
+                ),
+            ),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_next",
+            start=20.0,
+            end=20.4,
+            speaker="C",
+            whisper_text="after",
+            whisper_tokens=("after",),
+            text_matches=(
+                AlignmentTextMatch(
+                    3,
+                    3,
+                    (3,),
+                    ("after",),
+                ),
+            ),
+        ),
+    ]
+
+    assert (
+        build_lexical_geometry_recovery_candidates(
+            words,
+            evidence,
+            claimed_word_indices={1},
+        )
+        == []
+    )
+
+
+def test_lexical_geometry_recovery_rejects_zero_duration_word(
+) -> None:
+    recovery = LocalAlignmentRecovery(
+        word_indices=(10, 11),
+        region_id="region_1",
+        region_start=20.0,
+        region_end=21.0,
+        text="come on",
+        words=(
+            word("come", 20.1, 20.5),
+            word("on", 20.5, 20.5),
+        ),
+    )
+
+    assert not (
+        word_alignment
+        .lexical_geometry_recovery_is_usable(
+            recovery
+        )
+    )
+
+
+def test_lexical_geometry_recovery_accepts_positive_words(
+) -> None:
+    recovery = LocalAlignmentRecovery(
+        word_indices=(10, 11),
+        region_id="region_1",
+        region_start=20.0,
+        region_end=21.0,
+        text="hey powder",
+        words=(
+            word("hey", 20.1, 20.3),
+            word("powder", 20.3, 20.8),
+        ),
+    )
+
+    assert (
+        word_alignment
+        .lexical_geometry_recovery_is_usable(
+            recovery
+        )
+    )
+
+
+def test_effective_alignment_tracks_unusable_lexical_recovery(
+) -> None:
+    alignment = EffectiveWordAlignment(
+        words=(
+            word("bad", 1.0, 2.0),
+        ),
+        recoveries=(),
+        unresolved_alignment_word_indices=(
+            7,
+            8,
+        ),
+    )
+
+    assert (
+        alignment.unresolved_alignment_word_indices
+        == (7, 8)
+    )

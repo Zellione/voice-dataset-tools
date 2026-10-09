@@ -70,6 +70,7 @@ class EffectiveWordAlignment:
     words: tuple[dict[str, Any], ...]
     recoveries: tuple[LocalAlignmentRecovery, ...]
     suppressed_word_indices: tuple[int, ...] = ()
+    unresolved_alignment_word_indices: tuple[int, ...] = ()
 
 
 def _plan_boundary_recovery_anchors(
@@ -638,6 +639,203 @@ def build_zero_duration_region_recovery_candidates(
     return candidates
 
 
+LEXICAL_GEOMETRY_MAX_EDGE_DELTA_SECONDS = 1.0
+LEXICAL_GEOMETRY_MIN_TOKENS = 2
+
+
+def _alignment_region_geometry_is_good(
+    words: list[dict[str, Any]],
+    evidence: AlignmentRegionEvidence,
+) -> bool:
+    match = evidence.unique_text_match
+
+    if match is None:
+        return False
+
+    qwen_start = float(
+        words[match.start_word_index]["start"]
+    )
+    qwen_end = float(
+        words[match.end_word_index]["end"]
+    )
+
+    overlap = max(
+        0.0,
+        min(qwen_end, evidence.end)
+        - max(qwen_start, evidence.start),
+    )
+
+    return (
+        overlap > 0.0
+        and abs(qwen_start - evidence.start)
+        <= LEXICAL_GEOMETRY_MAX_EDGE_DELTA_SECONDS
+        and abs(qwen_end - evidence.end)
+        <= LEXICAL_GEOMETRY_MAX_EDGE_DELTA_SECONDS
+    )
+
+
+def build_lexical_geometry_recovery_candidates(
+    words: list[dict[str, Any]],
+    region_evidence: list[AlignmentRegionEvidence],
+    *,
+    claimed_word_indices: set[int],
+) -> list[AlignmentRecoveryCandidate]:
+    ordered = [
+        evidence
+        for evidence in sorted(
+            region_evidence,
+            key=lambda item: (
+                item.start,
+                item.end,
+                item.region_id,
+            ),
+        )
+        if evidence.unique_text_match is not None
+    ]
+
+    candidates: list[
+        AlignmentRecoveryCandidate
+    ] = []
+
+    for position, evidence in enumerate(
+        ordered
+    ):
+        match = evidence.unique_text_match
+
+        if match is None:
+            continue
+
+        if _alignment_region_geometry_is_good(
+            words,
+            evidence,
+        ):
+            continue
+
+        if (
+            len(match.tokens)
+            < LEXICAL_GEOMETRY_MIN_TOKENS
+        ):
+            continue
+
+        if any(
+            index in claimed_word_indices
+            for index in match.word_indices
+        ):
+            continue
+
+        previous_good = next(
+            (
+                previous
+                for previous in reversed(
+                    ordered[:position]
+                )
+                if _alignment_region_geometry_is_good(
+                    words,
+                    previous,
+                )
+            ),
+            None,
+        )
+
+        next_good = next(
+            (
+                following
+                for following in ordered[
+                    position + 1:
+                ]
+                if _alignment_region_geometry_is_good(
+                    words,
+                    following,
+                )
+            ),
+            None,
+        )
+
+        # Require anchors on both sides. This is what
+        # distinguishes a locally displaced phrase from
+        # an unrelated repeated phrase elsewhere in the
+        # source.
+        if (
+            previous_good is None
+            or next_good is None
+        ):
+            continue
+
+        previous_match = (
+            previous_good.unique_text_match
+        )
+        next_match = (
+            next_good.unique_text_match
+        )
+
+        if (
+            previous_match is None
+            or next_match is None
+        ):
+            continue
+
+        if not (
+            previous_match.end_word_index
+            < match.start_word_index
+            and match.end_word_index
+            < next_match.start_word_index
+        ):
+            continue
+
+        candidates.append(
+            AlignmentRecoveryCandidate(
+                word_indices=(
+                    match.word_indices
+                ),
+                start_word_index=(
+                    match.start_word_index
+                ),
+                end_word_index=(
+                    match.end_word_index
+                ),
+                region_id=evidence.region_id,
+                region_start=evidence.start,
+                region_end=evidence.end,
+                whisper_text=(
+                    evidence.whisper_text
+                ),
+                speaker=evidence.speaker,
+                issue_word_indices=(
+                    match.word_indices
+                ),
+                issue_reasons=(
+                    "lexical_geometry_mismatch",
+                ),
+            )
+        )
+
+        claimed_word_indices.update(
+            match.word_indices
+        )
+
+    return candidates
+
+
+def lexical_geometry_recovery_is_usable(
+    recovery: LocalAlignmentRecovery,
+) -> bool:
+    if not recovery.words:
+        return False
+
+    if (
+        len(recovery.word_indices)
+        != len(recovery.words)
+    ):
+        return False
+
+    return all(
+        float(word["end"])
+        - float(word["start"])
+        > 1e-6
+        for word in recovery.words
+    )
+
+
 def build_effective_word_alignment(
     storage: DatasetStorage,
     source_id: str,
@@ -703,9 +901,20 @@ def build_effective_word_alignment(
         )
     )
 
+    lexical_geometry_candidates = (
+        build_lexical_geometry_recovery_candidates(
+            words,
+            region_evidence,
+            claimed_word_indices=(
+                claimed_word_indices
+            ),
+        )
+    )
+
     non_boundary_candidates = [
         *planned_word_candidates,
         *zero_region_candidates,
+        *lexical_geometry_candidates,
     ]
 
     boundary_anchors = (
@@ -747,9 +956,44 @@ def build_effective_word_alignment(
         non_boundary_candidates
     )
 
-    word_recoveries = initial_recoveries[
+    raw_word_recoveries = initial_recoveries[
         :word_recovery_count
     ]
+
+    lexical_recovery_start = (
+        len(planned_word_candidates)
+        + len(zero_region_candidates)
+    )
+
+    word_recoveries = []
+    unresolved_alignment_word_indices: set[int] = set()
+
+    for position, recovery in enumerate(
+        raw_word_recoveries
+    ):
+        is_lexical_geometry_recovery = (
+            position >= lexical_recovery_start
+        )
+
+        if (
+            is_lexical_geometry_recovery
+            and not lexical_geometry_recovery_is_usable(
+                recovery
+            )
+        ):
+            candidate = non_boundary_candidates[
+                position
+            ]
+
+            unresolved_alignment_word_indices.update(
+                candidate.word_indices
+            )
+
+            continue
+
+        word_recoveries.append(
+            recovery
+        )
 
     candidate_boundary_recoveries = (
         initial_recoveries[
@@ -824,6 +1068,27 @@ def build_effective_word_alignment(
         recoveries,
     )
 
+    effective_region_evidence = collect_region_evidence(
+        storage,
+        source_id,
+        effective_words,
+    )
+
+    post_recovery_conflicts = (
+        find_post_recovery_word_conflicts(
+            effective_words,
+            recoveries,
+        )
+    )
+
+    post_recovery_suppressed = set(
+        find_unclaimed_post_recovery_words(
+            effective_words,
+            post_recovery_conflicts,
+            effective_region_evidence,
+        )
+    )
+
     invalid_duration_indices = {
         index
         for issue in issues
@@ -856,8 +1121,11 @@ def build_effective_word_alignment(
 
     suppressed_word_indices = tuple(
         sorted(
-            invalid_duration_indices
-            - recovered_valid_duration_indices
+            (
+                invalid_duration_indices
+                - recovered_valid_duration_indices
+            )
+            | post_recovery_suppressed
         )
     )
 
@@ -866,6 +1134,11 @@ def build_effective_word_alignment(
         recoveries=tuple(recoveries),
         suppressed_word_indices=(
             suppressed_word_indices
+        ),
+        unresolved_alignment_word_indices=tuple(
+            sorted(
+                unresolved_alignment_word_indices
+            )
         ),
     )
 
@@ -987,6 +1260,9 @@ def recover_sat_boundary_alignments(
         ),
         suppressed_word_indices=(
             suppressed_word_indices
+        ),
+        unresolved_alignment_word_indices=(
+            alignment.unresolved_alignment_word_indices
         ),
     )
 

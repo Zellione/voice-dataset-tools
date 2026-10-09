@@ -71,6 +71,7 @@ def _make_candidate(
     words: list[SpeakerAttributedWord],
     *,
     end_boundary: str,
+    additional_alignment_issue_word_indices: set[int],
 ) -> UtteranceCandidate:
     if not words:
         raise ValueError(
@@ -103,8 +104,22 @@ def _make_candidate(
             if word.speaker is None
         ),
         known_speakers=speakers,
-        alignment_issue_word_indices=(
-            _alignment_issue_word_indices(words)
+        alignment_issue_word_indices=tuple(
+            dict.fromkeys(
+                (
+                    *_alignment_issue_word_indices(
+                        words
+                    ),
+                    *(
+                        word.index
+                        for word in words
+                        if (
+                            word.index
+                            in additional_alignment_issue_word_indices
+                        )
+                    ),
+                )
+            )
         ),
         end_boundary=end_boundary,
     )
@@ -114,7 +129,10 @@ def build_utterance_candidates(
     words: list[SpeakerAttributedWord],
     *,
     boundary_after_word_indices: set[int],
+    additional_alignment_issue_word_indices: set[int] | None = None,
 ) -> list[UtteranceCandidate]:
+    if additional_alignment_issue_word_indices is None:
+        additional_alignment_issue_word_indices = set()
     if not words:
         return []
 
@@ -131,6 +149,9 @@ def build_utterance_candidates(
                 _make_candidate(
                     current,
                     end_boundary="source_end",
+                    additional_alignment_issue_word_indices=(
+                        additional_alignment_issue_word_indices
+                    ),
                 )
             )
             break
@@ -185,6 +206,9 @@ def build_utterance_candidates(
             _make_candidate(
                 current,
                 end_boundary=end_boundary,
+                additional_alignment_issue_word_indices=(
+                    additional_alignment_issue_word_indices
+                ),
             )
         )
 

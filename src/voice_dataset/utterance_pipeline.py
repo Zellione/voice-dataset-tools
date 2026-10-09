@@ -272,6 +272,9 @@ def build_source_utterances(
         boundary_after_word_indices=(
             sat_boundaries
         ),
+        additional_alignment_issue_word_indices=set(
+            alignment.unresolved_alignment_word_indices
+        ),
     )
 
     return UtterancePipelineResult(

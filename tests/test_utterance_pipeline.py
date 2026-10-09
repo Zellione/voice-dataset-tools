@@ -1440,3 +1440,52 @@ def test_utterance_candidates_split_at_alignment_gap(
         377,
         378,
     )
+
+
+def test_utterance_candidate_marks_additional_alignment_issue(
+) -> None:
+    from voice_dataset.utterance_candidates import (
+        build_utterance_candidates,
+    )
+
+    words = [
+        SpeakerAttributedWord(
+            index=10,
+            text="Owner's",
+            start=20.0,
+            end=20.3,
+            overlaps=(),
+            speaker="SPEAKER_01",
+            assignment_method=(
+                "single_overlapping_region"
+            ),
+        ),
+        SpeakerAttributedWord(
+            index=11,
+            text="know",
+            start=20.3,
+            end=20.6,
+            overlaps=(),
+            speaker="SPEAKER_01",
+            assignment_method=(
+                "single_overlapping_region"
+            ),
+        ),
+    ]
+
+    candidates = build_utterance_candidates(
+        words,
+        boundary_after_word_indices=set(),
+        additional_alignment_issue_word_indices={
+            10,
+            11,
+        },
+    )
+
+    assert len(candidates) == 1
+
+    assert (
+        candidates[0]
+        .alignment_issue_word_indices
+        == (10, 11)
+    )
