@@ -57,6 +57,16 @@ class SpeakerCalibrationStats:
     top1_accuracy: float | None
 
 
+@dataclass(frozen=True)
+class SpeakerCalibrationEvaluation:
+    total_count: int
+    eligible_count: int
+    correct_count: int
+    error_count: int
+    precision: float | None
+    coverage: float | None
+
+
 SPEAKER_CALIBRATION_SCHEMA_VERSION = 1
 
 
@@ -638,14 +648,43 @@ def evaluate_calibration_rule(
     minimum_margin: float | None = None,
     minimum_source_support: int | None = None,
     minimum_encoder_count: int | None = None,
-) -> SpeakerCalibrationStats:
-    filtered = filter_calibration_observations(
+) -> SpeakerCalibrationEvaluation:
+    eligible = filter_calibration_observations(
         observations,
         minimum_margin=minimum_margin,
         minimum_source_support=minimum_source_support,
         minimum_encoder_count=minimum_encoder_count,
     )
 
-    return summarize_calibration_observations(
-        filtered
+    total_count = len(observations)
+    eligible_count = len(eligible)
+
+    correct_count = sum(
+        observation.correct
+        for observation in eligible
+    )
+
+    error_count = (
+        eligible_count - correct_count
+    )
+
+    precision = (
+        correct_count / eligible_count
+        if eligible_count > 0
+        else None
+    )
+
+    coverage = (
+        eligible_count / total_count
+        if total_count > 0
+        else None
+    )
+
+    return SpeakerCalibrationEvaluation(
+        total_count=total_count,
+        eligible_count=eligible_count,
+        correct_count=correct_count,
+        error_count=error_count,
+        precision=precision,
+        coverage=coverage,
     )

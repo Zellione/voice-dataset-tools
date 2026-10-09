@@ -9,6 +9,7 @@ from voice_dataset.speaker_calibration import (
     speaker_calibration_observation_to_dict,
     summarize_calibration_observations,
     summarize_speaker_candidates,
+    SpeakerCalibrationEvaluation,
     SpeakerCalibrationObservation,
 )
 from voice_dataset.speaker_candidates import (
@@ -929,7 +930,7 @@ def test_filter_calibration_observations_rejects_missing_margin_when_required():
     assert filtered == []
 
 
-def test_evaluate_calibration_rule_filters_and_summarizes():
+def test_evaluate_calibration_rule_reports_precision_and_coverage():
     observations = [
         SpeakerCalibrationObservation(
             turn_id="turn_001",
@@ -978,14 +979,129 @@ def test_evaluate_calibration_rule_filters_and_summarizes():
         ),
     ]
 
-    stats = evaluate_calibration_rule(
+    evaluation = evaluate_calibration_rule(
         observations,
         minimum_margin=0.30,
         minimum_source_support=2,
         minimum_encoder_count=2,
     )
 
-    assert stats.observation_count == 2
-    assert stats.prediction_count == 2
-    assert stats.correct_count == 2
-    assert stats.top1_accuracy == pytest.approx(1.0)
+    assert isinstance(
+        evaluation,
+        SpeakerCalibrationEvaluation,
+    )
+
+    assert evaluation.total_count == 3
+    assert evaluation.eligible_count == 2
+    assert evaluation.correct_count == 2
+    assert evaluation.error_count == 0
+
+    assert evaluation.precision == pytest.approx(
+        1.0
+    )
+    assert evaluation.coverage == pytest.approx(
+        2 / 3
+    )
+
+
+def test_evaluate_calibration_rule_counts_eligible_errors():
+    observations = [
+        SpeakerCalibrationObservation(
+            turn_id="turn_001",
+            source_id="episode_01",
+            confirmed_voice_id="voice_001",
+            predicted_voice_id="voice_001",
+            correct=True,
+            top_score=0.90,
+            runner_up_score=0.20,
+            margin=0.70,
+            encoder_count=2,
+            embedding_scores={},
+            support={},
+            source_support={},
+            total_source_support=3,
+        ),
+        SpeakerCalibrationObservation(
+            turn_id="turn_002",
+            source_id="episode_02",
+            confirmed_voice_id="voice_002",
+            predicted_voice_id="voice_001",
+            correct=False,
+            top_score=0.88,
+            runner_up_score=0.30,
+            margin=0.58,
+            encoder_count=2,
+            embedding_scores={},
+            support={},
+            source_support={},
+            total_source_support=3,
+        ),
+    ]
+
+    evaluation = evaluate_calibration_rule(
+        observations,
+        minimum_margin=0.50,
+        minimum_source_support=2,
+        minimum_encoder_count=2,
+    )
+
+    assert evaluation.total_count == 2
+    assert evaluation.eligible_count == 2
+    assert evaluation.correct_count == 1
+    assert evaluation.error_count == 1
+
+    assert evaluation.precision == pytest.approx(
+        0.5
+    )
+    assert evaluation.coverage == pytest.approx(
+        1.0
+    )
+
+
+def test_evaluate_calibration_rule_handles_zero_coverage():
+    observations = [
+        SpeakerCalibrationObservation(
+            turn_id="turn_001",
+            source_id="episode_01",
+            confirmed_voice_id="voice_001",
+            predicted_voice_id="voice_001",
+            correct=True,
+            top_score=0.60,
+            runner_up_score=0.55,
+            margin=0.05,
+            encoder_count=1,
+            embedding_scores={},
+            support={},
+            source_support={},
+            total_source_support=1,
+        ),
+    ]
+
+    evaluation = evaluate_calibration_rule(
+        observations,
+        minimum_margin=0.50,
+        minimum_source_support=2,
+        minimum_encoder_count=2,
+    )
+
+    assert evaluation.total_count == 1
+    assert evaluation.eligible_count == 0
+    assert evaluation.correct_count == 0
+    assert evaluation.error_count == 0
+    assert evaluation.precision is None
+    assert evaluation.coverage == pytest.approx(
+        0.0
+    )
+
+
+def test_evaluate_calibration_rule_handles_empty_observations():
+    evaluation = evaluate_calibration_rule(
+        []
+    )
+
+    assert evaluation.total_count == 0
+    assert evaluation.eligible_count == 0
+    assert evaluation.correct_count == 0
+    assert evaluation.error_count == 0
+    assert evaluation.precision is None
+    assert evaluation.coverage is None
