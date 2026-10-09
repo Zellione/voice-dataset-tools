@@ -387,3 +387,40 @@ def test_load_chunked_qwen_output_offsets_words(
 
     assert len(result.chunks) == 2
     assert result.chunks[0].boundary == "sentence_gap"
+
+
+def test_plan_continuous_asr_chunks_allows_source_end_after_extension(
+    tmp_path,
+) -> None:
+    storage = DatasetStorage(tmp_path)
+
+    _add_region(
+        storage,
+        "region_000001",
+        0.0,
+        80.0,
+        "First section.",
+    )
+    _add_region(
+        storage,
+        "region_000002",
+        81.0,
+        200.0,
+        "Continuous final section",
+    )
+
+    chunks = plan_continuous_asr_chunks(
+        storage,
+        "source_001",
+        duration=200.0,
+        target_seconds=60.0,
+        search_seconds=10.0,
+        max_chunk_seconds=240.0,
+    )
+
+    assert chunks[0].end == pytest.approx(80.5)
+    assert chunks[0].boundary == "sentence_gap"
+
+    assert chunks[1].start == pytest.approx(80.5)
+    assert chunks[1].end == pytest.approx(200.0)
+    assert chunks[1].boundary == "source_end"

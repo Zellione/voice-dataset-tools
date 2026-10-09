@@ -254,35 +254,39 @@ def plan_continuous_asr_chunks(
             ]
 
             if not extension:
-                raise ValueError(
-                    "Continuous ASR could not find a "
-                    "safe speech boundary between "
-                    f"{preferred_low:.3f}s and "
-                    f"{start + max_chunk_seconds:.3f}s; "
-                    "refusing to split inside continuous "
-                    "speech"
+                if duration <= start + max_chunk_seconds:
+                    end = duration
+                    reason = "source_end"
+                else:
+                    raise ValueError(
+                        "Continuous ASR could not find a "
+                        "safe speech boundary between "
+                        f"{preferred_low:.3f}s and "
+                        f"{start + max_chunk_seconds:.3f}s; "
+                        "refusing to split inside continuous "
+                        "speech"
+                    )
+            else:
+                sentence_candidates = [
+                    candidate
+                    for candidate in extension
+                    if (
+                        candidate[1]
+                        == "sentence_gap"
+                    )
+                ]
+
+                pool = (
+                    sentence_candidates
+                    or extension
                 )
 
-            sentence_candidates = [
-                candidate
-                for candidate in extension
-                if (
-                    candidate[1]
-                    == "sentence_gap"
+                end, reason = min(
+                    pool,
+                    key=lambda candidate: (
+                        candidate[0]
+                    ),
                 )
-            ]
-
-            pool = (
-                sentence_candidates
-                or extension
-            )
-
-            end, reason = min(
-                pool,
-                key=lambda candidate: (
-                    candidate[0]
-                ),
-            )
 
         if end <= start:
             raise RuntimeError(
