@@ -1266,3 +1266,114 @@ def test_prepare_source_speaker_evidence_can_capture_worker_output(
     )
     assert result.ecapa == "ecapa-result"
     assert result.wespeaker == "wespeaker-result"
+
+
+def test_apply_source_utterance_turns_preflights_all_candidates(
+    tmp_path: Path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    storage.sources.append(
+        {
+            "schema_version": 1,
+            "record_type": "source",
+            "id": "source",
+            "representations": {},
+            "metadata": {},
+        }
+    )
+
+    words = (
+        SpeakerAttributedWord(
+            index=0,
+            text="valid",
+            start=150.0,
+            end=150.5,
+            overlaps=(),
+            speaker="SPEAKER_00",
+            assignment_method="detector_overlap",
+        ),
+        SpeakerAttributedWord(
+            index=1,
+            text="broken",
+            start=151.52,
+            end=151.52,
+            overlaps=(),
+            speaker="SPEAKER_00",
+            assignment_method="detector_overlap",
+        ),
+    )
+
+    alignment = EffectiveWordAlignment(
+        words=(
+            {
+                "text": "valid",
+                "start": 150.0,
+                "end": 150.5,
+            },
+            {
+                "text": "broken",
+                "start": 151.52,
+                "end": 151.52,
+            },
+        ),
+        recoveries=(),
+    )
+
+    pipeline = UtterancePipelineResult(
+        words=words,
+        candidates=(
+            UtteranceCandidate(
+                start_word_index=0,
+                end_word_index=0,
+                word_indices=(0,),
+                start=150.0,
+                end=150.5,
+                text="valid",
+                speaker="SPEAKER_00",
+                known_speakers=("SPEAKER_00",),
+                unresolved_word_indices=(),
+                alignment_issue_word_indices=(),
+                end_boundary="sat",
+            ),
+            UtteranceCandidate(
+                start_word_index=1,
+                end_word_index=1,
+                word_indices=(1,),
+                start=151.52,
+                end=151.52,
+                text="broken",
+                speaker="SPEAKER_00",
+                known_speakers=("SPEAKER_00",),
+                unresolved_word_indices=(),
+                alignment_issue_word_indices=(),
+                end_boundary="source_end",
+            ),
+        ),
+        sat_boundary_after_word_indices=(0,),
+        alignment=alignment,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Utterance candidate has invalid geometry: "
+            "151.52-151.52"
+        ),
+    ):
+        apply_source_utterance_turns(
+            storage,
+            source_id="source",
+            result=pipeline,
+            language="en",
+        )
+
+    assert storage.turns.load() == []
+
+    source = storage.get_source("source")
+
+    assert source is not None
+    assert (
+        "utterance_reconciliation"
+        not in source["metadata"]
+    )

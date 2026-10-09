@@ -429,6 +429,67 @@ def plan_source_utterance_turns(
     return tuple(planned)
 
 
+def _validate_utterance_turn_plan(
+    result: UtterancePipelineResult,
+    plan: tuple[PlannedUtteranceTurn, ...],
+) -> None:
+    words_by_index = {
+        word.index: word
+        for word in result.words
+    }
+
+    for item in plan:
+        candidate = item.candidate
+
+        if candidate.end <= candidate.start:
+            raise ValueError(
+                "Utterance candidate has invalid geometry: "
+                f"{candidate.start}-{candidate.end}"
+            )
+
+        if not candidate.word_indices:
+            raise ValueError(
+                "Utterance candidate has no words: "
+                f"{candidate.start_word_index}-"
+                f"{candidate.end_word_index}"
+            )
+
+        if (
+            candidate.word_indices[0]
+            != candidate.start_word_index
+        ):
+            raise ValueError(
+                "Utterance candidate start word does not "
+                "match word_indices: "
+                f"{candidate.start_word_index} != "
+                f"{candidate.word_indices[0]}"
+            )
+
+        if (
+            candidate.word_indices[-1]
+            != candidate.end_word_index
+        ):
+            raise ValueError(
+                "Utterance candidate end word does not "
+                "match word_indices: "
+                f"{candidate.end_word_index} != "
+                f"{candidate.word_indices[-1]}"
+            )
+
+        missing = [
+            index
+            for index in candidate.word_indices
+            if index not in words_by_index
+        ]
+
+        if missing:
+            raise ValueError(
+                "Utterance candidate references "
+                "unknown word indices: "
+                f"{missing}"
+            )
+
+
 def apply_source_utterance_turns(
     storage: DatasetStorage,
     source_id: str,
@@ -444,6 +505,14 @@ def apply_source_utterance_turns(
 
     plan = plan_source_utterance_turns(
         result
+    )
+
+    # Validate the complete plan before inspecting or
+    # mutating persisted turns. A malformed candidate
+    # must never leave a partially applied source.
+    _validate_utterance_turn_plan(
+        result,
+        plan,
     )
 
     planned_ranges = {
