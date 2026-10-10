@@ -799,7 +799,7 @@ def materialize_turns(
         )
     )
 
-    use_context_padding = bool(
+    purpose_uses_context_padding = bool(
         PADDED_TURN_PURPOSES.intersection(
             purposes
         )
@@ -852,6 +852,24 @@ def materialize_turns(
 
         clip_start = canonical_start
         clip_end = canonical_end
+
+        metadata = turn.get("metadata")
+        boundary_curation = (
+            metadata.get("boundary_curation")
+            if isinstance(metadata, dict)
+            else None
+        )
+
+        manually_curated_boundary = (
+            isinstance(boundary_curation, dict)
+            and boundary_curation.get("method")
+            == "manual"
+        )
+
+        use_context_padding = (
+            purpose_uses_context_padding
+            and not manually_curated_boundary
+        )
 
         if use_context_padding:
             clip_start = max(

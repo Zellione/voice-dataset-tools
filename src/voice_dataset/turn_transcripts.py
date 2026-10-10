@@ -46,6 +46,8 @@ def project_continuous_asr_to_range(
         word_start = float(word["start"])
         word_end = float(word["end"])
 
+        word_duration = word_end - word_start
+
         overlap = _positive_overlap(
             source_start,
             source_end,
@@ -53,12 +55,18 @@ def project_continuous_asr_to_range(
             word_end,
         )
 
-        if overlap <= 0:
+        zero_duration_in_range = (
+            word_duration == 0
+            and source_start <= word_start <= source_end
+        )
+
+        if (
+            overlap <= 0
+            and not zero_duration_in_range
+        ):
             continue
 
         word_indices.append(index)
-
-        word_duration = word_end - word_start
 
         # Diagnostic only. This deliberately does not decide whether
         # the word belongs to the turn. It merely exposes obviously

@@ -1131,6 +1131,12 @@ def test_trim_and_prepare_turn_updates_end_and_reprepares_source(
 
     assert prepared == ["source_001"]
 
+    assert result["metadata"][
+        "boundary_curation"
+    ] == {
+        "method": "manual",
+    }
+
 
 def test_trim_and_prepare_turn_rejects_invalid_range_without_mutation(
     tmp_path,
@@ -1198,7 +1204,140 @@ def test_trim_and_prepare_turn_rejects_invalid_range_without_mutation(
     assert prepared == []
 
 
-def test_trim_and_prepare_turn_rejects_word_loss_without_mutation(
+def test_trim_and_prepare_turn_removes_boundary_contamination(
+    tmp_path,
+    monkeypatch,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    storage.turns.append(
+        {
+            "schema_version": 1,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 0.9,
+            "source_end": 1.9,
+            "source_regions": [
+                "region_000001",
+            ],
+            "language": "en",
+            "transcript": "there",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {
+                "word_range": {
+                    "start": 1,
+                    "end": 1,
+                },
+                "continuous_asr": {
+                    "evidence": "qwen3",
+                    "word_indices": [1],
+                },
+            },
+        }
+    )
+
+    prepared = []
+
+    def fake_prepare(
+        storage_arg,
+        source_id,
+        *,
+        capture_output=False,
+    ):
+        assert storage_arg is storage
+        assert capture_output is True
+        prepared.append(source_id)
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        fake_prepare,
+    )
+
+    result = trim_and_prepare_turn(
+        storage,
+        "turn_000001",
+        source_start=1.4,
+    )
+
+    assert result["source_start"] == 1.4
+
+    assert result["metadata"]["word_range"] == {
+        "start": 1,
+        "end": 1,
+    }
+    assert result["metadata"]["continuous_asr"] == {
+        "evidence": "qwen3",
+        "word_indices": [1],
+    }
+
+    assert prepared == ["source_001"]
+
+
+def test_trim_and_prepare_turn_rejects_assigned_word_loss(
+    tmp_path,
+    monkeypatch,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    storage.turns.append(
+        {
+            "schema_version": 1,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 0.9,
+            "source_end": 1.9,
+            "source_regions": [
+                "region_000001",
+            ],
+            "language": "en",
+            "transcript": "hello there",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {
+                "word_range": {
+                    "start": 0,
+                    "end": 1,
+                },
+                "continuous_asr": {
+                    "evidence": "qwen3",
+                    "word_indices": [0, 1],
+                },
+            },
+        }
+    )
+
+    before = storage.get_turn("turn_000001")
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Boundary edit would change assigned "
+            "continuous ASR words"
+        ),
+    ):
+        trim_and_prepare_turn(
+            storage,
+            "turn_000001",
+            source_end=1.35,
+        )
+
+    assert storage.get_turn("turn_000001") == before
+
+def test_trim_and_prepare_turn_rejects_added_words_without_mutation(
     tmp_path,
     monkeypatch,
 ):
@@ -1233,35 +1372,27 @@ def test_trim_and_prepare_turn_rejects_word_loss_without_mutation(
     monkeypatch.setattr(
         "voice_dataset.turn_curation."
         "prepare_curated_source_turns",
-        lambda storage_arg, source_id:
-            prepared.append(source_id),
+        lambda *args, **kwargs:
+            prepared.append("called"),
     )
 
-    from voice_dataset.turn_curation import (
-        trim_and_prepare_turn,
-    )
-
-    before = storage.get_turn(
-        "turn_000001"
-    )
+    before = storage.get_turn("turn_000001")
 
     with pytest.raises(
         ValueError,
-        match="Trim would change continuous ASR words",
+        match=(
+            "Boundary edit would change assigned "
+            "continuous ASR words"
+        ),
     ):
         trim_and_prepare_turn(
             storage,
             "turn_000001",
-            source_end=1.35,
+            source_end=3.6,
         )
 
-    after = storage.get_turn(
-        "turn_000001"
-    )
-
-    assert after == before
+    assert storage.get_turn("turn_000001") == before
     assert prepared == []
-
 
 def test_trim_and_prepare_turn_requires_reconciliation_before_trim(
     tmp_path,
@@ -1787,3 +1918,55 @@ def test_migrate_legacy_ignored_turns_is_idempotent(
     assert first == 1
     assert second == 0
     assert after_second == after_first
+
+
+def test_project_curated_turn_includes_zero_duration_word(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    storage.add_source(
+        SourceRecord(
+            id="source_001",
+            media_path="/tmp/source.wav",
+            metadata={
+                "continuous_asr": {
+                    "qwen3": {
+                        "words": [
+                            {
+                                "text": "care",
+                                "start": 10.0,
+                                "end": 10.2,
+                            },
+                            {
+                                "text": "of",
+                                "start": 10.2,
+                                "end": 10.2,
+                            },
+                            {
+                                "text": "the",
+                                "start": 10.2,
+                                "end": 10.4,
+                            },
+                        ],
+                        "utterances": [],
+                    }
+                }
+            },
+        )
+    )
+
+    result = project_curated_turn(
+        storage,
+        source_id="source_001",
+        source_start=9.9,
+        source_end=10.5,
+    )
+
+    assert (
+        result.projection.word_indices
+        == (0, 1, 2)
+    )
+    assert result.transcript == "care of the"
+    assert result.start_word_index == 0
+    assert result.end_word_index == 2

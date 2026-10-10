@@ -782,3 +782,81 @@ def test_failed_metadata_update_rolls_back_rebuilt_representation(
     )
 
     assert not backup.exists()
+
+
+def test_manual_boundary_turn_audio_is_not_padded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage, source_audio = make_storage(tmp_path)
+    calls = []
+
+    prepare_audio_mocks(
+        monkeypatch,
+        calls,
+    )
+
+    def mark_manual(record):
+        record["metadata"]["boundary_curation"] = {
+            "method": "manual",
+        }
+        return record
+
+    storage.update_turn(
+        "turn_000002",
+        mark_manual,
+    )
+
+    result = representations.materialize_turns(
+        storage=storage,
+        source_id="source_001",
+        source=source_audio,
+        representation_name="speech",
+        kind="speech",
+        purposes=[
+            "review",
+            "tts_candidate",
+        ],
+    )
+
+    assert result.created == 3
+    assert result.skipped == 0
+
+    assert calls[1]["start"] == pytest.approx(
+        2.1
+    )
+    assert calls[1]["end"] == pytest.approx(
+        3.0
+    )
+
+    turn = storage.get_turn(
+        "turn_000002"
+    )
+
+    metadata = turn["representations"][
+        "speech"
+    ]["metadata"]
+
+    assert metadata[
+        "canonical_start"
+    ] == pytest.approx(2.1)
+
+    assert metadata[
+        "canonical_end"
+    ] == pytest.approx(3.0)
+
+    assert metadata[
+        "clip_start"
+    ] == pytest.approx(2.1)
+
+    assert metadata[
+        "clip_end"
+    ] == pytest.approx(3.0)
+
+    assert metadata[
+        "padding_before"
+    ] == pytest.approx(0.0)
+
+    assert metadata[
+        "padding_after"
+    ] == pytest.approx(0.0)

@@ -746,12 +746,49 @@ def trim_and_prepare_turn(
         language=language,
     )
 
+    metadata = turn.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    continuous_asr = metadata.get(
+        "continuous_asr"
+    )
+
+    canonical_word_indices = None
+
+    if isinstance(continuous_asr, dict):
+        stored_word_indices = (
+            continuous_asr.get("word_indices")
+        )
+
+        if (
+            isinstance(stored_word_indices, list)
+            and stored_word_indices
+            and all(
+                isinstance(index, int)
+                for index in stored_word_indices
+            )
+        ):
+            canonical_word_indices = tuple(
+                stored_word_indices
+            )
+
+    if canonical_word_indices is None:
+        canonical_word_indices = (
+            current_projection.projection.word_indices
+        )
+
+    trimmed_word_indices = (
+        trimmed_projection.projection.word_indices
+    )
+
     if (
-        current_projection.projection.word_indices
-        != trimmed_projection.projection.word_indices
+        trimmed_word_indices
+        != canonical_word_indices
     ):
         raise ValueError(
-            "Trim would change continuous ASR words"
+            "Boundary edit would change assigned "
+            "continuous ASR words"
         )
 
     def update(
@@ -759,6 +796,21 @@ def trim_and_prepare_turn(
     ) -> dict[str, Any]:
         record["source_start"] = new_start
         record["source_end"] = new_end
+
+        metadata = record.setdefault(
+            "metadata",
+            {},
+        )
+
+        if not isinstance(metadata, dict):
+            raise ValueError(
+                f"{turn_id}: invalid metadata"
+            )
+
+        metadata["boundary_curation"] = {
+            "method": "manual",
+        }
+
         return record
 
     storage.update_turn(
