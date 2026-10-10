@@ -155,6 +155,27 @@ class ReviewerSession:
     def current_turn_id(self) -> str | None:
         return self._current_turn_id
 
+    def select_turn(
+        self,
+        turn_id: str,
+    ) -> dict[str, Any]:
+        if turn_id not in self._turn_ids:
+            raise ValueError(
+                f"Turn is not in the current reviewer queue: "
+                f"{turn_id}"
+            )
+
+        self._current_turn_id = turn_id
+
+        turn = self.current()
+
+        if turn is None:
+            raise RuntimeError(
+                f"Selected turn disappeared: {turn_id}"
+            )
+
+        return turn
+
     @property
     def position(self) -> int | None:
         if self._current_turn_id is None:

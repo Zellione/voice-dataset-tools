@@ -2460,6 +2460,11 @@ def turn_review(
         None,
         help="Review only turns from this source.",
     ),
+    turn_id: str | None = typer.Option(
+        None,
+        "--turn-id",
+        help="Start the reviewer at this turn ID.",
+    ),
     context_padding: float = typer.Option(
         2.0,
         min=0.0,
@@ -2528,6 +2533,17 @@ def turn_review(
         if session.total == 0:
             typer.echo("No speech turns to review.")
             return
+
+        if turn_id is not None:
+            try:
+                session.select_turn(
+                    turn_id
+                )
+            except ValueError as exc:
+                raise typer.BadParameter(
+                    str(exc),
+                    param_hint="--turn-id",
+                ) from exc
 
         run_reviewer_tui(
             session,
