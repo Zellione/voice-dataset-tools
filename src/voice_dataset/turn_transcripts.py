@@ -57,7 +57,10 @@ def project_continuous_asr_to_range(
 
         zero_duration_in_range = (
             word_duration == 0
-            and source_start <= word_start <= source_end
+            and source_start
+            <= word_start + 1e-6
+            and word_start
+            <= source_end + 1e-6
         )
 
         if (
