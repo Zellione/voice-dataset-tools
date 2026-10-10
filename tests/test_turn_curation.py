@@ -315,8 +315,11 @@ def test_merge_and_prepare_turns_adds_asr_provenance_and_prepares(
     def fake_prepare(
         actual_storage,
         source_id,
+        *,
+        capture_output=False,
     ):
         assert actual_storage is storage
+        assert capture_output is False
         prepared.append(source_id)
 
     monkeypatch.setattr(
@@ -587,7 +590,7 @@ def test_split_and_prepare_turn_projects_children_and_prepares(
     monkeypatch.setattr(
         "voice_dataset.turn_curation."
         "prepare_curated_source_turns",
-        lambda storage, source_id:
+        lambda storage, source_id, capture_output=False:
             prepared.append(source_id),
     )
 

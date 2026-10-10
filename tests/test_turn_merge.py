@@ -312,7 +312,7 @@ def test_merge_rejects_conflicting_voices(
     assert storage.turns.path.read_bytes() == before
 
 
-def test_merge_rejects_region_used_by_outside_turn(
+def test_manual_merge_allows_region_used_by_outside_turn(
     tmp_path: Path,
 ) -> None:
     storage = make_storage(tmp_path)
@@ -330,6 +330,7 @@ def test_merge_rejects_region_used_by_outside_turn(
         start=1.0,
         end=1.5,
         region_ids=["region_000001"],
+        transcript="first",
     )
     add_turn(
         storage,
@@ -337,6 +338,7 @@ def test_merge_rejects_region_used_by_outside_turn(
         start=1.5,
         end=2.0,
         region_ids=["region_000001"],
+        transcript="second",
     )
     add_turn(
         storage,
@@ -344,24 +346,39 @@ def test_merge_rejects_region_used_by_outside_turn(
         start=2.0,
         end=3.0,
         region_ids=["region_000001"],
+        transcript="outside",
     )
 
-    before = storage.turns.path.read_bytes()
+    merged = merge_turns(
+        storage,
+        [
+            "turn_000001",
+            "turn_000002",
+        ],
+    )
 
-    with pytest.raises(
-        ValueError,
-        match="also belongs to turns outside the merge",
-    ):
-        merge_turns(
-            storage,
-            [
-                "turn_000001",
-                "turn_000002",
-            ],
-        )
+    assert merged["id"] == "turn_000001"
+    assert merged["source_start"] == 1.0
+    assert merged["source_end"] == 2.0
+    assert merged["transcript"] == "first second"
+    assert merged["source_regions"] == [
+        "region_000001",
+    ]
 
-    assert storage.turns.path.read_bytes() == before
+    remaining = {
+        turn["id"]: turn
+        for turn in storage.turns.load()
+    }
 
+    assert set(remaining) == {
+        "turn_000001",
+        "turn_000003",
+    }
+
+    # The outside turn keeps the same provenance.
+    assert remaining["turn_000003"][
+        "source_regions"
+    ] == ["region_000001"]
 
 def test_unrelated_shared_region_does_not_block_merge(
     tmp_path: Path,
@@ -495,3 +512,82 @@ def test_merge_collects_regions_from_all_turns(
         merged["transcript"]
         == "first part second part"
     )
+
+
+def test_manual_merge_preserves_retained_review_queue_status(
+    tmp_path: Path,
+) -> None:
+    storage = make_storage(tmp_path)
+
+    add_region(
+        storage,
+        region_id="region_000001",
+        start=1.0,
+        end=2.0,
+    )
+
+    add_turn(
+        storage,
+        turn_id="turn_000001",
+        start=1.0,
+        end=1.5,
+        region_ids=["region_000001"],
+        transcript="first half",
+    )
+
+    add_turn(
+        storage,
+        turn_id="turn_000002",
+        start=1.5,
+        end=2.0,
+        region_ids=["region_000001"],
+        transcript="second half",
+    )
+
+    def mark_review_candidate(record):
+        metadata = dict(
+            record.get("metadata")
+            or {}
+        )
+
+        metadata["automatic_pipeline"] = {
+            "status": "review",
+            "reasons": [
+                "unresolved_words",
+            ],
+        }
+
+        record["metadata"] = metadata
+        return record
+
+    storage.update_turn(
+        "turn_000001",
+        mark_review_candidate,
+    )
+
+    merged = merge_turns(
+        storage,
+        [
+            "turn_000001",
+            "turn_000002",
+        ],
+    )
+
+    assert merged["metadata"][
+        "automatic_pipeline"
+    ] == {
+        "status": "review",
+        "reasons": [
+            "unresolved_words",
+        ],
+    }
+
+    assert merged["metadata"][
+        "creation"
+    ] == {
+        "method": "manual_merge",
+        "source_turn_ids": [
+            "turn_000001",
+            "turn_000002",
+        ],
+    }

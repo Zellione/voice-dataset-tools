@@ -585,7 +585,10 @@ def test_session_merge_with_next_refreshes_and_reanchors(
     def fake_merge(
         actual_storage,
         turn_ids,
+        *,
+        capture_output=False,
     ):
+        assert capture_output is True
         assert actual_storage is storage
         assert turn_ids == [
             "turn_000001",
@@ -643,7 +646,9 @@ def test_session_split_refreshes_and_reanchors_left(
         turn_id,
         *,
         after_region_id,
+        capture_output=False,
     ):
+        assert capture_output is True
         assert actual_storage is storage
         assert turn_id == "turn_000001"
         assert after_region_id == "region_000001"
@@ -945,7 +950,10 @@ def test_merge_with_next_uses_canonical_next_turn_when_filtered(
     def fake_merge(
         storage_arg,
         turn_ids,
+        *,
+        capture_output=False,
     ):
+        assert capture_output is True
         assert storage_arg is storage
         merged_ids.extend(turn_ids)
 
@@ -1907,3 +1915,87 @@ def test_session_ignores_assigned_voice(
 
     assert result["id"] == voice["id"]
     assert result["ignored"] is True
+
+
+def test_session_jumps_between_pending_reviews(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    for index in range(1, 5):
+        add_turn(
+            storage,
+            f"turn_{index:06d}",
+            source_start=float(index),
+        )
+
+    def mark_reviewed(record):
+        review = dict(
+            record.get("review") or {}
+        )
+        review["status"] = "reviewed"
+        record["review"] = review
+        return record
+
+    storage.update_turn(
+        "turn_000002",
+        mark_reviewed,
+    )
+    storage.update_turn(
+        "turn_000003",
+        mark_reviewed,
+    )
+
+    session = ReviewerSession(storage)
+
+    assert (
+        session.current_turn_id
+        == "turn_000001"
+    )
+
+    session.next_pending()
+
+    assert (
+        session.current_turn_id
+        == "turn_000004"
+    )
+
+    session.previous_pending()
+
+    assert (
+        session.current_turn_id
+        == "turn_000001"
+    )
+
+
+def test_pending_navigation_stays_put_when_none_exists(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+    add_turn(
+        storage,
+        "turn_000002",
+        source_start=2.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    session.next()
+
+    assert (
+        session.current_turn_id
+        == "turn_000002"
+    )
+
+    session.next_pending()
+
+    assert (
+        session.current_turn_id
+        == "turn_000002"
+    )

@@ -216,6 +216,69 @@ class ReviewerSession:
 
         return self.current()
 
+    def _turn_review_is_pending(
+        self,
+        turn_id: str,
+    ) -> bool:
+        turn = self.storage.get_turn(
+            turn_id
+        )
+
+        if turn is None:
+            return False
+
+        review = turn.get("review")
+
+        if not isinstance(review, dict):
+            return True
+
+        return (
+            review.get("status", "pending")
+            == "pending"
+        )
+
+    def next_pending(
+        self,
+    ) -> dict[str, Any] | None:
+        if self._current_turn_id is None:
+            return None
+
+        index = self._turn_ids.index(
+            self._current_turn_id
+        )
+
+        for turn_id in self._turn_ids[
+            index + 1:
+        ]:
+            if self._turn_review_is_pending(
+                turn_id
+            ):
+                self._current_turn_id = turn_id
+                break
+
+        return self.current()
+
+    def previous_pending(
+        self,
+    ) -> dict[str, Any] | None:
+        if self._current_turn_id is None:
+            return None
+
+        index = self._turn_ids.index(
+            self._current_turn_id
+        )
+
+        for turn_id in reversed(
+            self._turn_ids[:index]
+        ):
+            if self._turn_review_is_pending(
+                turn_id
+            ):
+                self._current_turn_id = turn_id
+                break
+
+        return self.current()
+
     def _require_current_id(self) -> str:
         if self._current_turn_id is None:
             raise ValueError(
@@ -501,6 +564,7 @@ class ReviewerSession:
         merged = merge_and_prepare_turns(
             self.storage,
             turn_ids,
+            capture_output=True,
         )
 
         self.refresh(
@@ -570,6 +634,7 @@ class ReviewerSession:
             self.storage,
             turn_id,
             after_region_id=after_region_id,
+            capture_output=True,
         )
 
         self.refresh(

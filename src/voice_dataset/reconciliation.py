@@ -771,37 +771,11 @@ def merge_turns(
                     "match merged turns"
                 )
 
-            using_turns = _turns_using_region(
-                storage,
-                region_id,
-            )
-
-            using_turn_ids = {
-                using_turn.get("id")
-                for using_turn in using_turns
-            }
-
-            if not using_turn_ids:
-                raise ValueError(
-                    f"{region_id} is not reconciled "
-                    "to any turn"
-                )
-
-            if not using_turn_ids.issubset(
-                selected_ids
-            ):
-                outside_turn_ids = sorted(
-                    turn_id
-                    for turn_id in using_turn_ids
-                    if turn_id not in selected_ids
-                )
-
-                raise ValueError(
-                    f"{region_id} also belongs to "
-                    "turns outside the merge: "
-                    f"{', '.join(outside_turn_ids)}"
-                )
-
+            # source_regions are provenance from the
+            # automatic reconciliation process. A manual
+            # reviewer merge defines the final curated turn,
+            # so a source region may also be referenced by
+            # turns outside this merge.
             regions[region_id] = region
             region_ids.append(region_id)
 
@@ -911,6 +885,33 @@ def merge_turns(
             "source_turn_ids": list(turn_ids),
         }
     }
+
+    retained_metadata = (
+        ordered[0][1].get("metadata")
+        or {}
+    )
+
+    if not isinstance(
+        retained_metadata,
+        dict,
+    ):
+        raise ValueError(
+            f"{retained_id}: metadata must be a dict"
+        )
+
+    automatic_pipeline = (
+        retained_metadata.get(
+            "automatic_pipeline"
+        )
+    )
+
+    if isinstance(
+        automatic_pipeline,
+        dict,
+    ):
+        metadata["automatic_pipeline"] = dict(
+            automatic_pipeline
+        )
 
     boundary_evidence = (
         _boundary_evidence_for_turn(

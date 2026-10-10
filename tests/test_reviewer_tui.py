@@ -17,7 +17,7 @@ from voice_dataset.reviewer_tui import (
     VoicePickerScreen,
     TrimTurnRequest,
     TrimTurnScreen,
-    UpdatingTurnAudioScreen,
+    UpdatingTurnScreen,
 )
 from voice_dataset.storage import DatasetStorage
 from voice_dataset.schema import VoiceProfile
@@ -3550,8 +3550,8 @@ async def test_trim_turn_screen_returns_updated_range(
             Input,
         )
 
-        assert start_input.value == "1.000"
-        assert end_input.value == "2.000"
+        assert start_input.value == "1.000000"
+        assert end_input.value == "2.000000"
 
         end_input.value = "1.750"
         end_input.focus()
@@ -3851,7 +3851,7 @@ async def test_reviewer_tui_boundary_edit_runs_in_background(
 
         assert isinstance(
             app.screen,
-            UpdatingTurnAudioScreen,
+            UpdatingTurnScreen,
         )
 
         content = str(
@@ -3950,7 +3950,7 @@ async def test_reviewer_tui_shows_blocking_audio_rebuild_modal(
 
         assert isinstance(
             app.screen,
-            UpdatingTurnAudioScreen,
+            UpdatingTurnScreen,
         )
 
         title = str(
@@ -3967,7 +3967,7 @@ async def test_reviewer_tui_shows_blocking_audio_rebuild_modal(
             ).render()
         )
 
-        assert "Updating turn audio" in title
+        assert "Updating turn" in title
         assert "review audio" in content
         assert "speaker evidence" in content
         assert "review audio" in content
@@ -3980,13 +3980,13 @@ async def test_reviewer_tui_shows_blocking_audio_rebuild_modal(
 
             if not isinstance(
                 app.screen,
-                UpdatingTurnAudioScreen,
+                UpdatingTurnScreen,
             ):
                 break
 
         assert not isinstance(
             app.screen,
-            UpdatingTurnAudioScreen,
+            UpdatingTurnScreen,
         )
 
         status = str(

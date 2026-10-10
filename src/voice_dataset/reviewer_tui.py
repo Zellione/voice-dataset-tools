@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from pathlib import Path
 
 from rich.text import Text
 
@@ -17,8 +18,11 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 
+from textual_plotext import PlotextPlot
+
 from .playback import (
     is_playing,
+    play_file_region,
     play_preferred_review_audio,
     play_representation,
     play_turn_context,
@@ -31,7 +35,14 @@ from .reviewer import (
     sorted_turns,
 )
 from .reviewer_session import ReviewerSession
+from .sources import (
+    resolve_source_representation_for_purpose,
+)
 from .reviewer_view import ReviewerTurnView
+from .waveform import (
+    WaveformEnvelope,
+    load_waveform_envelope,
+)
 
 
 def format_source_time(
@@ -117,6 +128,8 @@ class HelpScreen(ModalScreen[None]):
                     "Navigation",
                     "  ← / b     Previous turn",
                     "  → / n     Next turn",
+                    "  PgUp      Previous pending review",
+                    "  PgDn      Next pending review",
                     "",
                     "Playback",
                     "  Space / p Play review audio",
@@ -769,6 +782,27 @@ class ConfirmMergeScreen(
 
     BINDINGS = [
         Binding(
+            "1",
+            "play_first",
+            "Play First",
+        ),
+        Binding(
+            "2",
+            "play_second",
+            "Play Second",
+        ),
+        Binding(
+            "space",
+            "play_both",
+            "Play Both",
+            key_display="Space",
+        ),
+        Binding(
+            "s",
+            "stop_audio",
+            "Stop",
+        ),
+        Binding(
             "enter",
             "accept",
             "Merge",
@@ -784,9 +818,21 @@ class ConfirmMergeScreen(
         self,
         *,
         content: str,
+        audio_path: Path | None = None,
+        first_range: tuple[
+            float,
+            float,
+        ] | None = None,
+        second_range: tuple[
+            float,
+            float,
+        ] | None = None,
     ) -> None:
         super().__init__()
         self.content = content
+        self.audio_path = audio_path
+        self.first_range = first_range
+        self.second_range = second_range
 
     def compose(self) -> ComposeResult:
         with Vertical(id="merge-dialog"):
@@ -797,11 +843,62 @@ class ConfirmMergeScreen(
 
         yield Footer()
 
+    def _play_range(
+        self,
+        source_range: tuple[
+            float,
+            float,
+        ] | None,
+    ) -> None:
+        if (
+            self.audio_path is None
+            or source_range is None
+        ):
+            return
+
+        play_file_region(
+            self.audio_path,
+            source_range[0],
+            source_range[1],
+        )
+
+    def action_play_first(self) -> None:
+        self._play_range(
+            self.first_range
+        )
+
+    def action_play_second(self) -> None:
+        self._play_range(
+            self.second_range
+        )
+
+    def action_play_both(self) -> None:
+        if (
+            self.first_range is None
+            or self.second_range is None
+        ):
+            return
+
+        self._play_range(
+            (
+                self.first_range[0],
+                self.second_range[1],
+            )
+        )
+
+    def action_stop_audio(self) -> None:
+        stop()
+
     def action_accept(self) -> None:
+        stop()
         self.dismiss(True)
 
     def action_cancel(self) -> None:
+        stop()
         self.dismiss(None)
+
+    def on_unmount(self) -> None:
+        stop()
 
 
 class SplitTurnScreen(
@@ -910,8 +1007,8 @@ class TrimTurnScreen(
     }
 
     #trim-dialog {
-        width: 70;
-        height: auto;
+        width: 96%;
+        height: 90%;
         padding: 1 2;
         border: round $primary;
         background: $surface;
@@ -920,6 +1017,22 @@ class TrimTurnScreen(
     #trim-title {
         text-style: bold;
         margin-bottom: 1;
+    }
+
+    #trim-waveform {
+        width: 100%;
+        height: 1fr;
+        min-height: 14;
+        margin-bottom: 1;
+    }
+
+    #trim-info {
+        height: auto;
+        margin-bottom: 1;
+    }
+
+    #trim-fields {
+        height: auto;
     }
 
     Input {
@@ -936,6 +1049,22 @@ class TrimTurnScreen(
 
     BINDINGS = [
         Binding(
+            "space",
+            "preview",
+            "Preview",
+            key_display="Space",
+        ),
+        Binding(
+            "c",
+            "play_context",
+            "Context",
+        ),
+        Binding(
+            "s",
+            "stop_audio",
+            "Stop",
+        ),
+        Binding(
             "escape",
             "cancel",
             "Cancel",
@@ -947,10 +1076,40 @@ class TrimTurnScreen(
         *,
         source_start: float,
         source_end: float,
+        audio_path: Path | None = None,
+        context_start: float | None = None,
+        context_end: float | None = None,
+        previous_end: float | None = None,
+        next_start: float | None = None,
     ) -> None:
         super().__init__()
+
         self.source_start = source_start
         self.source_end = source_end
+
+        self.audio_path = audio_path
+
+        self.context_start = (
+            max(
+                0.0,
+                source_start - 2.0,
+            )
+            if context_start is None
+            else context_start
+        )
+
+        self.context_end = (
+            source_end + 2.0
+            if context_end is None
+            else context_end
+        )
+
+        self.previous_end = previous_end
+        self.next_start = next_start
+
+        self.waveform: (
+            WaveformEnvelope | None
+        ) = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="trim-dialog"):
@@ -959,20 +1118,44 @@ class TrimTurnScreen(
                 id="trim-title",
             )
 
-            yield Static("Start")
-            yield Input(
-                value=f"{self.source_start:.3f}",
-                id="trim-start",
+            yield PlotextPlot(
+                id="trim-waveform",
             )
 
-            yield Static("End")
-            yield Input(
-                value=f"{self.source_end:.3f}",
-                id="trim-end",
+            yield Static(
+                "",
+                id="trim-info",
             )
+
+            with Horizontal(
+                id="trim-fields",
+            ):
+                with Vertical():
+                    yield Static("Start")
+                    yield Input(
+                        value=(
+                            f"{self.source_start:.6f}"
+                        ),
+                        id="trim-start",
+                    )
+
+                with Vertical():
+                    yield Static("End")
+                    yield Input(
+                        value=(
+                            f"{self.source_end:.6f}"
+                        ),
+                        id="trim-end",
+                    )
 
         yield Static(
-            "Enter Apply   Esc Cancel",
+            (
+                "Space Preview   "
+                "c Context   "
+                "s Stop   "
+                "Enter Apply   "
+                "Esc Cancel"
+            ),
             id="trim-shortcuts",
         )
 
@@ -981,6 +1164,246 @@ class TrimTurnScreen(
             "#trim-start",
             Input,
         ).focus()
+
+        if self.audio_path is not None:
+            try:
+                self.waveform = (
+                    load_waveform_envelope(
+                        self.audio_path,
+                        start=self.context_start,
+                        end=self.context_end,
+                    )
+                )
+            except (
+                ValueError,
+                FileNotFoundError,
+                OSError,
+            ):
+                self.waveform = None
+
+        self._refresh_preview()
+
+    def _preview_range(
+        self,
+    ) -> tuple[float, float] | None:
+        try:
+            source_start = float(
+                self.query_one(
+                    "#trim-start",
+                    Input,
+                ).value
+            )
+
+            source_end = float(
+                self.query_one(
+                    "#trim-end",
+                    Input,
+                ).value
+            )
+        except ValueError:
+            return None
+
+        if (
+            source_start < 0
+            or source_end <= source_start
+        ):
+            return None
+
+        return (
+            source_start,
+            source_end,
+        )
+
+    def _refresh_info(
+        self,
+        preview: tuple[
+            float,
+            float,
+        ] | None,
+    ) -> None:
+        if preview is None:
+            preview_text = "invalid"
+        else:
+            preview_text = (
+                f"{preview[0]:.6f}"
+                " – "
+                f"{preview[1]:.6f}"
+            )
+
+        previous_text = (
+            f"{self.previous_end:.6f}"
+            if self.previous_end is not None
+            else "-"
+        )
+
+        next_text = (
+            f"{self.next_start:.6f}"
+            if self.next_start is not None
+            else "-"
+        )
+
+        info = Text()
+
+        info.append("Original", style="grey70")
+        info.append(
+            ": "
+            f"{self.source_start:.6f}"
+            " – "
+            f"{self.source_end:.6f}"
+            "\n"
+        )
+
+        info.append("Preview", style="green")
+        info.append(
+            ":  "
+            f"{preview_text}"
+            "\n"
+        )
+
+        info.append(
+            "Previous end",
+            style="yellow",
+        )
+        info.append(
+            ": "
+            f"{previous_text}"
+            "    "
+        )
+
+        info.append(
+            "Next start",
+            style="magenta",
+        )
+        info.append(
+            ": "
+            f"{next_text}"
+        )
+
+        self.query_one(
+            "#trim-info",
+            Static,
+        ).update(info)
+
+    def _refresh_plot(
+        self,
+        preview: tuple[
+            float,
+            float,
+        ] | None,
+    ) -> None:
+        plot = self.query_one(
+            "#trim-waveform",
+            PlotextPlot,
+        )
+
+        plt = plot.plt
+        plt.clear_figure()
+
+        waveform = self.waveform
+
+        if waveform is None:
+            plt.title(
+                "Waveform unavailable"
+            )
+            plot.refresh()
+            return
+
+        plt.plot(
+            list(waveform.times),
+            list(waveform.upper),
+        )
+        plt.plot(
+            list(waveform.times),
+            list(waveform.lower),
+        )
+
+        plt.xlim(
+            waveform.start,
+            waveform.end,
+        )
+        plt.ylim(
+            -1.05,
+            1.05,
+        )
+
+        # Original boundaries.
+        plt.vertical_line(
+            self.source_start,
+            color="gray",
+        )
+        plt.vertical_line(
+            self.source_end,
+            color="gray",
+        )
+
+        # Live preview boundaries.
+        if preview is not None:
+            plt.vertical_line(
+                preview[0],
+                color="green",
+            )
+            plt.vertical_line(
+                preview[1],
+                color="green",
+            )
+
+        # Neighbouring canonical boundaries.
+        if (
+            self.previous_end is not None
+            and waveform.start
+            <= self.previous_end
+            <= waveform.end
+        ):
+            plt.vertical_line(
+                self.previous_end,
+                color="yellow",
+            )
+
+        if (
+            self.next_start is not None
+            and waveform.start
+            <= self.next_start
+            <= waveform.end
+        ):
+            plt.vertical_line(
+                self.next_start,
+                color="magenta",
+            )
+
+        plt.title(
+            "Boundary Preview"
+        )
+        plt.xlabel(
+            "source time [s]"
+        )
+        plt.yticks(
+            [],
+            [],
+        )
+
+        plot.refresh()
+
+    def _refresh_preview(self) -> None:
+        preview = self._preview_range()
+
+        self._refresh_info(
+            preview
+        )
+        self._refresh_plot(
+            preview
+        )
+
+    def on_input_changed(
+        self,
+        event: Input.Changed,
+    ) -> None:
+        if event.input.id not in {
+            "trim-start",
+            "trim-end",
+        }:
+            return
+
+        self._refresh_preview()
 
     def on_input_submitted(
         self,
@@ -993,38 +1416,59 @@ class TrimTurnScreen(
             ).focus()
             return
 
-        try:
-            source_start = float(
-                self.query_one(
-                    "#trim-start",
-                    Input,
-                ).value
-            )
-            source_end = float(
-                self.query_one(
-                    "#trim-end",
-                    Input,
-                ).value
-            )
-        except ValueError:
+        preview = self._preview_range()
+
+        if preview is None:
             return
 
         self.dismiss(
             TrimTurnRequest(
-                source_start=source_start,
-                source_end=source_end,
+                source_start=preview[0],
+                source_end=preview[1],
             )
         )
 
+    def action_preview(self) -> None:
+        if self.audio_path is None:
+            return
+
+        preview = self._preview_range()
+
+        if preview is None:
+            return
+
+        play_file_region(
+            self.audio_path,
+            preview[0],
+            preview[1],
+        )
+
+    def action_play_context(self) -> None:
+        if self.audio_path is None:
+            return
+
+        play_file_region(
+            self.audio_path,
+            self.context_start,
+            self.context_end,
+        )
+
+    def action_stop_audio(self) -> None:
+        stop()
+
     def action_cancel(self) -> None:
+        stop()
         self.dismiss(None)
 
+    def on_unmount(self) -> None:
+        stop()
 
-class UpdatingTurnAudioScreen(
+
+class UpdatingTurnScreen(
     ModalScreen[None]
 ):
     CSS = """
-    UpdatingTurnAudioScreen {
+    UpdatingTurnScreen {
         align: center middle;
     }
 
@@ -1052,7 +1496,7 @@ class UpdatingTurnAudioScreen(
             id="updating-audio-dialog"
         ):
             yield Static(
-                "Updating turn audio",
+                "Updating turn",
                 id="updating-audio-title",
             )
 
@@ -1135,6 +1579,18 @@ class ReviewerTUI(App[None]):
             "right,n",
             "next_turn",
             "Next",
+        ),
+        Binding(
+            "pageup",
+            "previous_pending",
+            "Prev Pending",
+            key_display="PgUp",
+        ),
+        Binding(
+            "pagedown",
+            "next_pending",
+            "Next Pending",
+            key_display="PgDn",
         ),
         Binding(
             "question_mark",
@@ -1248,6 +1704,8 @@ class ReviewerTUI(App[None]):
     PRIMARY_SHORTCUT_ACTIONS = {
         "previous_turn",
         "next_turn",
+        "previous_pending",
+        "next_pending",
         "play_preferred",
         "play_context",
         "play_raw",
@@ -1296,7 +1754,7 @@ class ReviewerTUI(App[None]):
     ) -> None:
         if isinstance(
             self.screen,
-            UpdatingTurnAudioScreen,
+            UpdatingTurnScreen,
         ):
             self.screen.dismiss()
 
@@ -1308,7 +1766,7 @@ class ReviewerTUI(App[None]):
             return
 
         self.push_screen(
-            UpdatingTurnAudioScreen()
+            UpdatingTurnScreen()
         )
 
         self._apply_boundary_edit(
@@ -1388,14 +1846,98 @@ class ReviewerTUI(App[None]):
         if turn is None:
             return
 
+        source_id = turn.get(
+            "source_id"
+        )
+
+        if not isinstance(
+            source_id,
+            str,
+        ):
+            return
+
+        source_start = float(
+            turn["source_start"]
+        )
+        source_end = float(
+            turn["source_end"]
+        )
+
+        turns = sorted_turns(
+            self.session.storage,
+            source_id=source_id,
+        )
+
+        turn_ids = [
+            str(item["id"])
+            for item in turns
+        ]
+
+        previous_end = None
+        next_start = None
+
+        try:
+            index = turn_ids.index(
+                str(turn["id"])
+            )
+        except ValueError:
+            index = -1
+
+        if index > 0:
+            previous_end = float(
+                turns[index - 1][
+                    "source_end"
+                ]
+            )
+
+        if (
+            index >= 0
+            and index + 1 < len(turns)
+        ):
+            next_start = float(
+                turns[index + 1][
+                    "source_start"
+                ]
+            )
+
+        audio_path = None
+
+        try:
+            (
+                _representation_name,
+                _representation,
+                audio_path,
+            ) = (
+                resolve_source_representation_for_purpose(
+                    self.session.storage,
+                    source_id,
+                    "review",
+                )
+            )
+        except (
+            ValueError,
+            KeyError,
+            OSError,
+        ):
+            audio_path = None
+
+        context_start = max(
+            0.0,
+            source_start - 2.0,
+        )
+        context_end = (
+            source_end + 2.0
+        )
+
         self.push_screen(
             TrimTurnScreen(
-                source_start=float(
-                    turn["source_start"]
-                ),
-                source_end=float(
-                    turn["source_end"]
-                ),
+                source_start=source_start,
+                source_end=source_end,
+                audio_path=audio_path,
+                context_start=context_start,
+                context_end=context_end,
+                previous_end=previous_end,
+                next_start=next_start,
             ),
             self._trim_requested,
         )
@@ -1616,6 +2158,16 @@ class ReviewerTUI(App[None]):
     def action_next_turn(self) -> None:
         stop()
         self.session.next()
+        self._refresh_view()
+
+    def action_previous_pending(self) -> None:
+        stop()
+        self.session.previous_pending()
+        self._refresh_view()
+
+    def action_next_pending(self) -> None:
+        stop()
+        self.session.next_pending()
         self._refresh_view()
 
     def action_quit(self) -> None:
@@ -2167,13 +2719,23 @@ class ReviewerTUI(App[None]):
         if not accepted:
             return
 
+        self.push_screen(
+            UpdatingTurnScreen()
+        )
+
+        self._apply_merge_with_next()
+
+    @work(
+        thread=True,
+        exclusive=True,
+        group="merge-turns",
+    )
+    def _apply_merge_with_next(
+        self,
+    ) -> None:
         try:
-            merged = self.session.merge_with_next()
-
-            self._refresh_view()
-
-            self._set_status(
-                f"Merged turn: {merged['id']}"
+            merged = (
+                self.session.merge_with_next()
             )
         except (
             ValueError,
@@ -2181,9 +2743,56 @@ class ReviewerTUI(App[None]):
             RuntimeError,
             OSError,
         ) as exc:
-            self._set_status(
-                f"Merge failed: {exc}"
+            self.call_from_thread(
+                self._merge_failed,
+                str(exc),
             )
+            return
+
+        self.call_from_thread(
+            self._merge_finished,
+            str(merged["id"]),
+        )
+
+    def _merge_finished(
+        self,
+        turn_id: str,
+    ) -> None:
+        self._close_updating_audio_screen()
+
+        self.call_after_refresh(
+            self._merge_finished_ui,
+            turn_id,
+        )
+
+    def _merge_finished_ui(
+        self,
+        turn_id: str,
+    ) -> None:
+        self._refresh_view()
+        self._set_status(
+            f"Merged turn: {turn_id}"
+        )
+
+    def _merge_failed(
+        self,
+        message: str,
+    ) -> None:
+        self._close_updating_audio_screen()
+
+        self.call_after_refresh(
+            self._merge_failed_ui,
+            message,
+        )
+
+    def _merge_failed_ui(
+        self,
+        message: str,
+    ) -> None:
+        self._refresh_view()
+        self._set_status(
+            f"Merge failed: {message}"
+        )
 
     def action_merge_with_next(self) -> None:
         current = self.session.current()
@@ -2262,9 +2871,39 @@ class ReviewerTUI(App[None]):
             ),
         ])
 
+        audio_path = None
+
+        try:
+            (
+                _representation_name,
+                _representation,
+                audio_path,
+            ) = (
+                resolve_source_representation_for_purpose(
+                    self.session.storage,
+                    source_id,
+                    "review",
+                )
+            )
+        except (
+            ValueError,
+            KeyError,
+            OSError,
+        ):
+            audio_path = None
+
         self.push_screen(
             ConfirmMergeScreen(
                 content=content,
+                audio_path=audio_path,
+                first_range=(
+                    current_start,
+                    current_end,
+                ),
+                second_range=(
+                    next_start,
+                    next_end,
+                ),
             ),
             self._merge_with_next_confirmed,
         )
@@ -2276,16 +2915,26 @@ class ReviewerTUI(App[None]):
         if region_id is None:
             return
 
+        self.push_screen(
+            UpdatingTurnScreen()
+        )
+
+        self._apply_split(
+            region_id
+        )
+
+    @work(
+        thread=True,
+        exclusive=True,
+        group="split-turn",
+    )
+    def _apply_split(
+        self,
+        region_id: str,
+    ) -> None:
         try:
             left, right = self.session.split(
                 after_region_id=region_id,
-            )
-
-            self._refresh_view()
-
-            self._set_status(
-                "Split turn: "
-                f"{left['id']} / {right['id']}"
             )
         except (
             ValueError,
@@ -2293,9 +2942,62 @@ class ReviewerTUI(App[None]):
             RuntimeError,
             OSError,
         ) as exc:
-            self._set_status(
-                f"Split failed: {exc}"
+            self.call_from_thread(
+                self._split_failed,
+                str(exc),
             )
+            return
+
+        self.call_from_thread(
+            self._split_finished,
+            str(left["id"]),
+            str(right["id"]),
+        )
+
+    def _split_finished(
+        self,
+        left_id: str,
+        right_id: str,
+    ) -> None:
+        self._close_updating_audio_screen()
+
+        self.call_after_refresh(
+            self._split_finished_ui,
+            left_id,
+            right_id,
+        )
+
+    def _split_finished_ui(
+        self,
+        left_id: str,
+        right_id: str,
+    ) -> None:
+        self._refresh_view()
+
+        self._set_status(
+            "Split turn: "
+            f"{left_id} / {right_id}"
+        )
+
+    def _split_failed(
+        self,
+        message: str,
+    ) -> None:
+        self._close_updating_audio_screen()
+
+        self.call_after_refresh(
+            self._split_failed_ui,
+            message,
+        )
+
+    def _split_failed_ui(
+        self,
+        message: str,
+    ) -> None:
+        self._refresh_view()
+        self._set_status(
+            f"Split failed: {message}"
+        )
 
     def action_split_turn(self) -> None:
         turn = self.session.current()

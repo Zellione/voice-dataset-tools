@@ -462,6 +462,7 @@ def merge_and_prepare_turns(
     turn_ids: list[str],
     *,
     evidence_name: str = "qwen3",
+    capture_output: bool = False,
 ) -> dict[str, Any]:
     projection = _project_merge(
         storage,
@@ -506,6 +507,7 @@ def merge_and_prepare_turns(
     prepare_curated_source_turns(
         storage,
         source_id,
+        capture_output=capture_output,
     )
 
     stored = storage.get_turn(
@@ -526,6 +528,7 @@ def split_and_prepare_turn(
     *,
     after_region_id: str,
     evidence_name: str = "qwen3",
+    capture_output: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     (
         source_id,
@@ -575,6 +578,7 @@ def split_and_prepare_turn(
     prepare_curated_source_turns(
         storage,
         source_id,
+        capture_output=capture_output,
     )
 
     stored_left = storage.get_turn(
