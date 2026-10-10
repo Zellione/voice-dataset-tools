@@ -3570,7 +3570,14 @@ class ReviewerTUI(App[None]):
             ),
             (
                 "Boundary:  "
-                f"{view.boundary.status}"
+                + (
+                    view.boundary.status
+                    if (
+                        view.boundary.near_source_start
+                        or view.boundary.near_source_end
+                    )
+                    else "-"
+                )
             ),
             (
                 "Assigned:  "
