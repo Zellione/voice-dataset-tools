@@ -1244,7 +1244,7 @@ class TrimTurnScreen(
 
         info = Text()
 
-        info.append("Original", style="grey70")
+        info.append("Original", style="rgb(150,150,150)")
         info.append(
             ": "
             f"{self.source_start:.6f}"
@@ -1253,7 +1253,7 @@ class TrimTurnScreen(
             "\n"
         )
 
-        info.append("Preview", style="green")
+        info.append("Preview", style="rgb(0,220,140)")
         info.append(
             ":  "
             f"{preview_text}"
@@ -1262,7 +1262,7 @@ class TrimTurnScreen(
 
         info.append(
             "Previous end",
-            style="yellow",
+            style="rgb(255,140,0)",
         )
         info.append(
             ": "
@@ -1272,7 +1272,7 @@ class TrimTurnScreen(
 
         info.append(
             "Next start",
-            style="magenta",
+            style="rgb(255,0,180)",
         )
         info.append(
             ": "
@@ -1329,22 +1329,22 @@ class TrimTurnScreen(
         # Original boundaries.
         plt.vertical_line(
             self.source_start,
-            color="gray",
+            color=(150, 150, 150),
         )
         plt.vertical_line(
             self.source_end,
-            color="gray",
+            color=(150, 150, 150),
         )
 
         # Live preview boundaries.
         if preview is not None:
             plt.vertical_line(
                 preview[0],
-                color="green",
+                color=(0, 220, 140),
             )
             plt.vertical_line(
                 preview[1],
-                color="green",
+                color=(0, 220, 140),
             )
 
         # Neighbouring canonical boundaries.
@@ -1356,7 +1356,7 @@ class TrimTurnScreen(
         ):
             plt.vertical_line(
                 self.previous_end,
-                color="yellow",
+                color=(255, 140, 0),
             )
 
         if (
@@ -1367,7 +1367,7 @@ class TrimTurnScreen(
         ):
             plt.vertical_line(
                 self.next_start,
-                color="magenta",
+                color=(255, 0, 180),
             )
 
         plt.title(
