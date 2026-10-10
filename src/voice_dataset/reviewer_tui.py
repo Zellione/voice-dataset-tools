@@ -2014,6 +2014,7 @@ class ReviewerTUI(App[None]):
         self.embedding_names = embedding_names
         self.context_padding = context_padding
         self._last_playback_active = False
+        self._navigation_refresh_timer = None
 
     def _current_turn(self) -> dict:
         turn = self.session.current()
@@ -2150,25 +2151,69 @@ class ReviewerTUI(App[None]):
             "Playback stopped."
         )
 
+    def _refresh_navigation_header(
+        self,
+    ) -> None:
+        turn_id = self.session.current_turn_id
+        position = self.session.position
+
+        if (
+            turn_id is None
+            or position is None
+        ):
+            return
+
+        self.query_one(
+            "#turn-title",
+            Static,
+        ).update(
+            f"Turn {position} / {self.session.total}  "
+            f"{turn_id}"
+        )
+
+    def _schedule_navigation_refresh(
+        self,
+    ) -> None:
+        self._refresh_navigation_header()
+
+        if (
+            self._navigation_refresh_timer
+            is not None
+        ):
+            self._navigation_refresh_timer.stop()
+
+        self._navigation_refresh_timer = (
+            self.set_timer(
+                0.05,
+                self._finish_navigation_refresh,
+            )
+        )
+
+    def _finish_navigation_refresh(
+        self,
+    ) -> None:
+        self._navigation_refresh_timer = None
+        self._refresh_view()
+
     def action_previous_turn(self) -> None:
         stop()
         self.session.previous()
-        self._refresh_view()
+        self._schedule_navigation_refresh()
 
     def action_next_turn(self) -> None:
         stop()
         self.session.next()
-        self._refresh_view()
+        self._schedule_navigation_refresh()
 
     def action_previous_pending(self) -> None:
         stop()
         self.session.previous_pending()
-        self._refresh_view()
+        self._schedule_navigation_refresh()
 
     def action_next_pending(self) -> None:
         stop()
         self.session.next_pending()
-        self._refresh_view()
+        self._schedule_navigation_refresh()
 
     def action_quit(self) -> None:
         stop()
