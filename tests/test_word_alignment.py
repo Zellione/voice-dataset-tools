@@ -4042,3 +4042,229 @@ def test_effective_alignment_tracks_unusable_lexical_recovery(
         alignment.unresolved_alignment_word_indices
         == (7, 8)
     )
+
+
+def test_post_recovery_conflict_rescue_uses_matching_suffix(
+) -> None:
+    words = [
+        word("Hey", 10.0, 10.2),
+        word("powder", 10.2, 10.6),
+        word("Come", 9.0, 9.5),
+        word("take", 11.2, 11.4),
+        word("a", 11.4, 11.5),
+        word("look", 11.5, 11.7),
+    ]
+
+    recoveries = [
+        LocalAlignmentRecovery(
+            word_indices=(0, 1),
+            region_id="region_1",
+            region_start=10.0,
+            region_end=10.6,
+            text="Hey powder",
+            words=(
+                word("Hey", 10.0, 10.2),
+                word("powder", 10.2, 10.6),
+            ),
+        )
+    ]
+
+    conflicts = [
+        PostRecoveryWordConflict(
+            recovered_word_index=1,
+            conflicting_word_index=2,
+            recovery_region_id="region_1",
+            reason="overlaps_recovered_word",
+        )
+    ]
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_1",
+            start=10.0,
+            end=10.6,
+            speaker="A",
+            whisper_text="Hey Powder",
+            whisper_tokens=("hey", "powder"),
+            text_matches=(),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_2",
+            start=11.0,
+            end=11.8,
+            speaker="A",
+            whisper_text="Let's take a look",
+            whisper_tokens=(
+                "let's",
+                "take",
+                "a",
+                "look",
+            ),
+            text_matches=(),
+        ),
+    ]
+
+    candidates = (
+        word_alignment
+        .build_post_recovery_conflict_rescue_candidates(
+            words,
+            conflicts,
+            evidence,
+            recoveries,
+        )
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].word_indices == (
+        2,
+        3,
+        4,
+        5,
+    )
+    assert candidates[0].region_id == (
+        "region_2"
+    )
+
+
+def test_post_recovery_conflict_rescue_rejects_speaker_change(
+) -> None:
+    words = [
+        word("Hey", 10.0, 10.2),
+        word("powder", 10.2, 10.6),
+        word("Come", 9.0, 9.5),
+        word("take", 11.2, 11.4),
+        word("a", 11.4, 11.5),
+        word("look", 11.5, 11.7),
+    ]
+
+    recoveries = [
+        LocalAlignmentRecovery(
+            word_indices=(0, 1),
+            region_id="region_1",
+            region_start=10.0,
+            region_end=10.6,
+            text="Hey powder",
+            words=(
+                word("Hey", 10.0, 10.2),
+                word("powder", 10.2, 10.6),
+            ),
+        )
+    ]
+
+    conflicts = [
+        PostRecoveryWordConflict(
+            recovered_word_index=1,
+            conflicting_word_index=2,
+            recovery_region_id="region_1",
+            reason="overlaps_recovered_word",
+        )
+    ]
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_1",
+            start=10.0,
+            end=10.6,
+            speaker="A",
+            whisper_text="Hey Powder",
+            whisper_tokens=("hey", "powder"),
+            text_matches=(),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_2",
+            start=11.0,
+            end=11.8,
+            speaker="B",
+            whisper_text="Let's take a look",
+            whisper_tokens=(
+                "let's",
+                "take",
+                "a",
+                "look",
+            ),
+            text_matches=(),
+        ),
+    ]
+
+    assert (
+        word_alignment
+        .build_post_recovery_conflict_rescue_candidates(
+            words,
+            conflicts,
+            evidence,
+            recoveries,
+        )
+        == []
+    )
+
+
+def test_post_recovery_conflict_rescue_rejects_suffix_mismatch(
+) -> None:
+    words = [
+        word("Hey", 10.0, 10.2),
+        word("powder", 10.2, 10.6),
+        word("Come", 9.0, 9.5),
+        word("take", 11.2, 11.4),
+        word("this", 11.4, 11.5),
+        word("look", 11.5, 11.7),
+    ]
+
+    recoveries = [
+        LocalAlignmentRecovery(
+            word_indices=(0, 1),
+            region_id="region_1",
+            region_start=10.0,
+            region_end=10.6,
+            text="Hey powder",
+            words=(
+                word("Hey", 10.0, 10.2),
+                word("powder", 10.2, 10.6),
+            ),
+        )
+    ]
+
+    conflicts = [
+        PostRecoveryWordConflict(
+            recovered_word_index=1,
+            conflicting_word_index=2,
+            recovery_region_id="region_1",
+            reason="overlaps_recovered_word",
+        )
+    ]
+
+    evidence = [
+        AlignmentRegionEvidence(
+            region_id="region_1",
+            start=10.0,
+            end=10.6,
+            speaker="A",
+            whisper_text="Hey Powder",
+            whisper_tokens=("hey", "powder"),
+            text_matches=(),
+        ),
+        AlignmentRegionEvidence(
+            region_id="region_2",
+            start=11.0,
+            end=11.8,
+            speaker="A",
+            whisper_text="Let's take a look",
+            whisper_tokens=(
+                "let's",
+                "take",
+                "a",
+                "look",
+            ),
+            text_matches=(),
+        ),
+    ]
+
+    assert (
+        word_alignment
+        .build_post_recovery_conflict_rescue_candidates(
+            words,
+            conflicts,
+            evidence,
+            recoveries,
+        )
+        == []
+    )

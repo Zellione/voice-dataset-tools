@@ -1081,6 +1081,67 @@ def build_effective_word_alignment(
         )
     )
 
+    conflict_rescue_candidates = (
+        build_post_recovery_conflict_rescue_candidates(
+            effective_words,
+            post_recovery_conflicts,
+            effective_region_evidence,
+            recoveries,
+        )
+    )
+
+    conflict_rescue_recoveries = (
+        recover_alignment_candidates_batch(
+            storage,
+            source_id,
+            conflict_rescue_candidates,
+            effective_words,
+            representation_name=(
+                representation_name
+            ),
+            language=language,
+        )
+    )
+
+    usable_conflict_rescues = [
+        recovery
+        for recovery in conflict_rescue_recoveries
+        if (
+            lexical_geometry_recovery_is_usable(
+                recovery
+            )
+            and alignment_recovery_is_valid(
+                effective_words,
+                recovery,
+            )
+        )
+    ]
+
+    if usable_conflict_rescues:
+        recoveries.extend(
+            usable_conflict_rescues
+        )
+
+        effective_words = apply_alignment_recoveries(
+            words,
+            recoveries,
+        )
+
+        effective_region_evidence = (
+            collect_region_evidence(
+                storage,
+                source_id,
+                effective_words,
+            )
+        )
+
+        post_recovery_conflicts = (
+            find_post_recovery_word_conflicts(
+                effective_words,
+                recoveries,
+            )
+        )
+
     post_recovery_suppressed = set(
         find_unclaimed_post_recovery_words(
             effective_words,
@@ -1598,6 +1659,215 @@ def find_post_recovery_word_conflicts(
         )
 
     return conflicts
+
+
+def build_post_recovery_conflict_rescue_candidates(
+    words: list[dict[str, Any]],
+    conflicts: list[PostRecoveryWordConflict],
+    region_evidence: list[AlignmentRegionEvidence],
+    recoveries: list[LocalAlignmentRecovery],
+) -> list[AlignmentRecoveryCandidate]:
+    recoveries_by_region = {
+        recovery.region_id: recovery
+        for recovery in recoveries
+    }
+
+    evidence_by_region = {
+        evidence.region_id: evidence
+        for evidence in region_evidence
+    }
+
+    ordered_evidence = sorted(
+        region_evidence,
+        key=lambda evidence: (
+            evidence.start,
+            evidence.end,
+            evidence.region_id,
+        ),
+    )
+
+    positions = {
+        evidence.region_id: position
+        for position, evidence in enumerate(
+            ordered_evidence
+        )
+    }
+
+    recovered_word_indices = {
+        index
+        for recovery in recoveries
+        for index in recovery.word_indices
+    }
+
+    candidates: list[
+        AlignmentRecoveryCandidate
+    ] = []
+
+    claimed_word_indices: set[int] = set()
+
+    for conflict in conflicts:
+        source_recovery = recoveries_by_region.get(
+            conflict.recovery_region_id
+        )
+        source_evidence = evidence_by_region.get(
+            conflict.recovery_region_id
+        )
+
+        if (
+            source_recovery is None
+            or source_evidence is None
+        ):
+            continue
+
+        position = positions.get(
+            conflict.recovery_region_id
+        )
+
+        if position is None:
+            continue
+
+        following = ordered_evidence[
+            position + 1:
+        ]
+
+        if not following:
+            continue
+
+        # Only the immediately following lexical region
+        # may rescue a word displaced by the recovery.
+        target_evidence = following[0]
+
+        if (
+            source_evidence.speaker is None
+            or target_evidence.speaker
+            != source_evidence.speaker
+        ):
+            continue
+
+        gap = (
+            target_evidence.start
+            - source_recovery.region_end
+        )
+
+        if (
+            gap < -1e-6
+            or gap > MAX_INTER_WORD_GAP_SECONDS
+        ):
+            continue
+
+        whisper_tokens = (
+            target_evidence.whisper_tokens
+        )
+
+        if len(whisper_tokens) < 3:
+            continue
+
+        start_index = (
+            conflict.conflicting_word_index
+        )
+        end_index = (
+            start_index
+            + len(whisper_tokens)
+            - 1
+        )
+
+        if end_index >= len(words):
+            continue
+
+        word_indices = tuple(
+            range(
+                start_index,
+                end_index + 1,
+            )
+        )
+
+        if (
+            set(word_indices)
+            & recovered_word_indices
+        ):
+            continue
+
+        if (
+            set(word_indices)
+            & claimed_word_indices
+        ):
+            continue
+
+        qwen_token_groups = [
+            _lexical_tokens(
+                str(words[index]["text"])
+            )
+            for index in word_indices
+        ]
+
+        # Keep the mapping deliberately simple: exactly
+        # one lexical token per Qwen word.
+        if any(
+            len(tokens) != 1
+            for tokens in qwen_token_groups
+        ):
+            continue
+
+        qwen_tokens = tuple(
+            tokens[0]
+            for tokens in qwen_token_groups
+        )
+
+        # The conflict word itself may disagree, but the
+        # complete following suffix must agree exactly.
+        if (
+            qwen_tokens[0]
+            == whisper_tokens[0]
+            or qwen_tokens[1:]
+            != whisper_tokens[1:]
+        ):
+            continue
+
+        # At least the shared suffix must already have
+        # local temporal support from the target region.
+        suffix_has_overlap = any(
+            float(words[index]["start"])
+            < target_evidence.end
+            and float(words[index]["end"])
+            > target_evidence.start
+            for index in word_indices[1:]
+        )
+
+        if not suffix_has_overlap:
+            continue
+
+        candidates.append(
+            AlignmentRecoveryCandidate(
+                word_indices=word_indices,
+                start_word_index=start_index,
+                end_word_index=end_index,
+                region_id=(
+                    target_evidence.region_id
+                ),
+                region_start=(
+                    target_evidence.start
+                ),
+                region_end=(
+                    target_evidence.end
+                ),
+                whisper_text=(
+                    target_evidence.whisper_text
+                ),
+                speaker=target_evidence.speaker,
+                issue_word_indices=(
+                    word_indices
+                ),
+                issue_reasons=(
+                    "post_recovery_conflict_rescue",
+                ),
+            )
+        )
+
+        claimed_word_indices.update(
+            word_indices
+        )
+
+    return candidates
 
 
 def find_unclaimed_post_recovery_words(
