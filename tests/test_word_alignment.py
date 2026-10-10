@@ -4268,3 +4268,169 @@ def test_post_recovery_conflict_rescue_rejects_suffix_mismatch(
         )
         == []
     )
+
+
+def test_alignment_recovery_trims_previous_word_overlap(
+) -> None:
+    words = [
+        word(
+            "business",
+            1493.272531,
+            1493.752531,
+        ),
+        word(
+            "Why",
+            1493.752531,
+            1494.232531,
+        ),
+        word(
+            "They've",
+            1494.312531,
+            1494.472531,
+        ),
+    ]
+
+    recovery = LocalAlignmentRecovery(
+        word_indices=(1, 2),
+        region_id="region_000288",
+        region_start=1493.654094,
+        region_end=1494.500000,
+        text="Why They've",
+        words=(
+            word(
+                "Why",
+                1493.654094,
+                1493.894094,
+            ),
+            word(
+                "They've",
+                1494.294094,
+                1494.454094,
+            ),
+        ),
+    )
+
+    assert alignment_recovery_is_valid(
+        words,
+        recovery,
+    )
+
+    trimmed = (
+        word_alignment
+        .trim_alignment_recovery_to_stable_boundaries(
+            words,
+            recovery,
+            recovered_word_indices={1, 2},
+            unstable_word_indices=set(),
+        )
+    )
+
+    assert trimmed is not None
+    assert trimmed.words[0]["start"] == pytest.approx(
+        1493.752531
+    )
+    assert trimmed.words[0]["end"] == pytest.approx(
+        1493.894094
+    )
+    assert trimmed.words[1]["start"] == pytest.approx(
+        1494.294094
+    )
+    assert trimmed.words[1]["end"] == pytest.approx(
+        1494.454094
+    )
+
+
+
+def test_alignment_recovery_allows_clean_neighbor_boundary(
+) -> None:
+    words = [
+        word(
+            "business",
+            1493.272531,
+            1493.752531,
+        ),
+        word(
+            "Why",
+            1493.752531,
+            1494.232531,
+        ),
+        word(
+            "They've",
+            1494.312531,
+            1494.472531,
+        ),
+    ]
+
+    recovery = LocalAlignmentRecovery(
+        word_indices=(1, 2),
+        region_id="region_000288",
+        region_start=1493.752531,
+        region_end=1494.500000,
+        text="Why They've",
+        words=(
+            word(
+                "Why",
+                1493.752531,
+                1493.992531,
+            ),
+            word(
+                "They've",
+                1494.294094,
+                1494.454094,
+            ),
+        ),
+    )
+
+    assert alignment_recovery_is_valid(
+        words,
+        recovery,
+    )
+
+
+def test_alignment_recovery_trims_next_word_overlap(
+) -> None:
+    words = [
+        word(
+            "enforcers",
+            1553.628781,
+            1554.348781,
+        ),
+        word(
+            "So",
+            1554.348781,
+            1554.828781,
+        ),
+    ]
+
+    recovery = LocalAlignmentRecovery(
+        word_indices=(0,),
+        region_id="region_000305",
+        region_start=1552.514094,
+        region_end=1554.454719,
+        text="enforcers",
+        words=(
+            word(
+                "enforcers",
+                1553.634094,
+                1554.354094,
+            ),
+        ),
+    )
+
+    trimmed = (
+        word_alignment
+        .trim_alignment_recovery_to_stable_boundaries(
+            words,
+            recovery,
+            recovered_word_indices={0},
+            unstable_word_indices=set(),
+        )
+    )
+
+    assert trimmed is not None
+    assert trimmed.words[0]["start"] == pytest.approx(
+        1553.634094
+    )
+    assert trimmed.words[0]["end"] == pytest.approx(
+        1554.348781
+    )
