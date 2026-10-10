@@ -18,6 +18,7 @@ class ReviewerAssignmentView:
     status: str
     voice_id: str | None
     character: str | None
+    ignored: bool
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,7 @@ class ReviewerTurnView:
     representation_names: tuple[str, ...]
 
     review_status: str
+    curation_status: str
 
     boundary: ReviewerBoundaryView
     assignment: ReviewerAssignmentView
@@ -182,6 +184,10 @@ def build_reviewer_turn_view(
     review = turn.get("review")
     if not isinstance(review, dict):
         review = {}
+
+    curation = turn.get("curation")
+    if not isinstance(curation, dict):
+        curation = {}
 
     boundary_review = review.get("boundary")
     if not isinstance(boundary_review, dict):
@@ -422,6 +428,7 @@ def build_reviewer_turn_view(
         assignment_voice_id = None
 
     assignment_character = None
+    assignment_ignored = False
 
     if assignment_voice_id is not None:
         voice = voices.get(
@@ -440,6 +447,10 @@ def build_reviewer_turn_view(
                 assignment_character = (
                     character
                 )
+
+            assignment_ignored = bool(
+                voice.get("ignored")
+            )
 
     return ReviewerTurnView(
         turn_id=str(turn["id"]),
@@ -476,6 +487,10 @@ def build_reviewer_turn_view(
         review_status=(
             str(review.get("status") or "pending")
         ),
+        curation_status=str(
+            curation.get("status")
+            or "pending"
+        ),
         boundary=ReviewerBoundaryView(
             status=str(
                 boundary_review.get("status")
@@ -496,6 +511,7 @@ def build_reviewer_turn_view(
             status=assignment_status,
             voice_id=assignment_voice_id,
             character=assignment_character,
+            ignored=assignment_ignored,
         ),
         automatic_pipeline=ReviewerAutomaticPipelineView(
             status=auto_status,

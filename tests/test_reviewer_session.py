@@ -1851,3 +1851,59 @@ def test_session_current_view_defaults_to_no_speaker_review_mode(
 
     assert view is not None
     assert view.speaker_review_mode == "none"
+
+
+def test_session_creates_and_assigns_ignored_voice(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    voice = session.create_and_assign_voice(
+        character="Minor character",
+        language="en",
+        ignored=True,
+    )
+
+    assert voice["ignored"] is True
+
+    turn = session.current()
+
+    assert turn["assignment"]["status"] == "assigned"
+    assert (
+        turn["assignment"]["voice_id"]
+        == voice["id"]
+    )
+
+
+def test_session_ignores_assigned_voice(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    voice = create_voice(
+        storage,
+        character="Minor character",
+        language="en",
+    )
+
+    session = ReviewerSession(storage)
+    session.assign_voice(voice["id"])
+
+    result = session.ignore_assigned_voice()
+
+    assert result["id"] == voice["id"]
+    assert result["ignored"] is True

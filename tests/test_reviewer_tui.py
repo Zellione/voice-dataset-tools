@@ -532,14 +532,17 @@ async def test_voice_picker_shows_candidates_and_voices(
 
         screen = app.screen
 
-        content = screen.query_one(
-            "#voice-content",
-            Static,
+        options = screen.query_one(
+            "#voice-options",
+            OptionList,
         )
 
-        rendered = str(content.render())
+        assert options.option_count == 1
 
-        assert "All voices" in rendered
+        option = options.get_option_at_index(0)
+
+        rendered = str(option.prompt)
+
         assert "voice_001" in rendered
         assert "Silco" in rendered
 
@@ -3452,7 +3455,7 @@ async def test_reviewer_tui_shows_turn_timing_in_title(
 
         assert "Turn 1 / 1" in title
         assert "turn_000001" in title
-        assert "1.000-2.000" in title
+        assert "00:01.000-00:02.000" in title
         assert "1.000s" in title
 
 
@@ -4183,3 +4186,25 @@ async def test_voice_picker_prefill_selects_top_candidate(
         )
 
         assert selected.id == "voice_002"
+
+
+def test_format_source_time_under_one_hour():
+    from voice_dataset.reviewer_tui import (
+        format_source_time,
+    )
+
+    assert (
+        format_source_time(835.669)
+        == "13:55.669"
+    )
+
+
+def test_format_source_time_over_one_hour():
+    from voice_dataset.reviewer_tui import (
+        format_source_time,
+    )
+
+    assert (
+        format_source_time(4091.123)
+        == "01:08:11.123"
+    )

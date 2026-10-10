@@ -34,6 +34,43 @@ from .reviewer_session import ReviewerSession
 from .reviewer_view import ReviewerTurnView
 
 
+def format_source_time(
+    seconds: float,
+) -> str:
+    milliseconds = round(
+        max(0.0, seconds) * 1000
+    )
+
+    total_seconds, milliseconds = divmod(
+        milliseconds,
+        1000,
+    )
+
+    minutes_total, seconds_value = divmod(
+        total_seconds,
+        60,
+    )
+
+    hours, minutes = divmod(
+        minutes_total,
+        60,
+    )
+
+    if hours:
+        return (
+            f"{hours:02d}:"
+            f"{minutes:02d}:"
+            f"{seconds_value:02d}."
+            f"{milliseconds:03d}"
+        )
+
+    return (
+        f"{minutes:02d}:"
+        f"{seconds_value:02d}."
+        f"{milliseconds:03d}"
+    )
+
+
 class HelpScreen(ModalScreen[None]):
     CSS = """
     HelpScreen {
@@ -95,6 +132,7 @@ class HelpScreen(ModalScreen[None]):
                     "",
                     "Speaker",
                     "  v         Assign/create voice",
+                    "  g         Ignore assigned voice",
                     "  u         Mark voice unknown",
                     "  i         Reject turn",
                     "",
@@ -122,6 +160,7 @@ class HelpScreen(ModalScreen[None]):
 class NewVoiceRequest:
     character: str | None
     language: str | None
+    ignored: bool = False
 
 @dataclass(frozen=True)
 class TrimTurnRequest:
@@ -170,10 +209,22 @@ class NewVoiceScreen(
         ),
     ]
 
+    def __init__(
+        self,
+        *,
+        ignored: bool = False,
+    ) -> None:
+        super().__init__()
+        self.ignored = ignored
+
     def compose(self) -> ComposeResult:
         with Vertical(id="new-voice-dialog"):
             yield Static(
-                "Create Voice",
+                (
+                    "Create Ignored Voice"
+                    if self.ignored
+                    else "Create Voice"
+                ),
                 id="new-voice-title",
             )
 
@@ -259,6 +310,7 @@ class NewVoiceScreen(
             NewVoiceRequest(
                 character=character_value or None,
                 language=language_value or None,
+                ignored=self.ignored,
             )
         )
 
@@ -353,6 +405,11 @@ class VoicePickerScreen(
             "New Voice",
         ),
         Binding(
+            "g",
+            "new_ignored_voice",
+            "New Ignored",
+        ),
+        Binding(
             "escape",
             "cancel",
             "Cancel",
@@ -373,20 +430,13 @@ class VoicePickerScreen(
             ),
             "",
             "Candidate voices are listed first.",
-            "",
-            "All voices",
         ]
 
-        if self.voices:
-            for voice in self.voices:
-                summary_lines.append(
-                    f"  {voice['id']}  "
-                    f"{voice.get('character') or '-'}"
-                )
-        else:
-            summary_lines.append(
-                "  No voice profiles."
-            )
+        if not self.voices:
+            summary_lines.extend([
+                "",
+                "No voice profiles.",
+            ])
 
         options: list[Option] = []
 
@@ -400,13 +450,26 @@ class VoicePickerScreen(
                 or "-"
             )
 
-            marker = ""
+            markers: list[str] = []
 
             if voice_id == top_candidate_id:
                 if self.review_mode == "prefill":
-                    marker = "  [prefill]"
+                    markers.append("prefill")
                 elif self.review_mode == "suggest":
-                    marker = "  [suggested]"
+                    markers.append("suggested")
+
+            if bool(voice.get("ignored")):
+                markers.append("ignored")
+
+            marker = (
+                "  "
+                + " ".join(
+                    f"[{item}]"
+                    for item in markers
+                )
+                if markers
+                else ""
+            )
 
             options.append(
                 Option(
@@ -438,10 +501,12 @@ class VoicePickerScreen(
             (
                 "Enter Assign   "
                 "n New Voice   "
+                "g New Ignored   "
                 "Esc Cancel"
                 if self.voice_ids
                 else (
                     "n New Voice   "
+                    "g New Ignored   "
                     "Esc Cancel"
                 )
             ),
@@ -482,6 +547,14 @@ class VoicePickerScreen(
     def action_new_voice(self) -> None:
         self.app.push_screen(
             NewVoiceScreen(),
+            self._new_voice_created,
+        )
+
+    def action_new_ignored_voice(self) -> None:
+        self.app.push_screen(
+            NewVoiceScreen(
+                ignored=True,
+            ),
             self._new_voice_created,
         )
 
@@ -1101,6 +1174,11 @@ class ReviewerTUI(App[None]):
             "Voice",
         ),
         Binding(
+            "g",
+            "ignore_assigned_voice",
+            "Ignore Voice",
+        ),
+        Binding(
             "a",
             "mark_reviewed",
             "Reviewed",
@@ -1180,6 +1258,7 @@ class ReviewerTUI(App[None]):
 
     SECONDARY_SHORTCUT_ACTIONS = {
         "assign_voice",
+        "ignore_assigned_voice",
         "mark_reviewed",
         "mark_pending",
         "mark_unknown",
@@ -1560,12 +1639,17 @@ class ReviewerTUI(App[None]):
                     .create_and_assign_voice(
                         character=result.character,
                         language=result.language,
+                        ignored=result.ignored,
                     )
                 )
 
                 message = (
-                    "Created and assigned voice: "
-                    f"{voice['id']}"
+                    (
+                        "Created and assigned ignored voice: "
+                        if result.ignored
+                        else "Created and assigned voice: "
+                    )
+                    + str(voice["id"])
                 )
             else:
                 self.session.assign_voice(
@@ -1613,6 +1697,30 @@ class ReviewerTUI(App[None]):
             ),
             self._voice_selected,
         )
+
+    def action_ignore_assigned_voice(
+        self,
+    ) -> None:
+        try:
+            voice = (
+                self.session
+                .ignore_assigned_voice()
+            )
+
+            self._refresh_view()
+            self._set_status(
+                "Voice ignored: "
+                f"{voice['id']}"
+            )
+        except (
+            ValueError,
+            KeyError,
+            RuntimeError,
+            OSError,
+        ) as exc:
+            self._set_status(
+                f"Ignore voice failed: {exc}"
+            )
 
     def action_mark_reviewed(self) -> None:
         try:
@@ -2463,6 +2571,42 @@ class ReviewerTUI(App[None]):
                 != "reviewed"
             )
 
+        if action == "ignore_assigned_voice":
+            turn = self.session.current()
+
+            if turn is None:
+                return False
+
+            assignment = (
+                turn.get("assignment")
+                or {}
+            )
+
+            if assignment.get("status") != "assigned":
+                return False
+
+            voice_id = assignment.get(
+                "voice_id"
+            )
+
+            if (
+                not isinstance(voice_id, str)
+                or not voice_id
+            ):
+                return False
+
+            voice = (
+                self.session.storage
+                .get_voice(voice_id)
+            )
+
+            return (
+                isinstance(voice, dict)
+                and not bool(
+                    voice.get("ignored")
+                )
+            )
+
         if action == "mark_unknown":
             turn = self.session.current()
 
@@ -2633,7 +2777,8 @@ class ReviewerTUI(App[None]):
         ).update(
             f"Turn {view.position} / {view.total}  "
             f"{view.turn_id}   "
-            f"{view.start:.3f}-{view.end:.3f}  "
+            f"{format_source_time(view.start)}-"
+            f"{format_source_time(view.end)}  "
             f"{view.duration:.3f}s"
         )
 
@@ -2673,6 +2818,10 @@ class ReviewerTUI(App[None]):
                 f"{view.review_status}"
             ),
             (
+                "Curation:  "
+                f"{view.curation_status}"
+            ),
+            (
                 "Boundary:  "
                 f"{view.boundary.status}"
             ),
@@ -2693,6 +2842,21 @@ class ReviewerTUI(App[None]):
                         and view.assignment.voice_id
                     )
                     else view.assignment.status
+                )
+            ),
+            (
+                "Voice:     "
+                + (
+                    "ignored"
+                    if view.assignment.ignored
+                    else (
+                        "active"
+                        if (
+                            view.assignment.status
+                            == "assigned"
+                        )
+                        else "-"
+                    )
                 )
             ),
             (

@@ -509,3 +509,77 @@ def test_build_reviewer_turn_view_maps_speaker_review_mode():
     )
 
     assert view.speaker_review_mode == "prefill"
+
+
+def test_reviewer_view_marks_assigned_ignored_voice():
+    turn = {
+        "id": "turn_000001",
+        "source_id": "source_001",
+        "source_start": 1.0,
+        "source_end": 2.0,
+        "assignment": {
+            "status": "assigned",
+            "voice_id": "voice_004",
+            "method": "manual",
+            "confidence": None,
+        },
+    }
+
+    view = build_reviewer_turn_view(
+        turn,
+        position=1,
+        total=1,
+        voices={
+            "voice_004": {
+                "id": "voice_004",
+                "character": "Minor Character",
+                "ignored": True,
+            },
+        },
+        speaker_candidates=[],
+    )
+
+    assert view.assignment.status == "assigned"
+    assert view.assignment.voice_id == "voice_004"
+    assert (
+        view.assignment.character
+        == "Minor Character"
+    )
+    assert view.assignment.ignored is True
+
+
+def test_reviewer_view_maps_curation_status():
+    view = build_reviewer_turn_view(
+        {
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 2.0,
+            "curation": {
+                "status": "rejected",
+            },
+        },
+        position=1,
+        total=1,
+        voices={},
+        speaker_candidates=[],
+    )
+
+    assert view.curation_status == "rejected"
+
+
+def test_reviewer_view_defaults_curation_to_pending():
+    view = build_reviewer_turn_view(
+        {
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 2.0,
+        },
+        position=1,
+        total=1,
+        voices={},
+        speaker_candidates=[],
+    )
+
+    assert view.curation_status == "pending"

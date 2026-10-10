@@ -29,6 +29,7 @@ from .voices import (
     assign_turn,
     create_voice,
     mark_turn_unknown,
+    set_voice_ignored,
 )
 from .speaker_candidates import (
     SpeakerCandidate,
@@ -258,6 +259,7 @@ class ReviewerSession:
         *,
         character: str | None = None,
         language: str | None = None,
+        ignored: bool = False,
     ) -> dict[str, Any]:
         turn_id = self._require_current_id()
 
@@ -265,6 +267,7 @@ class ReviewerSession:
             self.storage,
             character=character,
             language=language,
+            ignored=ignored,
         )
 
         assign_turn(
@@ -274,6 +277,36 @@ class ReviewerSession:
         )
 
         return voice
+
+    def ignore_assigned_voice(
+        self,
+    ) -> dict[str, Any]:
+        turn = self.current()
+
+        if turn is None:
+            raise ValueError(
+                "Reviewer session has no current turn"
+            )
+
+        assignment = turn.get("assignment") or {}
+
+        if assignment.get("status") != "assigned":
+            raise ValueError(
+                "Current turn has no assigned voice"
+            )
+
+        voice_id = assignment.get("voice_id")
+
+        if not isinstance(voice_id, str) or not voice_id:
+            raise ValueError(
+                "Current turn has invalid assigned voice"
+            )
+
+        return set_voice_ignored(
+            self.storage,
+            voice_id,
+            True,
+        )
 
     def mark_unknown(self) -> dict[str, Any]:
         return mark_turn_unknown(

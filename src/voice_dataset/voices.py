@@ -77,10 +77,31 @@ def assign_turn(
 
         return record
 
-    return storage.turns.update(
+    updated = storage.turns.update(
         turn_id,
         update,
     )
+
+    if bool(voice.get("ignored")):
+        def reject(
+            record: dict[str, Any],
+        ) -> dict[str, Any]:
+            curation = dict(
+                record.get("curation")
+                or {}
+            )
+
+            curation["status"] = "rejected"
+            record["curation"] = curation
+
+            return record
+
+        updated = storage.update_turn(
+            turn_id,
+            reject,
+        )
+
+    return updated
 
 
 def mark_turn_unknown(
@@ -136,7 +157,52 @@ def set_voice_ignored(
         record["ignored"] = ignored
         return record
 
-    return storage.voices.update(
+    voice = storage.voices.update(
         voice_id,
         update,
     )
+
+    if ignored:
+        for turn in storage.turns.load():
+            assignment = turn.get(
+                "assignment"
+            )
+
+            if not isinstance(
+                assignment,
+                dict,
+            ):
+                continue
+
+            if (
+                assignment.get("status")
+                != "assigned"
+                or assignment.get("voice_id")
+                != voice_id
+            ):
+                continue
+
+            turn_id = turn.get("id")
+
+            if not isinstance(turn_id, str):
+                continue
+
+            def reject(
+                record: dict[str, Any],
+            ) -> dict[str, Any]:
+                curation = dict(
+                    record.get("curation")
+                    or {}
+                )
+
+                curation["status"] = "rejected"
+                record["curation"] = curation
+
+                return record
+
+            storage.update_turn(
+                turn_id,
+                reject,
+            )
+
+    return voice
