@@ -103,7 +103,6 @@ def test_ignoring_voice_rejects_all_assigned_turns(
             == "rejected"
         )
 
-
 def test_rejected_turn_does_not_ignore_voice(
     tmp_path,
 ):
@@ -114,4 +113,35 @@ def test_rejected_turn_does_not_ignore_voice(
         character="Main Character",
     )
 
-    assert voice["ignored"] is False
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "record_type": "turn",
+            "id": "turn_001",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 2.0,
+            "assignment": {
+                "status": "assigned",
+                "voice_id": voice["id"],
+                "method": "manual",
+                "confidence": None,
+            },
+            "curation": {
+                "status": "rejected",
+            },
+        }
+    )
+
+    turn = storage.get_turn(
+        "turn_001"
+    )
+    stored_voice = storage.get_voice(
+        voice["id"]
+    )
+
+    assert (
+        turn["curation"]["status"]
+        == "rejected"
+    )
+    assert stored_voice["ignored"] is False
