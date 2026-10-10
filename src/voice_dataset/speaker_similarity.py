@@ -90,17 +90,12 @@ def _embedding_path(
     return path
 
 
-def load_turn_embedding(
+def _load_embedding_from_turn(
     storage: DatasetStorage,
-    turn_id: str,
+    turn: dict[str, Any],
     embedding_name: str,
 ) -> tuple[np.ndarray, dict[str, Any]]:
-    turn = storage.get_turn(turn_id)
-
-    if turn is None:
-        raise KeyError(
-            f"Unknown turn: {turn_id}"
-        )
+    turn_id = str(turn.get("id"))
 
     reference = _embedding_reference(
         turn,
@@ -148,7 +143,7 @@ def load_turn_embedding(
     if vector.shape[0] != dimension:
         raise ValueError(
             f"{turn_id}: embedding dimension does not "
-            "match metadata"
+            f"match metadata"
         )
 
     if not np.issubdtype(
@@ -162,10 +157,30 @@ def load_turn_embedding(
     if not np.all(np.isfinite(vector)):
         raise ValueError(
             f"{turn_id}: embedding contains "
-            "non-finite values"
+            f"non-finite values"
         )
 
     return vector, reference
+
+
+def load_turn_embedding(
+    storage: DatasetStorage,
+    turn_id: str,
+    embedding_name: str,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    turn = storage.get_turn(turn_id)
+
+    if turn is None:
+        raise KeyError(
+            f"Unknown turn: {turn_id}"
+        )
+
+    return _load_embedding_from_turn(
+        storage,
+        turn,
+        embedding_name,
+    )
+
 
 
 def compare_turn_embeddings(
@@ -267,32 +282,76 @@ def rank_voice_matches(
     turn_id: str,
     embedding_name: str,
 ) -> list[VoiceMatch]:
-    query_turn = storage.get_turn(turn_id)
+    turns = storage.turns.load()
+
+    query_turn = next(
+        (
+            turn
+            for turn in turns
+            if turn.get("id") == turn_id
+        ),
+        None,
+    )
 
     if query_turn is None:
         raise KeyError(
             f"Unknown turn: {turn_id}"
         )
 
-    # Validate the query embedding up front.
-    load_turn_embedding(
-        storage,
-        turn_id,
-        embedding_name,
+    query_vector, query_reference = (
+        _load_embedding_from_turn(
+            storage,
+            query_turn,
+            embedding_name,
+        )
     )
+
+    query_encoder = query_reference["encoder"]
+    query_dimension = query_reference["dimension"]
+    query_metadata = query_reference.get(
+        "metadata"
+    )
+    query_representation = query_reference.get(
+        "representation"
+    )
+
+    if not isinstance(query_metadata, dict):
+        raise ValueError(
+            f"{turn_id}: embedding has invalid metadata"
+        )
+
+    query_model = query_metadata.get("model")
+
+    query_norm = float(
+        np.linalg.norm(query_vector)
+    )
+
+    if query_norm == 0.0:
+        raise ValueError(
+            "Cannot compare zero-norm embedding vectors"
+        )
+
+    voices = {
+        str(voice["id"]): voice
+        for voice in storage.voices.load()
+    }
 
     matches_by_voice: dict[
         str,
         list[VoiceTurnMatch],
     ] = {}
 
-    for reference_turn in storage.turns.load():
-        reference_turn_id = reference_turn.get("id")
+    for reference_turn in turns:
+        reference_turn_id = reference_turn.get(
+            "id"
+        )
 
         if reference_turn_id == turn_id:
             continue
 
-        assignment = reference_turn.get("assignment")
+        assignment = reference_turn.get(
+            "assignment"
+        )
 
         if not isinstance(assignment, dict):
             continue
@@ -308,7 +367,7 @@ def rank_voice_matches(
         if not isinstance(voice_id, str) or not voice_id:
             continue
 
-        voice = storage.get_voice(voice_id)
+        voice = voices.get(voice_id)
 
         if voice is None:
             raise ValueError(
@@ -319,7 +378,9 @@ def rank_voice_matches(
         if voice.get("ignored") is True:
             continue
 
-        embeddings = reference_turn.get("embeddings")
+        embeddings = reference_turn.get(
+            "embeddings"
+        )
 
         if not isinstance(embeddings, dict):
             continue
@@ -327,11 +388,76 @@ def rank_voice_matches(
         if embedding_name not in embeddings:
             continue
 
-        similarity = compare_turn_embeddings(
-            storage,
-            turn_id,
-            reference_turn_id,
-            embedding_name,
+        reference_vector, reference = (
+            _load_embedding_from_turn(
+                storage,
+                reference_turn,
+                embedding_name,
+            )
+        )
+
+        if reference["encoder"] != query_encoder:
+            raise ValueError(
+                "Cannot compare embeddings from "
+                "different encoders"
+            )
+
+        if reference["dimension"] != query_dimension:
+            raise ValueError(
+                "Cannot compare embeddings with "
+                "different dimensions"
+            )
+
+        reference_metadata = reference.get(
+            "metadata"
+        )
+
+        if not isinstance(
+            reference_metadata,
+            dict,
+        ):
+            raise ValueError(
+                f"{reference_turn_id}: embedding has "
+                f"invalid metadata"
+            )
+
+        if (
+            reference_metadata.get("model")
+            != query_model
+        ):
+            raise ValueError(
+                "Cannot compare embeddings from "
+                "different models"
+            )
+
+        if (
+            reference.get("representation")
+            != query_representation
+        ):
+            raise ValueError(
+                "Cannot compare embeddings from "
+                "different representations"
+            )
+
+        reference_norm = float(
+            np.linalg.norm(reference_vector)
+        )
+
+        if reference_norm == 0.0:
+            raise ValueError(
+                "Cannot compare zero-norm "
+                "embedding vectors"
+            )
+
+        similarity = float(
+            np.dot(
+                query_vector,
+                reference_vector,
+            )
+            / (
+                query_norm
+                * reference_norm
+            )
         )
 
         source_id = reference_turn.get(
@@ -346,8 +472,10 @@ def rank_voice_matches(
             [],
         ).append(
             VoiceTurnMatch(
-                turn_id=reference_turn_id,
-                similarity=similarity.similarity,
+                turn_id=str(
+                    reference_turn_id
+                ),
+                similarity=similarity,
                 source_id=source_id,
             )
         )
