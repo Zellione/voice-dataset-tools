@@ -12,6 +12,7 @@ from voice_dataset.turn_curation import (
     trim_and_prepare_turn,
     _project_split,
     migrate_legacy_ignored_turns,
+    mark_turn_rejected,
 )
 
 
@@ -2508,3 +2509,57 @@ def test_manual_split_assigns_crossing_word_to_one_child(
         set(left.projection.word_indices)
         & set(right.projection.word_indices)
     )
+
+
+def test_mark_turn_rejected_also_marks_reviewed(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 2.0,
+            "source_regions": [],
+            "language": "en",
+            "transcript": "reject me",
+            "representations": {},
+            "embeddings": {},
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+                "confidence": None,
+            },
+            "curation": {
+                "status": "pending",
+            },
+            "review": {
+                "status": "pending",
+                "boundary": {
+                    "status": "complete",
+                },
+            },
+            "metadata": {},
+        }
+    )
+
+    result = mark_turn_rejected(
+        storage,
+        "turn_000001",
+    )
+
+    assert result["curation"] == {
+        "status": "rejected",
+    }
+
+    assert result["review"]["status"] == "reviewed"
+
+    # Other review metadata must survive.
+    assert result["review"]["boundary"] == {
+        "status": "complete",
+    }

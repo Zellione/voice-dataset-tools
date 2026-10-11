@@ -1020,10 +1020,29 @@ def mark_turn_rejected(
     storage: DatasetStorage,
     turn_id: str,
 ) -> dict[str, Any]:
-    return set_turn_curation_status(
-        storage,
+    if storage.get_turn(turn_id) is None:
+        raise KeyError(
+            f"Turn does not exist: {turn_id}"
+        )
+
+    def update(
+        record: dict[str, Any],
+    ) -> dict[str, Any]:
+        record["curation"] = {
+            "status": "rejected",
+        }
+
+        review = dict(
+            record.get("review") or {}
+        )
+        review["status"] = "reviewed"
+        record["review"] = review
+
+        return record
+
+    return storage.update_turn(
         turn_id,
-        "rejected",
+        update,
     )
 
 
