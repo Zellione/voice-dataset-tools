@@ -4428,3 +4428,77 @@ def test_build_split_turn_candidates_collapses_diarization_jitter(
     assert candidate.right_start == pytest.approx(
         1995.48284375
     )
+
+
+@pytest.mark.asyncio
+async def test_trim_screen_space_previews_while_input_is_focused(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    played = []
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui.play_file_region",
+        lambda path, start, end:
+            played.append(
+                (
+                    path,
+                    start,
+                    end,
+                )
+            ),
+    )
+
+    audio_path = tmp_path / "review.wav"
+
+    async with app.run_test() as pilot:
+        app.push_screen(
+            TrimTurnScreen(
+                source_start=1.0,
+                source_end=2.0,
+                audio_path=audio_path,
+            )
+        )
+        await pilot.pause()
+
+        assert isinstance(
+            app.screen,
+            TrimTurnScreen,
+        )
+
+        start_input = app.screen.query_one(
+            "#trim-start",
+            Input,
+        )
+
+        assert start_input.has_focus
+
+        await pilot.press("space")
+        await pilot.pause()
+
+        assert played == [
+            (
+                audio_path,
+                1.0,
+                2.0,
+            )
+        ]
+
+        # Space must not be inserted into the numeric field.
+        assert start_input.value == "1.000000"

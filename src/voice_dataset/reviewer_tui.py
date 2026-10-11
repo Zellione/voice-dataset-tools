@@ -1928,6 +1928,20 @@ class SplitTurnScreen(
         stop()
 
 
+class BoundaryInput(Input):
+    def on_key(self, event) -> None:
+        if event.key != "space":
+            return
+
+        event.stop()
+        event.prevent_default()
+
+        screen = self.screen
+
+        if isinstance(screen, TrimTurnScreen):
+            screen.action_preview()
+
+
 class TrimTurnScreen(
     ModalScreen[TrimTurnRequest | None]
 ):
@@ -2062,7 +2076,7 @@ class TrimTurnScreen(
             ):
                 with Vertical():
                     yield Static("Start")
-                    yield Input(
+                    yield BoundaryInput(
                         value=(
                             f"{self.source_start:.6f}"
                         ),
@@ -2071,7 +2085,7 @@ class TrimTurnScreen(
 
                 with Vertical():
                     yield Static("End")
-                    yield Input(
+                    yield BoundaryInput(
                         value=(
                             f"{self.source_end:.6f}"
                         ),
