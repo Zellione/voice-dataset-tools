@@ -1297,6 +1297,18 @@ class SplitTurnScreen(
             key_display="Space",
         ),
         Binding(
+            "comma",
+            "preview_before",
+            "Before",
+            key_display=",",
+        ),
+        Binding(
+            "full_stop",
+            "preview_after",
+            "After",
+            key_display=".",
+        ),
+        Binding(
             "s",
             "stop_audio",
             "Stop",
@@ -1402,7 +1414,9 @@ class SplitTurnScreen(
                 "↑/↓ Candidate   "
                 "←/→ ±10ms   "
                 "Shift+←/→ ±50ms   "
-                "Space Preview   "
+                "Space Around   "
+                ", Before   "
+                ". After   "
                 "Enter Split   "
                 "Esc Cancel"
             ),
@@ -1847,22 +1861,13 @@ class SplitTurnScreen(
             )
         )
 
-    def action_preview(self) -> None:
+    def _play_split_window(
+        self,
+        start: float,
+        end: float,
+    ) -> None:
         if self.audio_path is None:
             return
-
-        candidate = (
-            self._selected_candidate()
-        )
-
-        if candidate is None:
-            return
-
-        if self.split_time is None:
-            return
-
-        start = self.split_time - 0.75
-        end = self.split_time + 0.75
 
         if self.source_start is not None:
             start = max(
@@ -1883,6 +1888,33 @@ class SplitTurnScreen(
             self.audio_path,
             start,
             end,
+        )
+
+    def action_preview(self) -> None:
+        if self.split_time is None:
+            return
+
+        self._play_split_window(
+            self.split_time - 0.75,
+            self.split_time + 0.75,
+        )
+
+    def action_preview_before(self) -> None:
+        if self.split_time is None:
+            return
+
+        self._play_split_window(
+            self.split_time - 0.75,
+            self.split_time,
+        )
+
+    def action_preview_after(self) -> None:
+        if self.split_time is None:
+            return
+
+        self._play_split_window(
+            self.split_time,
+            self.split_time + 0.75,
         )
 
     def action_stop_audio(self) -> None:

@@ -2259,7 +2259,9 @@ async def test_split_screen_has_contextual_shortcuts(
 
         rendered = str(shortcuts.render())
 
-        assert "Space Preview" in rendered
+        assert "Space Around" in rendered
+        assert ", Before" in rendered
+        assert ". After" in rendered
         assert "Enter Split" in rendered
         assert "Esc Cancel" in rendered
 
