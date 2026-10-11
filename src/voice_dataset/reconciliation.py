@@ -1195,6 +1195,25 @@ def split_turn(
 
     new_turn_id = storage.next_turn_id()
 
+    original_metadata = (
+        original.get("metadata")
+        or {}
+    )
+
+    if not isinstance(
+        original_metadata,
+        dict,
+    ):
+        raise ValueError(
+            f"{turn_id}: metadata must be a dict"
+        )
+
+    automatic_pipeline = (
+        original_metadata.get(
+            "automatic_pipeline"
+        )
+    )
+
     def fresh_turn(
         *,
         record_id: str,
@@ -1229,6 +1248,14 @@ def split_turn(
         if boundary_evidence is not None:
             metadata["boundary_evidence"] = (
                 boundary_evidence
+            )
+
+        if isinstance(
+            automatic_pipeline,
+            dict,
+        ):
+            metadata["automatic_pipeline"] = dict(
+                automatic_pipeline
             )
 
         return TurnRecord(

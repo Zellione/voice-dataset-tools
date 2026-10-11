@@ -2187,3 +2187,105 @@ def test_project_split_uses_manual_split_time_for_child_geometry(
     assert right.projection.source_end == pytest.approx(
         2.0
     )
+
+
+def test_manual_split_preserves_auto_review_status_on_both_children(
+    tmp_path,
+    monkeypatch,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    storage.regions.append(
+        {
+            "schema_version": 1,
+            "record_type": "region",
+            "id": "region_000001",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 1.4,
+        }
+    )
+
+    storage.regions.append(
+        {
+            "schema_version": 1,
+            "record_type": "region",
+            "id": "region_000002",
+            "source_id": "source_001",
+            "source_start": 1.4,
+            "source_end": 2.0,
+        }
+    )
+
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 2.0,
+            "source_regions": [
+                "region_000001",
+                "region_000002",
+            ],
+            "language": "en",
+            "transcript": "hello there general",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+                "confidence": None,
+            },
+            "curation": {
+                "status": "pending",
+            },
+            "review": {
+                "status": "pending",
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {
+                "creation": {
+                    "method": "continuous_asr_utterance",
+                },
+                "automatic_pipeline": {
+                    "status": "review",
+                    "reasons": [
+                        "unresolved_speaker",
+                    ],
+                },
+            },
+        }
+    )
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        lambda *args, **kwargs: None,
+    )
+
+    left, right = split_and_prepare_turn(
+        storage,
+        "turn_000001",
+        after_region_id="region_000001",
+        split_time=1.55,
+    )
+
+    assert (
+        left["metadata"]["automatic_pipeline"]["status"]
+        == "review"
+    )
+    assert (
+        right["metadata"]["automatic_pipeline"]["status"]
+        == "review"
+    )
+
+    assert (
+        left["metadata"]["automatic_pipeline"]["reasons"]
+        == ["unresolved_speaker"]
+    )
+    assert (
+        right["metadata"]["automatic_pipeline"]["reasons"]
+        == ["unresolved_speaker"]
+    )
