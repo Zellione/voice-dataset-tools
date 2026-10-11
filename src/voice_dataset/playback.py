@@ -161,6 +161,7 @@ def play_file(path: Path) -> None:
     sd.play(
         audio,
         sample_rate,
+        latency="high",
     )
 
 
@@ -224,6 +225,7 @@ def play_file_region(
     sd.play(
         audio,
         sample_rate,
+        latency="high",
     )
 
     return actual_start, actual_end

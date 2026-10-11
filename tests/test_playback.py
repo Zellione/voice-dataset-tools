@@ -234,9 +234,12 @@ def test_play_turn_context_clamps_start_and_end(
     def fake_play(
         audio,
         sample_rate,
+        *,
+        latency=None,
     ):
         played["frames"] = len(audio)
         played["sample_rate"] = sample_rate
+        played["latency"] = latency
 
     monkeypatch.setattr(
         playback.sd,
@@ -283,6 +286,7 @@ def test_play_turn_context_clamps_start_and_end(
     assert actual_end == pytest.approx(3.0)
 
     assert played["sample_rate"] == sample_rate
+    assert played["latency"] == "high"
     assert played["frames"] == sample_rate * 3
 
 

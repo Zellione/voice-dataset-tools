@@ -3136,3 +3136,96 @@ def test_manual_time_split_can_split_single_diarization_region(
             ]
         )
     ) == set()
+
+
+def test_manual_merge_marks_boundaries_as_manual(
+    tmp_path,
+    monkeypatch,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    for region_id, start, end in (
+        ("region_000001", 1.0, 1.4),
+        ("region_000002", 1.4, 1.8),
+    ):
+        storage.regions.append(
+            {
+                "schema_version": 1,
+                "record_type": "region",
+                "id": region_id,
+                "source_id": "source_001",
+                "source_start": start,
+                "source_end": end,
+            }
+        )
+
+    for turn_id, start, end, region_id, text in (
+        (
+            "turn_000001",
+            1.0,
+            1.4,
+            "region_000001",
+            "hello",
+        ),
+        (
+            "turn_000002",
+            1.4,
+            1.8,
+            "region_000002",
+            "there",
+        ),
+    ):
+        storage.turns.append(
+            {
+                "schema_version": 2,
+                "record_type": "turn",
+                "id": turn_id,
+                "source_id": "source_001",
+                "source_start": start,
+                "source_end": end,
+                "source_regions": [region_id],
+                "language": "en",
+                "transcript": text,
+                "assignment": {
+                    "status": "unknown",
+                    "voice_id": None,
+                    "method": None,
+                    "confidence": None,
+                },
+                "curation": {
+                    "status": "pending",
+                },
+                "review": {
+                    "status": "pending",
+                },
+                "representations": {},
+                "embeddings": {},
+                "metadata": {},
+            }
+        )
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        lambda *args, **kwargs: None,
+    )
+
+    merged = merge_and_prepare_turns(
+        storage,
+        [
+            "turn_000001",
+            "turn_000002",
+        ],
+    )
+
+    assert merged["metadata"]["creation"] == {
+        "method": "manual_merge",
+        "source_turn_ids": [
+            "turn_000001",
+            "turn_000002",
+        ],
+    }
+
+    assert merged["metadata"]["boundary_curation"] == {
+        "method": "manual",
+    }

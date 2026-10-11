@@ -883,7 +883,10 @@ def merge_turns(
         "creation": {
             "method": "manual_merge",
             "source_turn_ids": list(turn_ids),
-        }
+        },
+        "boundary_curation": {
+            "method": "manual",
+        },
     }
 
     retained_metadata = (
