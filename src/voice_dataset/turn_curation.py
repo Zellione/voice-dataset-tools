@@ -741,15 +741,6 @@ def trim_and_prepare_turn(
         language=language,
     )
 
-    trimmed_projection = project_curated_turn(
-        storage,
-        source_id=source_id,
-        source_start=new_start,
-        source_end=new_end,
-        evidence_name=evidence_name,
-        language=language,
-    )
-
     metadata = turn.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
@@ -782,19 +773,6 @@ def trim_and_prepare_turn(
             current_projection.projection.word_indices
         )
 
-    trimmed_word_indices = (
-        trimmed_projection.projection.word_indices
-    )
-
-    if (
-        trimmed_word_indices
-        != canonical_word_indices
-    ):
-        raise ValueError(
-            "Boundary edit would change assigned "
-            "continuous ASR words"
-        )
-
     def update(
         record: dict[str, Any],
     ) -> dict[str, Any]:
@@ -815,17 +793,24 @@ def trim_and_prepare_turn(
             "method": "manual",
         }
 
+        if canonical_word_indices:
+            metadata["word_range"] = {
+                "start": canonical_word_indices[0],
+                "end": canonical_word_indices[-1],
+            }
+
+            metadata["continuous_asr"] = {
+                "evidence": evidence_name,
+                "word_indices": list(
+                    canonical_word_indices
+                ),
+            }
+
         return record
 
     storage.update_turn(
         turn_id,
         update,
-    )
-
-    _apply_projection(
-        storage,
-        turn_id,
-        trimmed_projection,
     )
 
     prepare_curated_source_turns(

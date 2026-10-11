@@ -1284,7 +1284,7 @@ def test_trim_and_prepare_turn_removes_boundary_contamination(
     assert prepared == ["source_001"]
 
 
-def test_trim_and_prepare_turn_rejects_assigned_word_loss(
+def test_manual_trim_preserves_assigned_words_when_audio_boundary_excludes_them(
     tmp_path,
     monkeypatch,
 ):
@@ -1323,24 +1323,43 @@ def test_trim_and_prepare_turn_rejects_assigned_word_loss(
         }
     )
 
-    before = storage.get_turn("turn_000001")
+    prepared = []
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            "Boundary edit would change assigned "
-            "continuous ASR words"
-        ),
-    ):
-        trim_and_prepare_turn(
-            storage,
-            "turn_000001",
-            source_end=1.35,
-        )
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        lambda *args, **kwargs:
+            prepared.append("called"),
+    )
 
-    assert storage.get_turn("turn_000001") == before
+    result = trim_and_prepare_turn(
+        storage,
+        "turn_000001",
+        source_end=1.35,
+    )
 
-def test_trim_and_prepare_turn_rejects_added_words_without_mutation(
+    assert result["source_start"] == 0.9
+    assert result["source_end"] == 1.35
+    assert result["transcript"] == "hello there"
+
+    assert result["metadata"]["word_range"] == {
+        "start": 0,
+        "end": 1,
+    }
+
+    assert result["metadata"]["continuous_asr"] == {
+        "evidence": "qwen3",
+        "word_indices": [0, 1],
+    }
+
+    assert result["metadata"]["boundary_curation"] == {
+        "method": "manual",
+    }
+
+    assert prepared == ["called"]
+
+
+def test_manual_trim_does_not_add_words_when_audio_boundary_expands(
     tmp_path,
     monkeypatch,
 ):
@@ -1379,23 +1398,37 @@ def test_trim_and_prepare_turn_rejects_added_words_without_mutation(
             prepared.append("called"),
     )
 
-    before = storage.get_turn("turn_000001")
+    result = trim_and_prepare_turn(
+        storage,
+        "turn_000001",
+        source_end=3.6,
+    )
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            "Boundary edit would change assigned "
-            "continuous ASR words"
-        ),
-    ):
-        trim_and_prepare_turn(
-            storage,
-            "turn_000001",
-            source_end=3.6,
-        )
+    assert result["source_start"] == 0.9
+    assert result["source_end"] == 3.6
+    assert result["transcript"] == "hello there"
 
-    assert storage.get_turn("turn_000001") == before
-    assert prepared == []
+    # This turn had no persisted ASR assignment, so the
+    # existing geometry is used once to establish its
+    # canonical word provenance. The manually expanded
+    # audio boundary must not pull in the later "general"
+    # word.
+    assert result["metadata"]["word_range"] == {
+        "start": 0,
+        "end": 1,
+    }
+
+    assert result["metadata"]["continuous_asr"] == {
+        "evidence": "qwen3",
+        "word_indices": [0, 1],
+    }
+
+    assert result["metadata"]["boundary_curation"] == {
+        "method": "manual",
+    }
+
+    assert prepared == ["called"]
+
 
 def test_trim_and_prepare_turn_requires_reconciliation_before_trim(
     tmp_path,
@@ -1973,3 +2006,107 @@ def test_project_curated_turn_includes_zero_duration_word(
     assert result.transcript == "care of the"
     assert result.start_word_index == 0
     assert result.end_word_index == 2
+
+
+def test_manual_trim_preserves_canonical_words_despite_bad_word_timing(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    storage = DatasetStorage(tmp_path)
+
+    storage.add_source(
+        SourceRecord(
+            id="source_001",
+            media_path="/tmp/source.wav",
+            metadata={
+                "continuous_asr": {
+                    "qwen3": {
+                        "words": [
+                            {
+                                "text": "You",
+                                "start": 10.0,
+                                "end": 10.003,
+                            },
+                            {
+                                "text": "want",
+                                "start": 10.003,
+                                "end": 10.2,
+                            },
+                        ],
+                        "utterances": [
+                            {
+                                "word_start": 0,
+                                "word_end": 2,
+                            },
+                        ],
+                    }
+                },
+                "utterance_reconciliation": {
+                    "mode": "automatic",
+                    "asr_evidence": "qwen3",
+                    "word_ranges": [[0, 1]],
+                },
+            },
+        )
+    )
+
+    storage.turns.append(
+        {
+            "schema_version": 1,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 10.0,
+            "source_end": 10.5,
+            "source_regions": [],
+            "language": "en",
+            "transcript": "You want",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {
+                "word_range": {
+                    "start": 0,
+                    "end": 1,
+                },
+                "continuous_asr": {
+                    "evidence": "qwen3",
+                    "word_indices": [0, 1],
+                },
+            },
+        }
+    )
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation.prepare_curated_source_turns",
+        lambda *args, **kwargs: None,
+    )
+
+    result = trim_and_prepare_turn(
+        storage,
+        "turn_000001",
+        source_start=10.05,
+    )
+
+    assert result["source_start"] == 10.05
+    assert result["source_end"] == 10.5
+
+    assert result["transcript"] == "You want"
+
+    assert result["metadata"]["word_range"] == {
+        "start": 0,
+        "end": 1,
+    }
+
+    assert result["metadata"]["continuous_asr"] == {
+        "evidence": "qwen3",
+        "word_indices": [0, 1],
+    }
+
+    assert result["metadata"]["boundary_curation"] == {
+        "method": "manual",
+    }
