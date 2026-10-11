@@ -1287,29 +1287,66 @@ def split_turn(
     final_turns[turn_index] = left
     final_turns.append(right)
 
-    seen_regions: dict[str, str] = {}
+    def region_memberships(
+        records: list[dict[str, Any]],
+    ) -> dict[str, set[str]]:
+        memberships: dict[str, set[str]] = {}
 
-    for turn in final_turns:
-        candidate_ids = turn.get("source_regions")
-
-        if not isinstance(candidate_ids, list):
-            raise ValueError(
-                f"{turn.get('id', '<unknown>')}: "
-                "source_regions must be a list"
+        for record in records:
+            candidate_ids = record.get(
+                "source_regions"
             )
 
-        for region_id in candidate_ids:
-            previous = seen_regions.get(region_id)
-
-            if previous is not None:
+            if not isinstance(
+                candidate_ids,
+                list,
+            ):
                 raise ValueError(
-                    "Candidate region would belong "
-                    "to multiple turns: "
-                    f"{region_id} -> "
-                    f"{previous}, {turn.get('id')}"
+                    f"{record.get('id', '<unknown>')}: "
+                    "source_regions must be a list"
                 )
 
-            seen_regions[region_id] = turn.get("id")
+            record_id = str(
+                record.get("id")
+            )
+
+            for region_id in candidate_ids:
+                memberships.setdefault(
+                    region_id,
+                    set(),
+                ).add(record_id)
+
+        return memberships
+
+    before_memberships = region_memberships(
+        turns
+    )
+    after_memberships = region_memberships(
+        final_turns
+    )
+
+    for region_id, after_turn_ids in (
+        after_memberships.items()
+    ):
+        if len(after_turn_ids) <= 1:
+            continue
+
+        before_turn_ids = (
+            before_memberships.get(
+                region_id,
+                set(),
+            )
+        )
+
+        if after_turn_ids == before_turn_ids:
+            continue
+
+        raise ValueError(
+            "Split would introduce or change "
+            "multiple turn ownership for "
+            f"{region_id}: "
+            f"{sorted(after_turn_ids)}"
+        )
 
     stale_paths = _turn_derived_paths(
         storage,

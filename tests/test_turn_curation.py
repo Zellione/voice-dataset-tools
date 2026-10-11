@@ -2289,3 +2289,150 @@ def test_manual_split_preserves_auto_review_status_on_both_children(
         right["metadata"]["automatic_pipeline"]["reasons"]
         == ["unresolved_speaker"]
     )
+
+
+def test_manual_split_ignores_unrelated_preexisting_region_overlap(
+    tmp_path,
+    monkeypatch,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    storage.regions.append(
+        {
+            "schema_version": 1,
+            "record_type": "region",
+            "id": "region_legacy",
+            "source_id": "source_001",
+            "source_start": 0.0,
+            "source_end": 0.5,
+        }
+    )
+
+    storage.regions.append(
+        {
+            "schema_version": 1,
+            "record_type": "region",
+            "id": "region_000001",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 1.4,
+        }
+    )
+
+    storage.regions.append(
+        {
+            "schema_version": 1,
+            "record_type": "region",
+            "id": "region_000002",
+            "source_id": "source_001",
+            "source_start": 1.4,
+            "source_end": 2.0,
+        }
+    )
+
+    for turn_id in (
+        "turn_legacy_a",
+        "turn_legacy_b",
+    ):
+        storage.turns.append(
+            {
+                "schema_version": 2,
+                "record_type": "turn",
+                "id": turn_id,
+                "source_id": "source_001",
+                "source_start": 0.0,
+                "source_end": 0.5,
+                "source_regions": [
+                    "region_legacy",
+                ],
+                "language": "en",
+                "transcript": "legacy",
+                "assignment": {
+                    "status": "unknown",
+                    "voice_id": None,
+                    "method": None,
+                    "confidence": None,
+                },
+                "curation": {
+                    "status": "pending",
+                },
+                "review": {
+                    "status": "pending",
+                },
+                "representations": {},
+                "embeddings": {},
+                "metadata": {},
+            }
+        )
+
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 2.0,
+            "source_regions": [
+                "region_000001",
+                "region_000002",
+            ],
+            "language": "en",
+            "transcript": "hello there general",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+                "confidence": None,
+            },
+            "curation": {
+                "status": "pending",
+            },
+            "review": {
+                "status": "pending",
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {
+                "automatic_pipeline": {
+                    "status": "review",
+                    "reasons": [
+                        "unresolved_speaker",
+                    ],
+                },
+            },
+        }
+    )
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        lambda *args, **kwargs: None,
+    )
+
+    left, right = split_and_prepare_turn(
+        storage,
+        "turn_000001",
+        after_region_id="region_000001",
+        split_time=1.55,
+    )
+
+    assert left["id"] == "turn_000001"
+    assert right["id"] != left["id"]
+
+    legacy_a = storage.get_turn(
+        "turn_legacy_a"
+    )
+    legacy_b = storage.get_turn(
+        "turn_legacy_b"
+    )
+
+    assert legacy_a is not None
+    assert legacy_b is not None
+
+    assert legacy_a["source_regions"] == [
+        "region_legacy"
+    ]
+    assert legacy_b["source_regions"] == [
+        "region_legacy"
+    ]
