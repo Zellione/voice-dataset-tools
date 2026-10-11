@@ -2436,3 +2436,75 @@ def test_manual_split_ignores_unrelated_preexisting_region_overlap(
     assert legacy_b["source_regions"] == [
         "region_legacy"
     ]
+
+
+def test_manual_split_assigns_crossing_word_to_one_child(
+    tmp_path,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    storage.regions.append(
+        {
+            "schema_version": 1,
+            "record_type": "region",
+            "id": "region_000001",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 1.5,
+        }
+    )
+
+    storage.regions.append(
+        {
+            "schema_version": 1,
+            "record_type": "region",
+            "id": "region_000002",
+            "source_id": "source_001",
+            "source_start": 1.5,
+            "source_end": 2.0,
+        }
+    )
+
+    storage.turns.append(
+        {
+            "schema_version": 1,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 2.0,
+            "source_regions": [
+                "region_000001",
+                "region_000002",
+            ],
+            "language": "en",
+            "transcript": "hello there",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {},
+        }
+    )
+
+    _source_id, left, right = _project_split(
+        storage,
+        "turn_000001",
+        after_region_id="region_000001",
+        split_time=1.5,
+        evidence_name="qwen3",
+    )
+
+    assert left.projection.word_indices == (0,)
+    assert right.projection.word_indices == (1,)
+
+    assert left.transcript == "hello"
+    assert right.transcript == "there"
+
+    assert not (
+        set(left.projection.word_indices)
+        & set(right.projection.word_indices)
+    )

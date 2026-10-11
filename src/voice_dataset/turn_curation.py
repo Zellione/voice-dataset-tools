@@ -164,6 +164,98 @@ def project_curated_turn(
     )
 
 
+def _restrict_curated_projection(
+    evidence: dict[str, Any],
+    projection: CuratedTurnProjection,
+    word_indices: tuple[int, ...],
+) -> CuratedTurnProjection:
+    selected = set(word_indices)
+
+    words = evidence.get("words")
+    utterances = evidence.get("utterances")
+
+    if not isinstance(words, list):
+        raise ValueError(
+            "Continuous ASR evidence has invalid words"
+        )
+
+    if not isinstance(utterances, list):
+        raise ValueError(
+            "Continuous ASR evidence has invalid utterances"
+        )
+
+    complete_utterances: list[int] = []
+    intersecting_utterances: list[int] = []
+
+    for index, utterance in enumerate(utterances):
+        word_start = int(utterance["word_start"])
+        word_end = int(utterance["word_end"])
+
+        utterance_words = set(
+            range(word_start, word_end)
+        )
+
+        if not (utterance_words & selected):
+            continue
+
+        intersecting_utterances.append(index)
+
+        if utterance_words <= selected:
+            complete_utterances.append(index)
+
+    selected_words: list[str] = []
+
+    for index in word_indices:
+        word = words[index]
+        word_text = word.get("text")
+
+        if not isinstance(word_text, str):
+            raise ValueError(
+                "Continuous ASR word has invalid text"
+            )
+
+        word_text = word_text.strip()
+
+        if word_text:
+            selected_words.append(word_text)
+
+    base = projection.projection
+
+    restricted = TurnTranscriptProjection(
+        source_start=base.source_start,
+        source_end=base.source_end,
+        word_indices=word_indices,
+        complete_utterance_indices=tuple(
+            complete_utterances
+        ),
+        intersecting_utterance_indices=tuple(
+            intersecting_utterances
+        ),
+        suspicious_word_indices=tuple(
+            index
+            for index in base.suspicious_word_indices
+            if index in selected
+        ),
+    )
+
+    return CuratedTurnProjection(
+        evidence_name=projection.evidence_name,
+        projection=restricted,
+        transcript=" ".join(selected_words) or None,
+        language=projection.language,
+        start_word_index=(
+            word_indices[0]
+            if word_indices
+            else None
+        ),
+        end_word_index=(
+            word_indices[-1]
+            if word_indices
+            else None
+        ),
+    )
+
+
 def prepare_curated_source_turns(
     storage: DatasetStorage,
     source_id: str,
@@ -382,6 +474,64 @@ def _project_split(
         evidence_name=evidence_name,
         language=language,
     )
+
+    if split_time is not None:
+        duplicate_indices = (
+            set(left.projection.word_indices)
+            & set(right.projection.word_indices)
+        )
+
+        if duplicate_indices:
+            evidence = _continuous_asr_evidence(
+                storage,
+                source_id,
+                evidence_name=evidence_name,
+            )
+
+            words = evidence.get("words")
+
+            if not isinstance(words, list):
+                raise ValueError(
+                    "Continuous ASR evidence has invalid words: "
+                    f"{source_id}/{evidence_name}"
+                )
+
+            left_indices = list(
+                left.projection.word_indices
+            )
+            right_indices = list(
+                right.projection.word_indices
+            )
+
+            for index in sorted(duplicate_indices):
+                word = words[index]
+
+                if not isinstance(word, dict):
+                    raise ValueError(
+                        "Continuous ASR evidence has "
+                        "invalid word"
+                    )
+
+                midpoint = (
+                    float(word["start"])
+                    + float(word["end"])
+                ) / 2.0
+
+                if midpoint < split_time:
+                    right_indices.remove(index)
+                else:
+                    left_indices.remove(index)
+
+            left = _restrict_curated_projection(
+                evidence,
+                left,
+                tuple(left_indices),
+            )
+            right = _restrict_curated_projection(
+                evidence,
+                right,
+                tuple(right_indices),
+            )
 
     for side, projection in (
         ("left", left),
