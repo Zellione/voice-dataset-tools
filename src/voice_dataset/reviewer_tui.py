@@ -2287,22 +2287,41 @@ class TrimTurnScreen(
     def _preview_range(
         self,
     ) -> tuple[float, float] | None:
+        start_input = self.query_one(
+            "#trim-start",
+            Input,
+        )
+        end_input = self.query_one(
+            "#trim-end",
+            Input,
+        )
+
         try:
             source_start = float(
-                self.query_one(
-                    "#trim-start",
-                    Input,
-                ).value
+                start_input.value
             )
-
             source_end = float(
-                self.query_one(
-                    "#trim-end",
-                    Input,
-                ).value
+                end_input.value
             )
         except ValueError:
             return None
+
+        # Preserve the exact stored boundary when the
+        # user has not changed its displayed value.
+        # The inputs render only six decimal places,
+        # so parsing them unconditionally would
+        # introduce sub-microsecond rounding drift.
+        if (
+            start_input.value.strip()
+            == f"{self.source_start:.6f}"
+        ):
+            source_start = self.source_start
+
+        if (
+            end_input.value.strip()
+            == f"{self.source_end:.6f}"
+        ):
+            source_end = self.source_end
 
         if (
             source_start < 0

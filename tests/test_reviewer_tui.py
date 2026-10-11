@@ -4637,3 +4637,71 @@ async def test_reviewer_tui_merges_three_consecutive_turns(
         ]
 
         assert len(app.screen_stack) == 1
+
+
+@pytest.mark.asyncio
+async def test_trim_screen_preserves_unchanged_boundary_precision(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    original_start = 1156.9084687500003
+    original_end = 1159.4684687500003
+
+    result = []
+
+    async with app.run_test() as pilot:
+        app.push_screen(
+            TrimTurnScreen(
+                source_start=original_start,
+                source_end=original_end,
+            ),
+            result.append,
+        )
+        await pilot.pause()
+
+        start_input = app.screen.query_one(
+            "#trim-start",
+            Input,
+        )
+
+        end_input = app.screen.query_one(
+            "#trim-end",
+            Input,
+        )
+
+        # Change only the start.
+        start_input.value = "1157.000000"
+
+        # End remains merely its rounded display value.
+        assert end_input.value == "1159.468469"
+
+        end_input.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert len(result) == 1
+    request = result[0]
+
+    assert request is not None
+    assert request.source_start == pytest.approx(
+        1157.0
+    )
+
+    # Must retain the exact stored float rather than
+    # the six-decimal representation shown in the UI.
+    assert request.source_end == original_end

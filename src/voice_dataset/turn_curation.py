@@ -862,7 +862,7 @@ def trim_and_prepare_turn(
 
         if (
             previous_overlap_after
-            > previous_overlap_before + 1e-9
+            > previous_overlap_before + 1e-6
         ):
             raise ValueError(
                 "Boundary edit would increase overlap "
@@ -888,7 +888,7 @@ def trim_and_prepare_turn(
 
         if (
             next_overlap_after
-            > next_overlap_before + 1e-9
+            > next_overlap_before + 1e-6
         ):
             raise ValueError(
                 "Boundary edit would increase overlap "
