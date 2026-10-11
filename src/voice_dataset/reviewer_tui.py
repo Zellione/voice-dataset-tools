@@ -183,7 +183,7 @@ class TrimTurnRequest:
 
 @dataclass(frozen=True)
 class SplitTurnRequest:
-    region_id: str
+    region_id: str | None
     split_time: float
 
 
@@ -1370,6 +1370,23 @@ class SplitWordHint:
     end: float
 
 
+class SplitOptionList(OptionList):
+    def on_key(self, event) -> None:
+        if event.key != "enter":
+            return
+
+        event.stop()
+        event.prevent_default()
+
+        screen = self.screen
+
+        if isinstance(
+            screen,
+            SplitTurnScreen,
+        ):
+            screen.action_accept_split()
+
+
 class SplitTurnScreen(
     ModalScreen[SplitTurnRequest | None]
 ):
@@ -1471,6 +1488,11 @@ class SplitTurnScreen(
             "Stop",
         ),
         Binding(
+            "enter",
+            "accept_split",
+            "Split",
+        ),
+        Binding(
             "escape",
             "cancel",
             "Cancel",
@@ -1541,8 +1563,12 @@ class SplitTurnScreen(
             yield Static(
                 (
                     f"Turn: {self.turn_id}   "
-                    "Choose candidate with ↑/↓; "
-                    "move manual split with ←/→"
+                    + (
+                        "Choose candidate with ↑/↓; "
+                        if self.candidates
+                        else "Manual split; "
+                    )
+                    + "move split with ←/→"
                 ),
                 id="split-content",
             )
@@ -1561,7 +1587,7 @@ class SplitTurnScreen(
                 id="split-candidate-info",
             )
 
-            yield OptionList(
+            yield SplitOptionList(
                 *options,
                 id="split-options",
             )
@@ -1594,6 +1620,15 @@ class SplitTurnScreen(
             self.split_time = (
                 candidate.left_end
                 + candidate.right_start
+            ) / 2.0
+        elif (
+            self.source_start is not None
+            and self.source_end is not None
+            and self.source_end > self.source_start
+        ):
+            self.split_time = (
+                self.source_start
+                + self.source_end
             ) / 2.0
 
         if (
@@ -1679,13 +1714,8 @@ class SplitTurnScreen(
             Static,
         )
 
-        candidate = (
-            self._selected_candidate()
-        )
-
         if (
-            candidate is None
-            or self.source_start is None
+            self.source_start is None
             or self.source_end is None
             or self.source_end
             <= self.source_start
@@ -1836,10 +1866,22 @@ class SplitTurnScreen(
         )
 
         if candidate is None:
+            split_text = (
+                format_source_time(
+                    self.split_time
+                )
+                if self.split_time is not None
+                else "-"
+            )
+
             self.query_one(
                 "#split-candidate-info",
                 Static,
-            ).update("")
+            ).update(
+                "Manual split — no diarization "
+                "speaker-change candidate\n"
+                f"Manual split: {split_text}"
+            )
             return
 
         gap = max(
@@ -1997,25 +2039,42 @@ class SplitTurnScreen(
         self._refresh_candidate_info()
         self._refresh_plot()
 
-    def on_option_list_option_selected(
+    def _accept_split(
         self,
-        event: OptionList.OptionSelected,
+        region_id: str | None,
     ) -> None:
-        option_id = event.option.id
-
-        if (
-            option_id is None
-            or self.split_time is None
-        ):
+        if self.split_time is None:
             return
 
         stop()
 
         self.dismiss(
             SplitTurnRequest(
-                region_id=str(option_id),
+                region_id=region_id,
                 split_time=self.split_time,
             )
+        )
+
+    def action_accept_split(self) -> None:
+        candidate = self._selected_candidate()
+
+        self._accept_split(
+            candidate.region_id
+            if candidate is not None
+            else None
+        )
+
+    def on_option_list_option_selected(
+        self,
+        event: OptionList.OptionSelected,
+    ) -> None:
+        option_id = event.option.id
+
+        if option_id is None:
+            return
+
+        self._accept_split(
+            str(option_id)
         )
 
     def _play_split_window(
@@ -4137,34 +4196,6 @@ class ReviewerTUI(App[None]):
         if turn is None:
             return
 
-        source_regions = (
-            turn.get("source_regions")
-            or []
-        )
-
-        if not isinstance(
-            source_regions,
-            list,
-        ):
-            self._set_status(
-                "Turn has invalid source_regions"
-            )
-            return
-
-        valid_regions = tuple(
-            str(region_id)
-            for region_id
-            in source_regions[:-1]
-            if isinstance(region_id, str)
-            and region_id
-        )
-
-        if not valid_regions:
-            self._set_status(
-                "Turn has no valid split point"
-            )
-            return
-
         source_id = turn.get("source_id")
 
         if not isinstance(source_id, str):
@@ -4173,25 +4204,31 @@ class ReviewerTUI(App[None]):
             )
             return
 
-        candidates = list(
-            build_split_turn_candidates(
-                self.session.storage,
-                turn,
+        try:
+            candidates = list(
+                build_split_turn_candidates(
+                    self.session.storage,
+                    turn,
+                )
             )
-        )
+        except (
+            ValueError,
+            KeyError,
+        ):
+            candidates = []
 
-        word_hints = (
-            build_split_word_hints(
-                self.session.storage,
-                turn,
+        try:
+            word_hints = (
+                build_split_word_hints(
+                    self.session.storage,
+                    turn,
+                )
             )
-        )
-
-        if not candidates:
-            self._set_status(
-                "Turn has no previewable split point"
-            )
-            return
+        except (
+            ValueError,
+            KeyError,
+        ):
+            word_hints = ()
 
         audio_path = None
 
@@ -4415,26 +4452,24 @@ class ReviewerTUI(App[None]):
             if turn is None:
                 return False
 
-            source_regions = (
-                turn.get("source_regions")
-                or []
-            )
-
-            if not isinstance(
-                source_regions,
-                list,
+            try:
+                source_start = float(
+                    turn["source_start"]
+                )
+                source_end = float(
+                    turn["source_end"]
+                )
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
             ):
                 return False
 
-            valid_regions = [
-                region_id
-                for region_id
-                in source_regions[:-1]
-                if isinstance(region_id, str)
-                and region_id
-            ]
-
-            return bool(valid_regions)
+            return (
+                source_end - source_start
+                > 0.002
+            )
 
         if action == "mark_pending":
             turn = self.session.current()

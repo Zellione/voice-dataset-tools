@@ -1524,7 +1524,7 @@ async def test_reviewer_tui_merge_uses_canonical_next_turn_when_filtered(
 
 
 @pytest.mark.asyncio
-async def test_reviewer_tui_does_not_open_split_without_valid_region(
+async def test_reviewer_tui_opens_manual_split_without_valid_region(
     tmp_path,
 ):
     storage = DatasetStorage(tmp_path)
@@ -1557,7 +1557,22 @@ async def test_reviewer_tui_does_not_open_split_without_valid_region(
         await pilot.press("/")
         await pilot.pause()
 
-        assert len(app.screen_stack) == 1
+        assert len(app.screen_stack) == 2
+        assert isinstance(
+            app.screen,
+            SplitTurnScreen,
+        )
+
+        content = app.screen.query_one(
+            "#split-candidate-info",
+            Static,
+        )
+
+        rendered = str(
+            content.render()
+        )
+
+        assert "Manual split" in rendered
 
 
 @pytest.mark.asyncio
@@ -1870,7 +1885,7 @@ async def test_reviewer_tui_hides_merge_on_last_turn(
 
 
 @pytest.mark.asyncio
-async def test_reviewer_tui_hides_split_without_split_point(
+async def test_reviewer_tui_shows_manual_split_without_split_point(
     tmp_path,
 ):
     storage = DatasetStorage(tmp_path)
@@ -1905,7 +1920,7 @@ async def test_reviewer_tui_hides_split_without_split_point(
                 "split_turn",
                 (),
             )
-            is False
+            is True
         )
 
 
@@ -4705,3 +4720,90 @@ async def test_trim_screen_preserves_unchanged_boundary_precision(
     # Must retain the exact stored float rather than
     # the six-decimal representation shown in the UI.
     assert request.source_end == original_end
+
+
+@pytest.mark.asyncio
+async def test_manual_split_without_diarization_uses_midpoint(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    calls = []
+
+    def split(
+        *,
+        after_region_id=None,
+        split_time=None,
+    ):
+        calls.append(
+            (
+                after_region_id,
+                split_time,
+            )
+        )
+
+        turn = storage.get_turn(
+            "turn_000001"
+        )
+
+        assert turn is not None
+
+        return turn, turn
+
+    monkeypatch.setattr(
+        session,
+        "split",
+        split,
+    )
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui."
+        "build_split_turn_candidates",
+        lambda *args, **kwargs: (),
+    )
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui."
+        "build_split_word_hints",
+        lambda *args, **kwargs: (),
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("/")
+        await pilot.pause()
+
+        assert isinstance(
+            app.screen,
+            SplitTurnScreen,
+        )
+
+        assert app.screen.split_time == pytest.approx(
+            1.5
+        )
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert calls == [
+            (
+                None,
+                pytest.approx(1.5),
+            ),
+        ]
+
+        assert len(app.screen_stack) == 1

@@ -3027,3 +3027,112 @@ def test_trim_rejects_increasing_existing_next_overlap(
             "turn_000001",
             source_end=2.0,
         )
+
+
+def test_manual_time_split_can_split_single_diarization_region(
+    tmp_path,
+    monkeypatch,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    storage.regions.append(
+        {
+            "schema_version": 1,
+            "record_type": "region",
+            "id": "region_single",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 2.0,
+        }
+    )
+
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 2.0,
+            "source_regions": [
+                "region_single",
+            ],
+            "language": "en",
+            "transcript": "hello there",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+                "confidence": None,
+            },
+            "curation": {
+                "status": "pending",
+            },
+            "review": {
+                "status": "pending",
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {
+                "automatic_pipeline": {
+                    "status": "review",
+                    "review_reasons": [
+                        "unresolved_speaker",
+                    ],
+                },
+            },
+        }
+    )
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        lambda *args, **kwargs: None,
+    )
+
+    left, right = split_and_prepare_turn(
+        storage,
+        "turn_000001",
+        after_region_id=None,
+        split_time=1.5,
+    )
+
+    assert left["source_start"] == pytest.approx(
+        1.0
+    )
+    assert left["source_end"] == pytest.approx(
+        1.5
+    )
+
+    assert right["source_start"] == pytest.approx(
+        1.5
+    )
+    assert right["source_end"] == pytest.approx(
+        2.0
+    )
+
+    # The one automatic diarization region spans
+    # the human speaker boundary, so it is retained
+    # as provenance for both children.
+    assert left["source_regions"] == [
+        "region_single"
+    ]
+    assert right["source_regions"] == [
+        "region_single"
+    ]
+
+    assert left["transcript"] == "hello"
+    assert right["transcript"] == "there"
+
+    assert (
+        set(
+            left["metadata"]["continuous_asr"][
+                "word_indices"
+            ]
+        )
+        & set(
+            right["metadata"]["continuous_asr"][
+                "word_indices"
+            ]
+        )
+    ) == set()

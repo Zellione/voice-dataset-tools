@@ -982,7 +982,7 @@ def split_turn_ranges(
     storage: DatasetStorage,
     turn_id: str,
     *,
-    after_region_id: str,
+    after_region_id: str | None = None,
     split_time: float | None = None,
 ) -> tuple[
     str,
@@ -1005,10 +1005,105 @@ def split_turn_ranges(
             f"{turn_id}: source_regions must be a list"
         )
 
+    source_id = turn.get("source_id")
+
+    if not isinstance(source_id, str):
+        raise ValueError(
+            f"{turn_id}: invalid source_id"
+        )
+
+    regions: dict[str, dict[str, Any]] = {}
+
+    for region_id in source_regions:
+        if not isinstance(region_id, str):
+            raise ValueError(
+                f"{turn_id}: invalid source region id"
+            )
+
+        region = storage.get_region(region_id)
+
+        if region is None:
+            raise KeyError(
+                "Candidate region does not exist: "
+                f"{region_id}"
+            )
+
+        if region.get("source_id") != source_id:
+            raise ValueError(
+                f"{region_id}: source does not match "
+                f"{turn_id}"
+            )
+
+        regions[region_id] = region
+
+    turn_start = float(
+        turn["source_start"]
+    )
+    turn_end = float(
+        turn["source_end"]
+    )
+
+    if split_time is not None:
+        split_time = float(split_time)
+
+        if not (
+            turn_start
+            < split_time
+            < turn_end
+        ):
+            raise ValueError(
+                "Manual split time must be inside "
+                f"{turn_id}"
+            )
+
+    if after_region_id is None:
+        if split_time is None:
+            raise ValueError(
+                "Manual split requires split_time"
+            )
+
+        # For a purely manual split, diarization
+        # regions are provenance rather than hard
+        # ownership boundaries. A region crossing
+        # the split point therefore belongs to both
+        # child turns.
+        left_ids: list[str] = []
+        right_ids: list[str] = []
+
+        for region_id in source_regions:
+            region = regions[region_id]
+
+            region_start = float(
+                region["source_start"]
+            )
+            region_end = float(
+                region["source_end"]
+            )
+
+            if region_start < split_time:
+                left_ids.append(region_id)
+
+            if region_end > split_time:
+                right_ids.append(region_id)
+
+        return (
+            source_id,
+            left_ids,
+            (
+                turn_start,
+                split_time,
+            ),
+            right_ids,
+            (
+                split_time,
+                turn_end,
+            ),
+        )
+
     if len(source_regions) < 2:
         raise ValueError(
-            "A turn must contain at least two regions "
-            "to be split"
+            "A region-based split requires at least "
+            "two source regions"
         )
 
     if after_region_id not in source_regions:
@@ -1027,34 +1122,8 @@ def split_turn_ranges(
             f"of {turn_id}"
         )
 
-    source_id = turn.get("source_id")
-
-    if not isinstance(source_id, str):
-        raise ValueError(
-            f"{turn_id}: invalid source_id"
-        )
-
     left_ids = source_regions[:split_index]
     right_ids = source_regions[split_index:]
-
-    regions: dict[str, dict[str, Any]] = {}
-
-    for region_id in source_regions:
-        region = storage.get_region(region_id)
-
-        if region is None:
-            raise KeyError(
-                "Candidate region does not exist: "
-                f"{region_id}"
-            )
-
-        if region.get("source_id") != source_id:
-            raise ValueError(
-                f"{region_id}: source does not match "
-                f"{turn_id}"
-            )
-
-        regions[region_id] = region
 
     def bounds(
         region_ids: list[str],
@@ -1086,25 +1155,6 @@ def split_turn_ranges(
         left_range = bounds(left_ids)
         right_range = bounds(right_ids)
     else:
-        split_time = float(split_time)
-
-        turn_start = float(
-            turn["source_start"]
-        )
-        turn_end = float(
-            turn["source_end"]
-        )
-
-        if not (
-            turn_start
-            < split_time
-            < turn_end
-        ):
-            raise ValueError(
-                "Manual split time must be inside "
-                f"{turn_id}"
-            )
-
         left_range = (
             turn_start,
             split_time,
@@ -1127,7 +1177,7 @@ def split_turn(
     storage: DatasetStorage,
     turn_id: str,
     *,
-    after_region_id: str,
+    after_region_id: str | None = None,
     split_time: float | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     turns = storage.turns.load()
@@ -1351,18 +1401,26 @@ def split_turn(
             - {turn_id, new_turn_id}
         )
 
-        replaced_parent_with_child = (
-            turn_id in before_turn_ids
-            and before_foreign == after_foreign
-            and len(after_turn_ids)
-            <= len(before_turn_ids)
-            and (
-                turn_id in after_turn_ids
-                or new_turn_id in after_turn_ids
-            )
+        expected_children: set[str] = set()
+
+        if region_id in left_ids:
+            expected_children.add(turn_id)
+
+        if region_id in right_ids:
+            expected_children.add(new_turn_id)
+
+        actual_children = (
+            after_turn_ids - after_foreign
         )
 
-        if replaced_parent_with_child:
+        replaced_parent_with_children = (
+            turn_id in before_turn_ids
+            and before_foreign == after_foreign
+            and actual_children
+            == expected_children
+        )
+
+        if replaced_parent_with_children:
             continue
 
         raise ValueError(

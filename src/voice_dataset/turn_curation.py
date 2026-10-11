@@ -419,7 +419,7 @@ def _project_split(
     storage: DatasetStorage,
     turn_id: str,
     *,
-    after_region_id: str,
+    after_region_id: str | None,
     split_time: float | None = None,
     evidence_name: str,
 ) -> tuple[
@@ -678,7 +678,7 @@ def split_and_prepare_turn(
     storage: DatasetStorage,
     turn_id: str,
     *,
-    after_region_id: str,
+    after_region_id: str | None = None,
     split_time: float | None = None,
     evidence_name: str = "qwen3",
     capture_output: bool = False,

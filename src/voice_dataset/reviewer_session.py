@@ -647,7 +647,7 @@ class ReviewerSession:
     def split(
         self,
         *,
-        after_region_id: str,
+        after_region_id: str | None = None,
         split_time: float | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         turn_id = self._require_current_id()
