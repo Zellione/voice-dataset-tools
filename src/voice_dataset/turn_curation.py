@@ -328,6 +328,7 @@ def _project_split(
     turn_id: str,
     *,
     after_region_id: str,
+    split_time: float | None = None,
     evidence_name: str,
 ) -> tuple[
     str,
@@ -344,6 +345,7 @@ def _project_split(
         storage,
         turn_id,
         after_region_id=after_region_id,
+        split_time=split_time,
     )
 
     original = storage.get_turn(turn_id)
@@ -527,6 +529,7 @@ def split_and_prepare_turn(
     turn_id: str,
     *,
     after_region_id: str,
+    split_time: float | None = None,
     evidence_name: str = "qwen3",
     capture_output: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -538,6 +541,7 @@ def split_and_prepare_turn(
         storage,
         turn_id,
         after_region_id=after_region_id,
+        split_time=split_time,
         evidence_name=evidence_name,
     )
 
@@ -551,6 +555,7 @@ def split_and_prepare_turn(
         storage,
         turn_id,
         after_region_id=after_region_id,
+        split_time=split_time,
     )
 
     left = _apply_projection(

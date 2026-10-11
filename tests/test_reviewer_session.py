@@ -646,12 +646,14 @@ def test_session_split_refreshes_and_reanchors_left(
         turn_id,
         *,
         after_region_id,
+        split_time=None,
         capture_output=False,
     ):
         assert capture_output is True
         assert actual_storage is storage
         assert turn_id == "turn_000001"
         assert after_region_id == "region_000001"
+        assert split_time is None
 
         def shorten_left(record):
             record["source_end"] = 1.5

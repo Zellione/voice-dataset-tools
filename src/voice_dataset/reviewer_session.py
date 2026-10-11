@@ -648,6 +648,7 @@ class ReviewerSession:
         self,
         *,
         after_region_id: str,
+        split_time: float | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         turn_id = self._require_current_id()
 
@@ -655,6 +656,7 @@ class ReviewerSession:
             self.storage,
             turn_id,
             after_region_id=after_region_id,
+            split_time=split_time,
             capture_output=True,
         )
 

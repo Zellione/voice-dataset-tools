@@ -2110,3 +2110,80 @@ def test_manual_trim_preserves_canonical_words_despite_bad_word_timing(
     assert result["metadata"]["boundary_curation"] == {
         "method": "manual",
     }
+
+
+def test_project_split_uses_manual_split_time_for_child_geometry(
+    tmp_path,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    storage.regions.append(
+        {
+            "schema_version": 1,
+            "record_type": "region",
+            "id": "region_000001",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 1.4,
+        }
+    )
+
+    storage.regions.append(
+        {
+            "schema_version": 1,
+            "record_type": "region",
+            "id": "region_000002",
+            "source_id": "source_001",
+            "source_start": 1.4,
+            "source_end": 2.0,
+        }
+    )
+
+    storage.turns.append(
+        {
+            "schema_version": 1,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 2.0,
+            "source_regions": [
+                "region_000001",
+                "region_000002",
+            ],
+            "language": "en",
+            "transcript": "hello there general",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {},
+        }
+    )
+
+    source_id, left, right = _project_split(
+        storage,
+        "turn_000001",
+        after_region_id="region_000001",
+        split_time=1.55,
+        evidence_name="qwen3",
+    )
+
+    assert source_id == "source_001"
+
+    assert left.projection.source_start == pytest.approx(
+        1.0
+    )
+    assert left.projection.source_end == pytest.approx(
+        1.55
+    )
+
+    assert right.projection.source_start == pytest.approx(
+        1.55
+    )
+    assert right.projection.source_end == pytest.approx(
+        2.0
+    )

@@ -8,11 +8,13 @@ from rich.text import Text
 
 from voice_dataset.reviewer_session import ReviewerSession
 from voice_dataset.reviewer_tui import (
+    build_split_turn_candidates,
     ConfirmMergeScreen,
     ConfirmRecoveryScreen,
     EditValueScreen,
     NewVoiceScreen,
     ReviewerTUI,
+    SplitTurnCandidate,
     SplitTurnScreen,
     VoicePickerScreen,
     TrimTurnRequest,
@@ -1577,8 +1579,17 @@ async def test_reviewer_tui_splits_after_selected_region(
 
     calls = []
 
-    def split(*, after_region_id):
-        calls.append(after_region_id)
+    def split(
+        *,
+        after_region_id,
+        split_time=None,
+    ):
+        calls.append(
+            (
+                after_region_id,
+                split_time,
+            )
+        )
 
         turn = storage.get_turn(
             "turn_000001"
@@ -1592,6 +1603,56 @@ async def test_reviewer_tui_splits_after_selected_region(
         session,
         "split",
         split,
+    )
+
+    def fake_build_split_turn_candidates(
+        storage_arg,
+        turn,
+        *,
+        minimum_stable_duration=0.2,
+    ):
+        assert storage_arg is storage
+        assert turn["id"] == "turn_000001"
+
+        return (
+            SplitTurnCandidate(
+                region_id="region_000001",
+                left_region_id="region_000001",
+                left_start=1.0,
+                left_end=1.3,
+                left_speaker="SPEAKER_01",
+                left_text="one",
+                right_region_id="region_000002",
+                right_start=1.3,
+                right_end=1.6,
+                right_speaker="SPEAKER_02",
+                right_text="two",
+            ),
+            SplitTurnCandidate(
+                region_id="region_000002",
+                left_region_id="region_000002",
+                left_start=1.3,
+                left_end=1.6,
+                left_speaker="SPEAKER_02",
+                left_text="two",
+                right_region_id="region_000003",
+                right_start=1.6,
+                right_end=2.0,
+                right_speaker="SPEAKER_03",
+                right_text="three",
+            ),
+        )
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui."
+        "build_split_turn_candidates",
+        fake_build_split_turn_candidates,
+    )
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui."
+        "build_split_word_hints",
+        lambda storage_arg, turn, **kwargs: (),
     )
 
     app = ReviewerTUI(
@@ -1634,7 +1695,10 @@ async def test_reviewer_tui_splits_after_selected_region(
         await pilot.pause()
 
         assert calls == [
-            "region_000001",
+            (
+                "region_000001",
+                pytest.approx(1.3),
+            ),
         ]
 
         assert len(app.screen_stack) == 1
@@ -2141,7 +2205,7 @@ async def test_merge_screen_has_contextual_footer(
 
 
 @pytest.mark.asyncio
-async def test_split_screen_has_contextual_footer(
+async def test_split_screen_has_contextual_shortcuts(
     tmp_path,
 ):
     storage = DatasetStorage(tmp_path)
@@ -2164,8 +2228,20 @@ async def test_split_screen_has_contextual_footer(
         app.push_screen(
             SplitTurnScreen(
                 turn_id="turn_000001",
-                region_ids=(
-                    "region_000001",
+                candidates=(
+                    SplitTurnCandidate(
+                        region_id="region_000001",
+                        left_region_id="region_000001",
+                        left_start=1.0,
+                        left_end=1.4,
+                        left_speaker="SPEAKER_01",
+                        left_text="left",
+                        right_region_id="region_000002",
+                        right_start=1.4,
+                        right_end=2.0,
+                        right_speaker="SPEAKER_02",
+                        right_text="right",
+                    ),
                 ),
             )
         )
@@ -2176,9 +2252,16 @@ async def test_split_screen_has_contextual_footer(
             SplitTurnScreen,
         )
 
-        assert app.screen.query_one(
-            Footer
-        ) is not None
+        shortcuts = app.screen.query_one(
+            "#split-shortcuts",
+            Static,
+        )
+
+        rendered = str(shortcuts.render())
+
+        assert "Space Preview" in rendered
+        assert "Enter Split" in rendered
+        assert "Esc Cancel" in rendered
 
 
 @pytest.mark.asyncio
@@ -4207,4 +4290,139 @@ def test_format_source_time_over_one_hour():
     assert (
         format_source_time(4091.123)
         == "01:08:11.123"
+    )
+
+
+def test_build_split_turn_candidates_collapses_diarization_jitter(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    turn = {
+        "id": "turn_000383",
+        "source_regions": [
+            "region_000483",
+            "region_000484",
+            "region_000485",
+            "region_000486",
+            "region_000487",
+            "region_000488",
+            "region_000489",
+        ],
+    }
+
+    regions = [
+        (
+            "region_000483",
+            1992.85034375,
+            1995.02721875,
+            "SPEAKER_09",
+            "People need to feel safe. Yeah.",
+        ),
+        (
+            "region_000484",
+            1995.28034375,
+            1995.29721875,
+            "SPEAKER_09",
+            None,
+        ),
+        (
+            "region_000485",
+            1995.29721875,
+            1995.34784375,
+            "SPEAKER_11",
+            None,
+        ),
+        (
+            "region_000486",
+            1995.34784375,
+            1995.38159375,
+            "SPEAKER_09",
+            None,
+        ),
+        (
+            "region_000487",
+            1995.38159375,
+            1995.46596875,
+            "SPEAKER_11",
+            "Closed Captioning by Kris Brandhagen. brandhagen.com",
+        ),
+        (
+            "region_000488",
+            1995.46596875,
+            1995.48284375,
+            "SPEAKER_09",
+            None,
+        ),
+        (
+            "region_000489",
+            1995.48284375,
+            1996.44471875,
+            "SPEAKER_11",
+            "Popsite people.",
+        ),
+    ]
+
+    for (
+        region_id,
+        start,
+        end,
+        speaker,
+        transcript,
+    ) in regions:
+        storage.regions.append(
+            {
+                "schema_version": 2,
+                "record_type": "candidate_region",
+                "id": region_id,
+                "source_id": "source_001",
+                "source_start": start,
+                "source_end": end,
+                "detector": "pyannote-community-1",
+                "detector_label": speaker,
+                "representations": {},
+                "transcripts": {
+                    "whisper": {
+                        "text": transcript,
+                    }
+                },
+                "embeddings": {},
+                "reconciliation": {
+                    "status": "pending",
+                    "reason": None,
+                    "notes": None,
+                },
+                "metadata": {},
+            }
+        )
+
+    candidates = build_split_turn_candidates(
+        storage,
+        turn,
+    )
+
+    assert len(candidates) == 1
+
+    candidate = candidates[0]
+
+    assert candidate.left_region_id == "region_000483"
+    assert candidate.left_speaker == "SPEAKER_09"
+    assert candidate.left_text == (
+        "People need to feel safe. Yeah."
+    )
+
+    assert candidate.right_region_id == "region_000489"
+    assert candidate.right_speaker == "SPEAKER_11"
+    assert candidate.right_text == "Popsite people."
+
+    # Tiny alternating diarization regions are kept as
+    # provenance on the left. The stable SPEAKER_11
+    # region begins the new right-hand turn.
+    assert candidate.region_id == "region_000488"
+
+    assert candidate.left_end == pytest.approx(
+        1995.02721875
+    )
+    assert candidate.right_start == pytest.approx(
+        1995.48284375
     )

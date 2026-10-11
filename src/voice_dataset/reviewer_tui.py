@@ -181,6 +181,29 @@ class TrimTurnRequest:
     source_end: float
 
 
+@dataclass(frozen=True)
+class SplitTurnRequest:
+    region_id: str
+    split_time: float
+
+
+@dataclass(frozen=True)
+class SplitTurnCandidate:
+    region_id: str
+
+    left_region_id: str
+    left_start: float
+    left_end: float
+    left_speaker: str | None
+    left_text: str | None
+
+    right_region_id: str
+    right_start: float
+    right_end: float
+    right_speaker: str | None
+    right_text: str | None
+
+
 class NewVoiceScreen(
     ModalScreen[NewVoiceRequest | None]
 ):
@@ -901,8 +924,297 @@ class ConfirmMergeScreen(
         stop()
 
 
+def build_split_word_hints(
+    storage,
+    turn: dict,
+    *,
+    evidence_name: str = "qwen3",
+) -> tuple[SplitWordHint, ...]:
+    source_id = turn.get("source_id")
+
+    if not isinstance(source_id, str):
+        raise ValueError(
+            "Turn has invalid source_id"
+        )
+
+    source = storage.get_source(
+        source_id
+    )
+
+    if source is None:
+        raise KeyError(
+            f"Source does not exist: {source_id}"
+        )
+
+    source_metadata = (
+        source.get("metadata")
+        or {}
+    )
+
+    continuous_asr = (
+        source_metadata.get(
+            "continuous_asr"
+        )
+        or {}
+    )
+
+    evidence = continuous_asr.get(
+        evidence_name
+    )
+
+    if not isinstance(evidence, dict):
+        return ()
+
+    words = evidence.get("words")
+
+    if not isinstance(words, list):
+        return ()
+
+    metadata = turn.get("metadata") or {}
+
+    turn_asr = (
+        metadata.get("continuous_asr")
+        if isinstance(metadata, dict)
+        else None
+    )
+
+    word_indices = None
+
+    if isinstance(turn_asr, dict):
+        stored = turn_asr.get(
+            "word_indices"
+        )
+
+        if (
+            isinstance(stored, list)
+            and all(
+                isinstance(index, int)
+                for index in stored
+            )
+        ):
+            word_indices = stored
+
+    if word_indices is None:
+        start = float(
+            turn["source_start"]
+        )
+        end = float(
+            turn["source_end"]
+        )
+
+        word_indices = []
+
+        for index, word in enumerate(words):
+            if not isinstance(word, dict):
+                continue
+
+            word_start = word.get("start")
+            word_end = word.get("end")
+
+            if not isinstance(
+                word_start,
+                (int, float),
+            ):
+                continue
+
+            if not isinstance(
+                word_end,
+                (int, float),
+            ):
+                continue
+
+            word_start = float(word_start)
+            word_end = float(word_end)
+
+            if (
+                word_end >= start
+                and word_start <= end
+            ):
+                word_indices.append(index)
+
+    hints = []
+
+    for index in word_indices:
+        if not (
+            0 <= index < len(words)
+        ):
+            continue
+
+        word = words[index]
+
+        if not isinstance(word, dict):
+            continue
+
+        value = word.get("text")
+        start = word.get("start")
+        end = word.get("end")
+
+        if not isinstance(value, str):
+            continue
+
+        value = value.strip()
+
+        if not value:
+            continue
+
+        if not isinstance(
+            start,
+            (int, float),
+        ):
+            continue
+
+        if not isinstance(
+            end,
+            (int, float),
+        ):
+            continue
+
+        hints.append(
+            SplitWordHint(
+                text=value,
+                start=float(start),
+                end=float(end),
+            )
+        )
+
+    return tuple(hints)
+
+
+def build_split_turn_candidates(
+    storage,
+    turn: dict,
+    *,
+    minimum_stable_duration: float = 0.2,
+) -> tuple[SplitTurnCandidate, ...]:
+    source_regions = turn.get(
+        "source_regions"
+    )
+
+    if not isinstance(source_regions, list):
+        raise ValueError(
+            "Turn has invalid source_regions"
+        )
+
+    regions = []
+
+    for region_id in source_regions:
+        if not isinstance(region_id, str):
+            continue
+
+        region = storage.get_region(
+            region_id
+        )
+
+        if region is None:
+            raise KeyError(
+                f"Candidate region does not exist: "
+                f"{region_id}"
+            )
+
+        start = float(
+            region["source_start"]
+        )
+        end = float(
+            region["source_end"]
+        )
+
+        transcripts = (
+            region.get("transcripts")
+            or {}
+        )
+
+        whisper = transcripts.get(
+            "whisper"
+        )
+
+        text = None
+
+        if isinstance(whisper, dict):
+            value = whisper.get("text")
+
+            if isinstance(value, str):
+                value = value.strip()
+
+                if value:
+                    text = value
+
+        regions.append(
+            {
+                "id": region_id,
+                "start": start,
+                "end": end,
+                "duration": end - start,
+                "speaker": (
+                    region.get(
+                        "detector_label"
+                    )
+                ),
+                "text": text,
+            }
+        )
+
+    stable_indices = [
+        index
+        for index, region
+        in enumerate(regions)
+        if (
+            region["duration"]
+            >= minimum_stable_duration
+        )
+    ]
+
+    candidates = []
+
+    for left_index, right_index in zip(
+        stable_indices,
+        stable_indices[1:],
+    ):
+        left = regions[left_index]
+        right = regions[right_index]
+
+        if (
+            left["speaker"]
+            == right["speaker"]
+        ):
+            continue
+
+        # All short jitter regions between the two
+        # stable anchors stay on the left side. The
+        # right stable region starts the new turn.
+        split_region = regions[
+            right_index - 1
+        ]
+
+        candidates.append(
+            SplitTurnCandidate(
+                region_id=split_region["id"],
+
+                left_region_id=left["id"],
+                left_start=left["start"],
+                left_end=left["end"],
+                left_speaker=left["speaker"],
+                left_text=left["text"],
+
+                right_region_id=right["id"],
+                right_start=right["start"],
+                right_end=right["end"],
+                right_speaker=right["speaker"],
+                right_text=right["text"],
+            )
+        )
+
+    return tuple(candidates)
+
+
+@dataclass(frozen=True)
+class SplitWordHint:
+    text: str
+    start: float
+    end: float
+
+
 class SplitTurnScreen(
-    ModalScreen[str | None]
+    ModalScreen[SplitTurnRequest | None]
 ):
     CSS = """
     SplitTurnScreen {
@@ -910,9 +1222,8 @@ class SplitTurnScreen(
     }
 
     #split-dialog {
-        width: 80;
-        height: auto;
-        max-height: 90%;
+        width: 96%;
+        height: 96%;
         padding: 1 2;
         border: round $primary;
         background: $surface;
@@ -923,15 +1234,73 @@ class SplitTurnScreen(
         margin-bottom: 1;
     }
 
-    #split-options {
-        height: auto;
-        max-height: 20;
-        margin-top: 1;
+    #split-waveform {
+        width: 100%;
+        height: 10;
+        min-height: 8;
         margin-bottom: 1;
+    }
+
+    #split-content {
+        height: auto;
+    }
+
+    #split-word-timeline {
+        height: 3;
+        margin-bottom: 1;
+    }
+
+    #split-options {
+        height: 3;
+        min-height: 3;
+        max-height: 5;
+        margin-top: 1;
+    }
+
+    #split-shortcuts {
+        dock: bottom;
+        width: 100%;
+        height: 1;
+        padding: 0 1;
     }
     """
 
     BINDINGS = [
+        Binding(
+            "left",
+            "move_split(-0.01)",
+            "Split -10ms",
+            show=False,
+        ),
+        Binding(
+            "right",
+            "move_split(0.01)",
+            "Split +10ms",
+            show=False,
+        ),
+        Binding(
+            "shift+left",
+            "move_split(-0.05)",
+            "Split -50ms",
+            show=False,
+        ),
+        Binding(
+            "shift+right",
+            "move_split(0.05)",
+            "Split +50ms",
+            show=False,
+        ),
+        Binding(
+            "space",
+            "preview",
+            "Preview",
+            key_display="Space",
+        ),
+        Binding(
+            "s",
+            "stop_audio",
+            "Stop",
+        ),
         Binding(
             "escape",
             "cancel",
@@ -943,20 +1312,56 @@ class SplitTurnScreen(
         self,
         *,
         turn_id: str,
-        region_ids: tuple[str, ...],
+        candidates: tuple[
+            SplitTurnCandidate,
+            ...,
+        ],
+        word_hints: tuple[
+            SplitWordHint,
+            ...,
+        ] = (),
+        source_start: float | None = None,
+        source_end: float | None = None,
+        audio_path: Path | None = None,
     ) -> None:
         super().__init__()
+
         self.turn_id = turn_id
-        self.region_ids = region_ids
+        self.candidates = candidates
+        self.word_hints = word_hints
+        self.source_start = source_start
+        self.source_end = source_end
+        self.audio_path = audio_path
+
+        self.waveform: (
+            WaveformEnvelope | None
+        ) = None
+
+        self.split_time: float | None = None
 
     def compose(self) -> ComposeResult:
-        options = [
-            Option(
-                f"after {region_id}",
-                id=region_id,
+        options = []
+
+        for candidate in self.candidates:
+            gap = max(
+                0.0,
+                candidate.right_start
+                - candidate.left_end,
             )
-            for region_id in self.region_ids
-        ]
+
+            options.append(
+                Option(
+                    (
+                        f"{candidate.left_speaker or '-'} "
+                        f"{format_source_time(candidate.left_end)}"
+                        "  →  "
+                        f"{format_source_time(candidate.right_start)} "
+                        f"{candidate.right_speaker or '-'}"
+                        f"   gap/jitter {gap:.3f}s"
+                    ),
+                    id=candidate.region_id,
+                )
+            )
 
         with Vertical(id="split-dialog"):
             yield Static(
@@ -965,13 +1370,26 @@ class SplitTurnScreen(
             )
 
             yield Static(
-                "\n".join([
-                    f"Turn: {self.turn_id}",
-                    "",
-                    "Choose the final region "
-                    "for the left turn:",
-                ]),
+                (
+                    f"Turn: {self.turn_id}   "
+                    "Choose candidate with ↑/↓; "
+                    "move manual split with ←/→"
+                ),
                 id="split-content",
+            )
+
+            yield PlotextPlot(
+                id="split-waveform",
+            )
+
+            yield Static(
+                "",
+                id="split-word-timeline",
+            )
+
+            yield Static(
+                "",
+                id="split-candidate-info",
             )
 
             yield OptionList(
@@ -979,7 +1397,434 @@ class SplitTurnScreen(
                 id="split-options",
             )
 
-        yield Footer()
+        yield Static(
+            (
+                "↑/↓ Candidate   "
+                "←/→ ±10ms   "
+                "Shift+←/→ ±50ms   "
+                "Space Preview   "
+                "Enter Split   "
+                "Esc Cancel"
+            ),
+            id="split-shortcuts",
+        )
+
+    def on_mount(self) -> None:
+        options = self.query_one(
+            "#split-options",
+            OptionList,
+        )
+
+        if self.candidates:
+            options.highlighted = 0
+
+            candidate = self.candidates[0]
+
+            self.split_time = (
+                candidate.left_end
+                + candidate.right_start
+            ) / 2.0
+
+        if (
+            self.audio_path is not None
+            and self.source_start is not None
+            and self.source_end is not None
+        ):
+            try:
+                self.waveform = (
+                    load_waveform_envelope(
+                        self.audio_path,
+                        start=self.source_start,
+                        end=self.source_end,
+                    )
+                )
+            except (
+                ValueError,
+                FileNotFoundError,
+                OSError,
+            ):
+                self.waveform = None
+
+        self._refresh_word_timeline()
+        self._refresh_candidate_info()
+        self._refresh_plot()
+
+    def _selected_candidate(
+        self,
+    ) -> SplitTurnCandidate | None:
+        options = self.query_one(
+            "#split-options",
+            OptionList,
+        )
+
+        highlighted = options.highlighted
+
+        if highlighted is None:
+            return None
+
+        if not (
+            0 <= highlighted < len(
+                self.candidates
+            )
+        ):
+            return None
+
+        return self.candidates[
+            highlighted
+        ]
+
+    def action_move_split(
+        self,
+        delta: float,
+    ) -> None:
+        if self.split_time is None:
+            return
+
+        if (
+            self.source_start is None
+            or self.source_end is None
+        ):
+            return
+
+        margin = 0.001
+
+        self.split_time = max(
+            self.source_start + margin,
+            min(
+                self.source_end - margin,
+                self.split_time + float(delta),
+            ),
+        )
+
+        self._refresh_word_timeline()
+        self._refresh_candidate_info()
+        self._refresh_plot()
+
+    def _refresh_word_timeline(
+        self,
+    ) -> None:
+        widget = self.query_one(
+            "#split-word-timeline",
+            Static,
+        )
+
+        candidate = (
+            self._selected_candidate()
+        )
+
+        if (
+            candidate is None
+            or self.source_start is None
+            or self.source_end is None
+            or self.source_end
+            <= self.source_start
+        ):
+            widget.update(
+                "ASR words: -"
+            )
+            return
+
+        width = max(
+            40,
+            widget.size.width - 1,
+        )
+
+        line = [" "] * width
+        styles: list[
+            tuple[int, int, str]
+        ] = []
+
+        duration = (
+            self.source_end
+            - self.source_start
+        )
+
+        for hint in self.word_hints:
+            midpoint = (
+                hint.start + hint.end
+            ) / 2.0
+
+            relative = (
+                midpoint - self.source_start
+            ) / duration
+
+            column = round(
+                relative * (width - 1)
+            )
+
+            column = max(
+                0,
+                min(
+                    width - 1,
+                    column,
+                ),
+            )
+
+            label = hint.text
+
+            start_column = max(
+                0,
+                min(
+                    width - len(label),
+                    column
+                    - len(label) // 2,
+                ),
+            )
+
+            end_column = min(
+                width,
+                start_column + len(label),
+            )
+
+            # Avoid overwriting an already visible word.
+            if any(
+                character != " "
+                for character
+                in line[
+                    start_column:end_column
+                ]
+            ):
+                continue
+
+            line[
+                start_column:end_column
+            ] = list(
+                label[
+                    :end_column - start_column
+                ]
+            )
+
+            if self.split_time is None:
+                style = "rgb(150,150,150)"
+            elif hint.end <= self.split_time:
+                style = "rgb(150,150,150)"
+            elif hint.start >= self.split_time:
+                style = "rgb(0,220,140)"
+            else:
+                style = "rgb(255,140,0)"
+
+            styles.append(
+                (
+                    start_column,
+                    end_column,
+                    style,
+                )
+            )
+
+        result = Text()
+
+        result.append(
+            "ASR words (approx.)\n",
+            style="dim",
+        )
+
+        offset = len(result)
+
+        result.append(
+            "".join(line)
+        )
+
+        for (
+            start_column,
+            end_column,
+            style,
+        ) in styles:
+            result.stylize(
+                style,
+                offset + start_column,
+                offset + end_column,
+            )
+
+        result.append("\n")
+
+        result.append(
+            "LEFT",
+            style="rgb(150,150,150)",
+        )
+        result.append("   ")
+
+        result.append(
+            "CROSSING",
+            style="rgb(255,140,0)",
+        )
+        result.append("   ")
+
+        result.append(
+            "RIGHT",
+            style="rgb(0,220,140)",
+        )
+
+        widget.update(result)
+
+
+    def _refresh_candidate_info(
+        self,
+    ) -> None:
+        candidate = (
+            self._selected_candidate()
+        )
+
+        if candidate is None:
+            self.query_one(
+                "#split-candidate-info",
+                Static,
+            ).update("")
+            return
+
+        gap = max(
+            0.0,
+            candidate.right_start
+            - candidate.left_end,
+        )
+
+        left_header = (
+            "LEFT  "
+            f"{candidate.left_speaker or '-'}  "
+            f"{candidate.left_region_id}  "
+            f"{format_source_time(candidate.left_start)}"
+            "–"
+            f"{format_source_time(candidate.left_end)}"
+        )
+
+        right_header = (
+            "RIGHT  "
+            f"{candidate.right_speaker or '-'}  "
+            f"{candidate.right_region_id}  "
+            f"{format_source_time(candidate.right_start)}"
+            "–"
+            f"{format_source_time(candidate.right_end)}"
+        )
+
+        left_text = (
+            candidate.left_text or "-"
+        )
+        right_text = (
+            candidate.right_text or "-"
+        )
+
+        column_width = 66
+
+        content = "\n".join([
+            (
+                f"{left_header:<{column_width}}"
+                " │ "
+                f"{right_header}"
+            ),
+            (
+                f"{left_text:<{column_width}}"
+                " │ "
+                f"{right_text}"
+            ),
+            (
+                f"Jitter/uncertain: {gap:.3f}s"
+                "    Manual split: "
+                + (
+                    format_source_time(
+                        self.split_time
+                    )
+                    if self.split_time is not None
+                    else "-"
+                )
+            ),
+        ])
+
+        self.query_one(
+            "#split-candidate-info",
+            Static,
+        ).update(content)
+
+    def _refresh_plot(self) -> None:
+        plot = self.query_one(
+            "#split-waveform",
+            PlotextPlot,
+        )
+
+        plt = plot.plt
+        plt.clear_figure()
+
+        waveform = self.waveform
+
+        if waveform is None:
+            plt.title(
+                "Waveform unavailable"
+            )
+            plot.refresh()
+            return
+
+        plt.plot(
+            list(waveform.times),
+            list(waveform.upper),
+        )
+        plt.plot(
+            list(waveform.times),
+            list(waveform.lower),
+        )
+
+        plt.xlim(
+            waveform.start,
+            waveform.end,
+        )
+        plt.ylim(
+            -1.05,
+            1.05,
+        )
+
+        candidate = (
+            self._selected_candidate()
+        )
+
+        if candidate is not None:
+            plt.vertical_line(
+                candidate.left_end,
+                color=(0, 220, 140),
+            )
+
+            if (
+                abs(
+                    candidate.right_start
+                    - candidate.left_end
+                )
+                >= 0.001
+            ):
+                plt.vertical_line(
+                    candidate.right_start,
+                    color=(0, 220, 140),
+                )
+
+        if self.split_time is not None:
+            plt.vertical_line(
+                self.split_time,
+                color=(255, 0, 180),
+            )
+
+        plt.title(
+            "Split Preview"
+        )
+        plt.xlabel(
+            "source time [s]"
+        )
+        plt.yticks(
+            [],
+            [],
+        )
+
+        plot.refresh()
+
+    def on_option_list_option_highlighted(
+        self,
+        event: OptionList.OptionHighlighted,
+    ) -> None:
+        candidate = self._selected_candidate()
+
+        if candidate is not None:
+            self.split_time = (
+                candidate.left_end
+                + candidate.right_start
+            ) / 2.0
+
+        self._refresh_word_timeline()
+        self._refresh_candidate_info()
+        self._refresh_plot()
 
     def on_option_list_option_selected(
         self,
@@ -987,15 +1832,68 @@ class SplitTurnScreen(
     ) -> None:
         option_id = event.option.id
 
-        if option_id is None:
+        if (
+            option_id is None
+            or self.split_time is None
+        ):
             return
 
+        stop()
+
         self.dismiss(
-            str(option_id)
+            SplitTurnRequest(
+                region_id=str(option_id),
+                split_time=self.split_time,
+            )
         )
 
+    def action_preview(self) -> None:
+        if self.audio_path is None:
+            return
+
+        candidate = (
+            self._selected_candidate()
+        )
+
+        if candidate is None:
+            return
+
+        if self.split_time is None:
+            return
+
+        start = self.split_time - 0.75
+        end = self.split_time + 0.75
+
+        if self.source_start is not None:
+            start = max(
+                self.source_start,
+                start,
+            )
+
+        if self.source_end is not None:
+            end = min(
+                self.source_end,
+                end,
+            )
+
+        if end <= start:
+            return
+
+        play_file_region(
+            self.audio_path,
+            start,
+            end,
+        )
+
+    def action_stop_audio(self) -> None:
+        stop()
+
     def action_cancel(self) -> None:
+        stop()
         self.dismiss(None)
+
+    def on_unmount(self) -> None:
+        stop()
 
 
 class TrimTurnScreen(
@@ -1516,6 +2414,10 @@ class ReviewerTUI(App[None]):
     CSS = """
     Screen {
         layout: vertical;
+    }
+
+    ModalScreen {
+        background: $background;
     }
 
     #main {
@@ -2955,9 +3857,9 @@ class ReviewerTUI(App[None]):
 
     def _split_region_selected(
         self,
-        region_id: str | None,
+        request: SplitTurnRequest | None,
     ) -> None:
-        if region_id is None:
+        if request is None:
             return
 
         self.push_screen(
@@ -2965,7 +3867,7 @@ class ReviewerTUI(App[None]):
         )
 
         self._apply_split(
-            region_id
+            request
         )
 
     @work(
@@ -2975,11 +3877,12 @@ class ReviewerTUI(App[None]):
     )
     def _apply_split(
         self,
-        region_id: str,
+        request: SplitTurnRequest,
     ) -> None:
         try:
             left, right = self.session.split(
-                after_region_id=region_id,
+                after_region_id=request.region_id,
+                split_time=request.split_time,
             )
         except (
             ValueError,
@@ -3078,10 +3981,67 @@ class ReviewerTUI(App[None]):
             )
             return
 
+        source_id = turn.get("source_id")
+
+        if not isinstance(source_id, str):
+            self._set_status(
+                "Turn has invalid source_id"
+            )
+            return
+
+        candidates = list(
+            build_split_turn_candidates(
+                self.session.storage,
+                turn,
+            )
+        )
+
+        word_hints = (
+            build_split_word_hints(
+                self.session.storage,
+                turn,
+            )
+        )
+
+        if not candidates:
+            self._set_status(
+                "Turn has no previewable split point"
+            )
+            return
+
+        audio_path = None
+
+        try:
+            (
+                _representation_name,
+                _representation,
+                audio_path,
+            ) = (
+                resolve_source_representation_for_purpose(
+                    self.session.storage,
+                    source_id,
+                    "review",
+                )
+            )
+        except (
+            ValueError,
+            KeyError,
+            OSError,
+        ):
+            audio_path = None
+
         self.push_screen(
             SplitTurnScreen(
                 turn_id=str(turn["id"]),
-                region_ids=valid_regions,
+                candidates=tuple(candidates),
+                word_hints=word_hints,
+                source_start=float(
+                    turn["source_start"]
+                ),
+                source_end=float(
+                    turn["source_end"]
+                ),
+                audio_path=audio_path,
             ),
             self._split_region_selected,
         )

@@ -983,6 +983,7 @@ def split_turn_ranges(
     turn_id: str,
     *,
     after_region_id: str,
+    split_time: float | None = None,
 ) -> tuple[
     str,
     list[str],
@@ -1081,12 +1082,44 @@ def split_turn_ranges(
 
         return float(start), float(end)
 
+    if split_time is None:
+        left_range = bounds(left_ids)
+        right_range = bounds(right_ids)
+    else:
+        split_time = float(split_time)
+
+        turn_start = float(
+            turn["source_start"]
+        )
+        turn_end = float(
+            turn["source_end"]
+        )
+
+        if not (
+            turn_start
+            < split_time
+            < turn_end
+        ):
+            raise ValueError(
+                "Manual split time must be inside "
+                f"{turn_id}"
+            )
+
+        left_range = (
+            turn_start,
+            split_time,
+        )
+        right_range = (
+            split_time,
+            turn_end,
+        )
+
     return (
         source_id,
         left_ids,
-        bounds(left_ids),
+        left_range,
         right_ids,
-        bounds(right_ids),
+        right_range,
     )
 
 
@@ -1095,6 +1128,7 @@ def split_turn(
     turn_id: str,
     *,
     after_region_id: str,
+    split_time: float | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     turns = storage.turns.load()
 
@@ -1126,6 +1160,7 @@ def split_turn(
         storage,
         turn_id,
         after_region_id=after_region_id,
+        split_time=split_time,
     )
 
     source_regions = left_ids + right_ids
@@ -1174,8 +1209,12 @@ def split_turn(
                 "source_turn_id": turn_id,
                 "split_after_region":
                     after_region_id,
+                "split_time": split_time,
                 "split_side": split_side,
-            }
+            },
+            "boundary_curation": {
+                "method": "manual",
+            },
         }
 
         boundary_evidence = (
