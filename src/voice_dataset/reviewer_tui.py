@@ -786,7 +786,7 @@ class ConfirmRecoveryScreen(
 
 
 class ConfirmMergeScreen(
-    ModalScreen[bool | None]
+    ModalScreen[list[str] | None]
 ):
     CSS = """
     ConfirmMergeScreen {
@@ -794,30 +794,64 @@ class ConfirmMergeScreen(
     }
 
     #merge-dialog {
-        width: 90;
-        height: auto;
-        max-height: 90%;
+        width: 96%;
+        height: 90%;
         padding: 1 2;
         border: round $primary;
         background: $surface;
+    }
+
+    #merge-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    #merge-content {
+        height: 1fr;
+    }
+
+    #merge-shortcuts {
+        dock: bottom;
+        width: 100%;
+        height: 1;
+        padding: 0 1;
     }
     """
 
     BINDINGS = [
         Binding(
-            "1",
-            "play_first",
-            "Play First",
+            "up",
+            "previous_selected",
+            "Previous",
+            show=False,
         ),
         Binding(
-            "2",
-            "play_second",
-            "Play Second",
+            "down",
+            "next_selected",
+            "Next",
+            show=False,
+        ),
+        Binding(
+            "plus",
+            "extend_selection",
+            "Add Turn",
+            key_display="+",
+        ),
+        Binding(
+            "minus",
+            "shrink_selection",
+            "Remove Turn",
+            key_display="-",
+        ),
+        Binding(
+            "p",
+            "play_selected",
+            "Play Turn",
         ),
         Binding(
             "space",
-            "play_both",
-            "Play Both",
+            "play_all",
+            "Play All",
             key_display="Space",
         ),
         Binding(
@@ -840,73 +874,192 @@ class ConfirmMergeScreen(
     def __init__(
         self,
         *,
-        content: str,
+        turns: tuple[dict, ...],
         audio_path: Path | None = None,
-        first_range: tuple[
-            float,
-            float,
-        ] | None = None,
-        second_range: tuple[
-            float,
-            float,
-        ] | None = None,
     ) -> None:
         super().__init__()
-        self.content = content
+
+        if len(turns) < 2:
+            raise ValueError(
+                "Merge screen requires at least two turns"
+            )
+
+        self.turns = turns
         self.audio_path = audio_path
-        self.first_range = first_range
-        self.second_range = second_range
+
+        self.selected_count = 2
+        self.highlighted_index = 0
 
     def compose(self) -> ComposeResult:
         with Vertical(id="merge-dialog"):
             yield Static(
-                self.content,
+                "Merge Turns",
+                id="merge-title",
+            )
+
+            yield Static(
+                "",
                 id="merge-content",
             )
 
-        yield Footer()
+        yield Static(
+            (
+                "+ Add   "
+                "- Remove   "
+                "↑/↓ Select   "
+                "p Play Turn   "
+                "Space Play All   "
+                "Enter Merge   "
+                "Esc Cancel"
+            ),
+            id="merge-shortcuts",
+        )
+
+    def on_mount(self) -> None:
+        self._refresh_content()
+
+    def _selected_turns(
+        self,
+    ) -> tuple[dict, ...]:
+        return self.turns[
+            :self.selected_count
+        ]
+
+    def _refresh_content(self) -> None:
+        result = Text()
+
+        result.append(
+            (
+                f"Selected {self.selected_count} "
+                "consecutive turns\n\n"
+            ),
+            style="dim",
+        )
+
+        for index, turn in enumerate(
+            self._selected_turns()
+        ):
+            start = float(
+                turn["source_start"]
+            )
+            end = float(
+                turn["source_end"]
+            )
+
+            header = (
+                f"{turn['id']}  "
+                f"{format_source_time(start)}–"
+                f"{format_source_time(end)}"
+            )
+
+            style = (
+                "bold reverse"
+                if index == self.highlighted_index
+                else "bold"
+            )
+
+            result.append(
+                header,
+                style=style,
+            )
+            result.append("\n")
+
+            result.append(
+                str(
+                    turn.get("transcript")
+                    or "-"
+                )
+            )
+            result.append("\n\n")
+
+        if self.selected_count < len(self.turns):
+            result.append(
+                (
+                    f"+ can add {len(self.turns) - self.selected_count} "
+                    "following turn(s)"
+                ),
+                style="dim",
+            )
+        else:
+            result.append(
+                "No more following turns.",
+                style="dim",
+            )
+
+        self.query_one(
+            "#merge-content",
+            Static,
+        ).update(result)
+
+    def action_previous_selected(self) -> None:
+        if self.highlighted_index > 0:
+            self.highlighted_index -= 1
+            self._refresh_content()
+
+    def action_next_selected(self) -> None:
+        if (
+            self.highlighted_index
+            < self.selected_count - 1
+        ):
+            self.highlighted_index += 1
+            self._refresh_content()
+
+    def action_extend_selection(self) -> None:
+        if self.selected_count >= len(self.turns):
+            return
+
+        self.selected_count += 1
+        self.highlighted_index = (
+            self.selected_count - 1
+        )
+        self._refresh_content()
+
+    def action_shrink_selection(self) -> None:
+        if self.selected_count <= 2:
+            return
+
+        self.selected_count -= 1
+
+        self.highlighted_index = min(
+            self.highlighted_index,
+            self.selected_count - 1,
+        )
+
+        self._refresh_content()
 
     def _play_range(
         self,
-        source_range: tuple[
-            float,
-            float,
-        ] | None,
+        start: float,
+        end: float,
     ) -> None:
-        if (
-            self.audio_path is None
-            or source_range is None
-        ):
+        if self.audio_path is None:
+            return
+
+        if end <= start:
             return
 
         play_file_region(
             self.audio_path,
-            source_range[0],
-            source_range[1],
+            start,
+            end,
         )
 
-    def action_play_first(self) -> None:
+    def action_play_selected(self) -> None:
+        turn = self._selected_turns()[
+            self.highlighted_index
+        ]
+
         self._play_range(
-            self.first_range
+            float(turn["source_start"]),
+            float(turn["source_end"]),
         )
 
-    def action_play_second(self) -> None:
-        self._play_range(
-            self.second_range
-        )
-
-    def action_play_both(self) -> None:
-        if (
-            self.first_range is None
-            or self.second_range is None
-        ):
-            return
+    def action_play_all(self) -> None:
+        turns = self._selected_turns()
 
         self._play_range(
-            (
-                self.first_range[0],
-                self.second_range[1],
-            )
+            float(turns[0]["source_start"]),
+            float(turns[-1]["source_end"]),
         )
 
     def action_stop_audio(self) -> None:
@@ -914,7 +1067,11 @@ class ConfirmMergeScreen(
 
     def action_accept(self) -> None:
         stop()
-        self.dismiss(True)
+
+        self.dismiss([
+            str(turn["id"])
+            for turn in self._selected_turns()
+        ])
 
     def action_cancel(self) -> None:
         stop()
@@ -3705,30 +3862,33 @@ class ReviewerTUI(App[None]):
             self._edge_recovery_confirmed,
         )
 
-    def _merge_with_next_confirmed(
+    def _merge_turns_confirmed(
         self,
-        accepted: bool | None,
+        turn_ids: list[str] | None,
     ) -> None:
-        if not accepted:
+        if not turn_ids:
             return
 
         self.push_screen(
             UpdatingTurnScreen()
         )
 
-        self._apply_merge_with_next()
+        self._apply_merge_turns(
+            tuple(turn_ids)
+        )
 
     @work(
         thread=True,
         exclusive=True,
         group="merge-turns",
     )
-    def _apply_merge_with_next(
+    def _apply_merge_turns(
         self,
+        turn_ids: tuple[str, ...],
     ) -> None:
         try:
-            merged = (
-                self.session.merge_with_next()
+            merged = self.session.merge(
+                list(turn_ids)
             )
         except (
             ValueError,
@@ -3821,48 +3981,15 @@ class ReviewerTUI(App[None]):
             )
             return
 
-        if index >= len(turns) - 1:
+        merge_candidates = tuple(
+            turns[index:]
+        )
+
+        if len(merge_candidates) < 2:
             self._set_status(
                 "Current turn has no next turn"
             )
             return
-
-        next_turn = turns[index + 1]
-
-        current_start = float(
-            current["source_start"]
-        )
-        current_end = float(
-            current["source_end"]
-        )
-        next_start = float(
-            next_turn["source_start"]
-        )
-        next_end = float(
-            next_turn["source_end"]
-        )
-
-        content = "\n".join([
-            "Merge Turns",
-            "",
-            (
-                f"{current['id']}  "
-                f"{current_start:.3f}-{current_end:.3f}"
-            ),
-            str(
-                current.get("transcript")
-                or "-"
-            ),
-            "",
-            (
-                f"{next_turn['id']}  "
-                f"{next_start:.3f}-{next_end:.3f}"
-            ),
-            str(
-                next_turn.get("transcript")
-                or "-"
-            ),
-        ])
 
         audio_path = None
 
@@ -3887,18 +4014,10 @@ class ReviewerTUI(App[None]):
 
         self.push_screen(
             ConfirmMergeScreen(
-                content=content,
+                turns=merge_candidates,
                 audio_path=audio_path,
-                first_range=(
-                    current_start,
-                    current_end,
-                ),
-                second_range=(
-                    next_start,
-                    next_end,
-                ),
             ),
-            self._merge_with_next_confirmed,
+            self._merge_turns_confirmed,
         )
 
     def _split_region_selected(

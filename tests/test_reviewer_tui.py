@@ -1348,9 +1348,9 @@ async def test_reviewer_tui_merges_with_next_turn(
 
     calls = []
 
-    def merge_with_next():
+    def merge(turn_ids):
         calls.append(
-            session.current_turn_id
+            list(turn_ids)
         )
 
         return storage.get_turn(
@@ -1359,8 +1359,8 @@ async def test_reviewer_tui_merges_with_next_turn(
 
     monkeypatch.setattr(
         session,
-        "merge_with_next",
-        merge_with_next,
+        "merge",
+        merge,
     )
 
     app = ReviewerTUI(
@@ -1382,7 +1382,14 @@ async def test_reviewer_tui_merges_with_next_turn(
 
         rendered = str(content.render())
 
-        assert "Merge Turns" in rendered
+        title = app.screen.query_one(
+            "#merge-title",
+            Static,
+        )
+
+        assert "Merge Turns" in str(
+            title.render()
+        )
         assert "turn_000001" in rendered
         assert "turn_000002" in rendered
         assert "First line" in rendered
@@ -1392,7 +1399,10 @@ async def test_reviewer_tui_merges_with_next_turn(
         await pilot.pause()
 
         assert calls == [
-            "turn_000001",
+            [
+                "turn_000001",
+                "turn_000002",
+            ],
         ]
 
         assert len(app.screen_stack) == 1
@@ -2187,9 +2197,26 @@ async def test_merge_screen_has_contextual_footer(
     )
 
     async with app.run_test() as pilot:
+        first = storage.get_turn(
+            "turn_000001"
+        )
+
+        assert first is not None
+
+        second = {
+            **first,
+            "id": "turn_000002",
+            "source_start": 2.0,
+            "source_end": 3.0,
+            "transcript": "Second",
+        }
+
         app.push_screen(
             ConfirmMergeScreen(
-                content="Merge",
+                turns=(
+                    first,
+                    second,
+                ),
             )
         )
         await pilot.pause()
@@ -2199,9 +2226,24 @@ async def test_merge_screen_has_contextual_footer(
             ConfirmMergeScreen,
         )
 
-        assert app.screen.query_one(
-            Footer
-        ) is not None
+        assert list(
+            app.screen.query(Footer)
+        ) == []
+
+        shortcuts = app.screen.query_one(
+            "#merge-shortcuts",
+            Static,
+        )
+
+        rendered = str(
+            shortcuts.render()
+        )
+
+        assert "+ Add" in rendered
+        assert "- Remove" in rendered
+        assert "p Play Turn" in rendered
+        assert "Space Play All" in rendered
+        assert "Enter Merge" in rendered
 
 
 @pytest.mark.asyncio
@@ -4502,3 +4544,96 @@ async def test_trim_screen_space_previews_while_input_is_focused(
 
         # Space must not be inserted into the numeric field.
         assert start_input.value == "1.000000"
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_merges_three_consecutive_turns(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    for index in range(1, 5):
+        add_turn(
+            storage,
+            f"turn_{index:06d}",
+            source_start=float(index),
+        )
+
+    session = ReviewerSession(storage)
+
+    calls = []
+
+    def merge(turn_ids):
+        calls.append(
+            list(turn_ids)
+        )
+
+        return storage.get_turn(
+            "turn_000001"
+        )
+
+    monkeypatch.setattr(
+        session,
+        "merge",
+        merge,
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("m")
+        await pilot.pause()
+
+        assert isinstance(
+            app.screen,
+            ConfirmMergeScreen,
+        )
+
+        content = app.screen.query_one(
+            "#merge-content",
+            Static,
+        )
+
+        rendered = str(
+            content.render()
+        )
+
+        assert (
+            "Selected 2 consecutive turns"
+            in rendered
+        )
+        assert "turn_000001" in rendered
+        assert "turn_000002" in rendered
+        assert "turn_000003" not in rendered
+
+        await pilot.press("plus")
+        await pilot.pause()
+
+        rendered = str(
+            content.render()
+        )
+
+        assert (
+            "Selected 3 consecutive turns"
+            in rendered
+        )
+        assert "turn_000003" in rendered
+        assert "turn_000004" not in rendered
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert calls == [
+            [
+                "turn_000001",
+                "turn_000002",
+                "turn_000003",
+            ],
+        ]
+
+        assert len(app.screen_stack) == 1
