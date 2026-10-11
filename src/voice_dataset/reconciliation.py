@@ -1179,18 +1179,20 @@ def split_turn(
         regions[region_id] = region
 
     for region_id in source_regions:
-        effective = effective_region_reconciliation(
+        owners = _turns_using_region(
             storage,
-            regions[region_id],
+            region_id,
         )
 
-        if (
-            effective["status"] != "reconciled"
-            or effective["turn_id"] != turn_id
-        ):
+        owner_ids = {
+            str(owner["id"])
+            for owner in owners
+        }
+
+        if turn_id not in owner_ids:
             raise ValueError(
-                f"{region_id} is not exclusively "
-                f"reconciled to {turn_id}"
+                f"{region_id} does not belong "
+                f"to {turn_id}"
             )
 
     new_turn_id = storage.next_turn_id()

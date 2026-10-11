@@ -2563,3 +2563,144 @@ def test_mark_turn_rejected_also_marks_reviewed(
     assert result["review"]["boundary"] == {
         "status": "complete",
     }
+
+
+def test_manual_split_allows_preexisting_shared_region_provenance(
+    tmp_path,
+    monkeypatch,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    storage.regions.append(
+        {
+            "schema_version": 1,
+            "record_type": "region",
+            "id": "region_shared",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 1.5,
+        }
+    )
+
+    storage.regions.append(
+        {
+            "schema_version": 1,
+            "record_type": "region",
+            "id": "region_right",
+            "source_id": "source_001",
+            "source_start": 1.5,
+            "source_end": 2.0,
+        }
+    )
+
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "record_type": "turn",
+            "id": "turn_previous",
+            "source_id": "source_001",
+            "source_start": 0.5,
+            "source_end": 1.25,
+            "source_regions": [
+                "region_shared",
+            ],
+            "language": "en",
+            "transcript": "previous",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+                "confidence": None,
+            },
+            "curation": {
+                "status": "pending",
+            },
+            "review": {
+                "status": "pending",
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {},
+        }
+    )
+
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 1.25,
+            "source_end": 2.0,
+            "source_regions": [
+                "region_shared",
+                "region_right",
+            ],
+            "language": "en",
+            "transcript": "hello there",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+                "confidence": None,
+            },
+            "curation": {
+                "status": "pending",
+            },
+            "review": {
+                "status": "pending",
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {
+                "automatic_pipeline": {
+                    "status": "review",
+                    "review_reasons": [
+                        "unresolved_speaker",
+                    ],
+                },
+            },
+        }
+    )
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        lambda *args, **kwargs: None,
+    )
+
+    left, right = split_and_prepare_turn(
+        storage,
+        "turn_000001",
+        after_region_id="region_shared",
+        split_time=1.5,
+    )
+
+    assert left["source_regions"] == [
+        "region_shared"
+    ]
+    assert right["source_regions"] == [
+        "region_right"
+    ]
+
+    previous = storage.get_turn(
+        "turn_previous"
+    )
+
+    assert previous is not None
+    assert previous["source_regions"] == [
+        "region_shared"
+    ]
+
+    owners = [
+        turn["id"]
+        for turn in storage.turns.load()
+        if "region_shared" in (
+            turn.get("source_regions") or []
+        )
+    ]
+
+    assert set(owners) == {
+        "turn_previous",
+        "turn_000001",
+    }
