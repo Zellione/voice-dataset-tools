@@ -851,10 +851,22 @@ def trim_and_prepare_turn(
             previous_turn["source_end"]
         )
 
-        if new_start < previous_end:
+        previous_overlap_before = max(
+            0.0,
+            previous_end - current_start,
+        )
+        previous_overlap_after = max(
+            0.0,
+            previous_end - new_start,
+        )
+
+        if (
+            previous_overlap_after
+            > previous_overlap_before + 1e-9
+        ):
             raise ValueError(
-                "Boundary edit would overlap "
-                "previous turn"
+                "Boundary edit would increase overlap "
+                "with previous turn"
             )
 
     if turn_index + 1 < len(source_turns):
@@ -865,10 +877,22 @@ def trim_and_prepare_turn(
             next_turn["source_start"]
         )
 
-        if new_end > next_start:
+        next_overlap_before = max(
+            0.0,
+            current_end - next_start,
+        )
+        next_overlap_after = max(
+            0.0,
+            new_end - next_start,
+        )
+
+        if (
+            next_overlap_after
+            > next_overlap_before + 1e-9
+        ):
             raise ValueError(
-                "Boundary edit would overlap "
-                "next turn"
+                "Boundary edit would increase overlap "
+                "with next turn"
             )
 
     require_source_utterance_reconciliation(

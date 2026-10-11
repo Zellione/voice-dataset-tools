@@ -2851,3 +2851,179 @@ def test_manual_split_moves_shared_region_provenance_to_right_child(
         right["id"],
     }
     assert "turn_000001" not in owners
+
+
+def test_trim_allows_start_edit_with_unchanged_next_overlap(
+    tmp_path,
+    monkeypatch,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 0.9,
+            "source_end": 1.9,
+            "source_regions": [],
+            "language": "en",
+            "transcript": "hello there",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+                "confidence": None,
+            },
+            "curation": {
+                "status": "pending",
+            },
+            "review": {
+                "status": "pending",
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {},
+        }
+    )
+
+    # Pre-existing 100 ms overlap with the next turn.
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "record_type": "turn",
+            "id": "turn_000002",
+            "source_id": "source_001",
+            "source_start": 1.8,
+            "source_end": 2.5,
+            "source_regions": [],
+            "language": "en",
+            "transcript": "next",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+                "confidence": None,
+            },
+            "curation": {
+                "status": "pending",
+            },
+            "review": {
+                "status": "pending",
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {},
+        }
+    )
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        lambda *args, **kwargs: None,
+    )
+
+    result = trim_and_prepare_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    assert result["source_start"] == pytest.approx(
+        1.0
+    )
+    assert result["source_end"] == pytest.approx(
+        1.9
+    )
+
+    # Existing overlap is unchanged, not enlarged.
+    next_turn = storage.get_turn(
+        "turn_000002"
+    )
+
+    assert next_turn is not None
+    assert next_turn["source_start"] == pytest.approx(
+        1.8
+    )
+
+
+def test_trim_rejects_increasing_existing_next_overlap(
+    tmp_path,
+    monkeypatch,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 0.9,
+            "source_end": 1.9,
+            "source_regions": [],
+            "language": "en",
+            "transcript": "hello there",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+                "confidence": None,
+            },
+            "curation": {
+                "status": "pending",
+            },
+            "review": {
+                "status": "pending",
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {},
+        }
+    )
+
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "record_type": "turn",
+            "id": "turn_000002",
+            "source_id": "source_001",
+            "source_start": 1.8,
+            "source_end": 2.5,
+            "source_regions": [],
+            "language": "en",
+            "transcript": "next",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+                "confidence": None,
+            },
+            "curation": {
+                "status": "pending",
+            },
+            "review": {
+                "status": "pending",
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {},
+        }
+    )
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        lambda *args, **kwargs: None,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="increase overlap with next turn",
+    ):
+        trim_and_prepare_turn(
+            storage,
+            "turn_000001",
+            source_end=2.0,
+        )
