@@ -1343,6 +1343,28 @@ def split_turn(
         if after_turn_ids == before_turn_ids:
             continue
 
+        before_foreign = (
+            before_turn_ids - {turn_id}
+        )
+        after_foreign = (
+            after_turn_ids
+            - {turn_id, new_turn_id}
+        )
+
+        replaced_parent_with_child = (
+            turn_id in before_turn_ids
+            and before_foreign == after_foreign
+            and len(after_turn_ids)
+            <= len(before_turn_ids)
+            and (
+                turn_id in after_turn_ids
+                or new_turn_id in after_turn_ids
+            )
+        )
+
+        if replaced_parent_with_child:
+            continue
+
         raise ValueError(
             "Split would introduce or change "
             "multiple turn ownership for "

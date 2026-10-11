@@ -2704,3 +2704,150 @@ def test_manual_split_allows_preexisting_shared_region_provenance(
         "turn_previous",
         "turn_000001",
     }
+
+
+def test_manual_split_moves_shared_region_provenance_to_right_child(
+    tmp_path,
+    monkeypatch,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    storage.regions.append(
+        {
+            "schema_version": 1,
+            "record_type": "region",
+            "id": "region_left",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 1.5,
+        }
+    )
+
+    storage.regions.append(
+        {
+            "schema_version": 1,
+            "record_type": "region",
+            "id": "region_shared",
+            "source_id": "source_001",
+            "source_start": 1.5,
+            "source_end": 2.0,
+        }
+    )
+
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "record_type": "turn",
+            "id": "turn_next",
+            "source_id": "source_001",
+            "source_start": 1.75,
+            "source_end": 2.2,
+            "source_regions": [
+                "region_shared",
+            ],
+            "language": "en",
+            "transcript": "next",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+                "confidence": None,
+            },
+            "curation": {
+                "status": "pending",
+            },
+            "review": {
+                "status": "pending",
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {},
+        }
+    )
+
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 2.0,
+            "source_regions": [
+                "region_left",
+                "region_shared",
+            ],
+            "language": "en",
+            "transcript": "hello there",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+                "confidence": None,
+            },
+            "curation": {
+                "status": "pending",
+            },
+            "review": {
+                "status": "pending",
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {
+                "automatic_pipeline": {
+                    "status": "review",
+                    "review_reasons": [
+                        "unresolved_speaker",
+                    ],
+                },
+            },
+        }
+    )
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        lambda *args, **kwargs: None,
+    )
+
+    left, right = split_and_prepare_turn(
+        storage,
+        "turn_000001",
+        after_region_id="region_left",
+        split_time=1.5,
+    )
+
+    assert left["id"] == "turn_000001"
+    assert left["source_regions"] == [
+        "region_left"
+    ]
+
+    assert right["id"] != left["id"]
+    assert right["source_regions"] == [
+        "region_shared"
+    ]
+
+    next_turn = storage.get_turn(
+        "turn_next"
+    )
+
+    assert next_turn is not None
+    assert next_turn["source_regions"] == [
+        "region_shared"
+    ]
+
+    owners = {
+        turn["id"]
+        for turn in storage.turns.load()
+        if "region_shared" in (
+            turn.get("source_regions") or []
+        )
+    }
+
+    # The pre-existing foreign owner survives,
+    # while the parent is replaced by its right child.
+    assert owners == {
+        "turn_next",
+        right["id"],
+    }
+    assert "turn_000001" not in owners
