@@ -161,8 +161,8 @@ def test_process_source_runs_pipeline_in_order(
 
     monkeypatch.setattr(
         process_module,
-        "_has_continuous_asr",
-        lambda *args: False,
+        "continuous_asr_evidence_is_compatible",
+        lambda *args, **kwargs: False,
     )
 
     def fake_qwen(
@@ -404,7 +404,10 @@ def test_process_source_skips_expensive_completed_steps(
         "metadata": {
             "continuous_asr": {
                 "qwen3": {
-                    "model": "existing",
+                    "model": (
+                        "Qwen/Qwen3-ASR-0.6B"
+                    ),
+                    "representation": "center",
                 },
             },
             "utterance_reconciliation": reconciliation,

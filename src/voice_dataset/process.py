@@ -4,7 +4,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .continuous_asr import transcribe_source_qwen3
+from .continuous_asr import (
+    continuous_asr_evidence_is_compatible,
+    transcribe_source_qwen3,
+)
 from .detectors import detect_source_regions
 from .ingest import ingest
 from .region_asr import transcribe_regions
@@ -50,31 +53,6 @@ def _source_regions(
         for region in storage.regions.load()
         if region.get("source_id") == source_id
     ]
-
-
-def _has_continuous_asr(
-    storage: DatasetStorage,
-    source_id: str,
-    evidence_name: str,
-) -> bool:
-    source = storage.get_source(source_id)
-
-    if source is None:
-        return False
-
-    metadata = source.get("metadata")
-
-    if not isinstance(metadata, dict):
-        return False
-
-    continuous_asr = metadata.get("continuous_asr")
-
-    if not isinstance(continuous_asr, dict):
-        return False
-
-    evidence = continuous_asr.get(evidence_name)
-
-    return isinstance(evidence, dict)
 
 
 def _validate_existing_source(
@@ -249,10 +227,12 @@ def process_source(
 
     qwen_ran = False
 
-    if not _has_continuous_asr(
+    if not continuous_asr_evidence_is_compatible(
         storage,
         source_id,
         "qwen3",
+        representation_name=asr_name,
+        language=language,
     ):
         transcribe_source_qwen3(
             storage,

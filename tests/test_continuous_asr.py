@@ -628,3 +628,129 @@ def test_align_texts_qwen3_runs_one_worker_for_batch(
     assert "--input-manifest" in arguments
     assert "--max-inference-batch-size" in arguments
     assert "16" in arguments
+
+
+def test_continuous_asr_compatibility_accepts_legacy_evidence(
+    tmp_path,
+):
+    from voice_dataset.continuous_asr import (
+        QWEN3_ASR_MODEL,
+        continuous_asr_evidence_is_compatible,
+    )
+    from voice_dataset.schema import SourceRecord
+
+    storage = DatasetStorage(tmp_path)
+
+    storage.add_source(
+        SourceRecord(
+            id="source_001",
+            metadata={
+                "continuous_asr": {
+                    "qwen3": {
+                        "model": QWEN3_ASR_MODEL,
+                        "representation": "center",
+                        "language": "English",
+                        "text": "hello",
+                        "words": [],
+                        "utterances": [],
+                    },
+                },
+            },
+        )
+    )
+
+    assert continuous_asr_evidence_is_compatible(
+        storage,
+        "source_001",
+        "qwen3",
+        representation_name="center",
+        language="English",
+    )
+
+
+def test_continuous_asr_compatibility_rejects_new_language_override(
+    tmp_path,
+):
+    from voice_dataset.continuous_asr import (
+        CONTINUOUS_ASR_EVIDENCE_VERSION,
+        QWEN3_ASR_MODEL,
+        continuous_asr_evidence_is_compatible,
+    )
+    from voice_dataset.schema import SourceRecord
+
+    storage = DatasetStorage(tmp_path)
+
+    storage.add_source(
+        SourceRecord(
+            id="source_001",
+            metadata={
+                "continuous_asr": {
+                    "qwen3": {
+                        "model": QWEN3_ASR_MODEL,
+                        "representation": "center",
+                        "provenance": {
+                            "version": (
+                                CONTINUOUS_ASR_EVIDENCE_VERSION
+                            ),
+                            "language_override": "English",
+                            "chunking": {
+                                "target_chunk_seconds": 60.0,
+                                "boundary_search_seconds": 15.0,
+                                "max_chunk_seconds": 240.0,
+                                "minimum_gap_seconds": 0.5,
+                            },
+                        },
+                    },
+                },
+            },
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="different language override",
+    ):
+        continuous_asr_evidence_is_compatible(
+            storage,
+            "source_001",
+            "qwen3",
+            representation_name="center",
+            language="German",
+        )
+
+
+def test_continuous_asr_compatibility_rejects_model_change(
+    tmp_path,
+):
+    from voice_dataset.continuous_asr import (
+        continuous_asr_evidence_is_compatible,
+    )
+    from voice_dataset.schema import SourceRecord
+
+    storage = DatasetStorage(tmp_path)
+
+    storage.add_source(
+        SourceRecord(
+            id="source_001",
+            metadata={
+                "continuous_asr": {
+                    "qwen3": {
+                        "model": "old-model",
+                        "representation": "center",
+                    },
+                },
+            },
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="different model",
+    ):
+        continuous_asr_evidence_is_compatible(
+            storage,
+            "source_001",
+            "qwen3",
+            representation_name="center",
+            language=None,
+        )

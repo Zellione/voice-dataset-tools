@@ -15,6 +15,8 @@ from .workers import run_worker, worker
 
 QWEN3_ASR_MODEL = "Qwen/Qwen3-ASR-0.6B"
 
+CONTINUOUS_ASR_EVIDENCE_VERSION = 1
+
 _SENTENCE_RE = re.compile(r".+?(?:[.!?]+(?=\s|$)|$)", re.DOTALL)
 _TOKEN_RE = re.compile(r"\w+(?:['’]\w+)*", re.UNICODE)
 
@@ -501,6 +503,120 @@ def _derive_utterances(
     return utterances
 
 
+def continuous_asr_evidence_is_compatible(
+    storage: DatasetStorage,
+    source_id: str,
+    evidence_name: str,
+    *,
+    representation_name: str,
+    language: str | None,
+) -> bool:
+    source = storage.get_source(source_id)
+
+    if source is None:
+        return False
+
+    metadata = source.get("metadata")
+
+    if not isinstance(metadata, dict):
+        return False
+
+    continuous_asr = metadata.get(
+        "continuous_asr"
+    )
+
+    if not isinstance(continuous_asr, dict):
+        return False
+
+    evidence = continuous_asr.get(
+        evidence_name
+    )
+
+    if not isinstance(evidence, dict):
+        return False
+
+    if evidence.get("model") != QWEN3_ASR_MODEL:
+        raise ValueError(
+            "Continuous ASR evidence uses "
+            "different model: "
+            f"{source_id}/{evidence_name}"
+        )
+
+    if (
+        evidence.get("representation")
+        != representation_name
+    ):
+        raise ValueError(
+            "Continuous ASR evidence uses "
+            "different representation: "
+            f"{source_id}/{evidence_name}"
+        )
+
+    provenance = evidence.get(
+        "provenance"
+    )
+
+    # Legacy evidence predates explicit execution
+    # provenance. Preserve it if the model and source
+    # representation still match rather than silently
+    # replacing a curated word timeline.
+    if provenance is None:
+        return True
+
+    if not isinstance(provenance, dict):
+        raise ValueError(
+            "Continuous ASR evidence has invalid "
+            f"provenance: {source_id}/{evidence_name}"
+        )
+
+    if (
+        provenance.get("version")
+        != CONTINUOUS_ASR_EVIDENCE_VERSION
+    ):
+        raise ValueError(
+            "Continuous ASR evidence version "
+            "is stale: "
+            f"{source_id}/{evidence_name}"
+        )
+
+    if (
+        provenance.get("language_override")
+        != language
+    ):
+        raise ValueError(
+            "Continuous ASR evidence uses "
+            "different language override: "
+            f"{source_id}/{evidence_name}"
+        )
+
+    expected_parameters = {
+        "target_chunk_seconds": (
+            CONTINUOUS_ASR_TARGET_CHUNK_SECONDS
+        ),
+        "boundary_search_seconds": (
+            CONTINUOUS_ASR_BOUNDARY_SEARCH_SECONDS
+        ),
+        "max_chunk_seconds": (
+            CONTINUOUS_ASR_MAX_CHUNK_SECONDS
+        ),
+        "minimum_gap_seconds": (
+            CONTINUOUS_ASR_MIN_SPEECH_GAP_SECONDS
+        ),
+    }
+
+    if (
+        provenance.get("chunking")
+        != expected_parameters
+    ):
+        raise ValueError(
+            "Continuous ASR evidence uses "
+            "different chunking parameters: "
+            f"{source_id}/{evidence_name}"
+        )
+
+    return True
+
+
 def attach_continuous_asr(
     storage: DatasetStorage,
     source_id: str,
@@ -512,6 +628,8 @@ def attach_continuous_asr(
     text: str,
     words: list[dict[str, Any]],
     utterances: list[dict[str, Any]],
+    language_override: str | None = None,
+    provenance_version: int | None = None,
 ) -> dict[str, Any]:
     if not name:
         raise ValueError(
@@ -568,6 +686,28 @@ def attach_continuous_asr(
             for utterance in utterances
         ],
     }
+
+    if provenance_version is not None:
+        evidence["provenance"] = {
+            "version": provenance_version,
+            "language_override": (
+                language_override
+            ),
+            "chunking": {
+                "target_chunk_seconds": (
+                    CONTINUOUS_ASR_TARGET_CHUNK_SECONDS
+                ),
+                "boundary_search_seconds": (
+                    CONTINUOUS_ASR_BOUNDARY_SEARCH_SECONDS
+                ),
+                "max_chunk_seconds": (
+                    CONTINUOUS_ASR_MAX_CHUNK_SECONDS
+                ),
+                "minimum_gap_seconds": (
+                    CONTINUOUS_ASR_MIN_SPEECH_GAP_SECONDS
+                ),
+            },
+        }
 
     def update(
         record: dict[str, Any],
@@ -1348,6 +1488,10 @@ def transcribe_source_qwen3(
         text=result.text,
         words=result.words,
         utterances=result.utterances,
+        language_override=language,
+        provenance_version=(
+            CONTINUOUS_ASR_EVIDENCE_VERSION
+        ),
     )
 
     return result
