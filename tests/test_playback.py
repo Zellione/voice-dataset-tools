@@ -234,22 +234,14 @@ def test_play_turn_context_clamps_start_and_end(
     def fake_play(
         audio,
         sample_rate,
-        *,
-        latency=None,
     ):
         played["frames"] = len(audio)
         played["sample_rate"] = sample_rate
-        played["latency"] = latency
 
     monkeypatch.setattr(
-        playback.sd,
+        playback._playback_engine,
         "play",
         fake_play,
-    )
-    monkeypatch.setattr(
-        playback.sd,
-        "stop",
-        lambda: None,
     )
 
     source = {
@@ -286,7 +278,6 @@ def test_play_turn_context_clamps_start_and_end(
     assert actual_end == pytest.approx(3.0)
 
     assert played["sample_rate"] == sample_rate
-    assert played["latency"] == "high"
     assert played["frames"] == sample_rate * 3
 
 
@@ -441,46 +432,317 @@ def test_play_turn_context_uses_original_media(
     assert len(played) == 1
 
 
-def test_is_playing_false_without_stream(
+def test_is_playing_false_when_engine_idle(
     monkeypatch,
 ):
-    def no_stream():
-        raise RuntimeError(
-            "play() was not called yet"
-        )
-
     monkeypatch.setattr(
-        playback.sd,
-        "get_stream",
-        no_stream,
+        playback._playback_engine,
+        "is_playing",
+        lambda: False,
     )
 
     assert playback.is_playing() is False
 
 
-def test_is_playing_true_for_active_stream(
+def test_is_playing_true_when_engine_active(
     monkeypatch,
 ):
     monkeypatch.setattr(
-        playback.sd,
-        "get_stream",
-        lambda: SimpleNamespace(
-            active=True,
-        ),
+        playback._playback_engine,
+        "is_playing",
+        lambda: True,
     )
 
     assert playback.is_playing() is True
 
 
-def test_is_playing_false_for_inactive_stream(
+class FakeOutputStream:
+    def __init__(
+        self,
+        *,
+        samplerate,
+        channels,
+        dtype,
+        latency,
+        callback,
+        finished_callback,
+    ):
+        self.samplerate = samplerate
+        self.channels = channels
+        self.dtype = dtype
+        self.latency = latency
+        self.callback = callback
+        self.finished_callback = finished_callback
+
+        self.closed = False
+        self.active = False
+
+        self.start_count = 0
+        self.abort_count = 0
+        self.close_count = 0
+
+    def start(self):
+        self.start_count += 1
+        self.active = True
+
+    def abort(self):
+        self.abort_count += 1
+        self.active = False
+
+    def close(self):
+        self.close_count += 1
+        self.closed = True
+        self.active = False
+
+
+def test_playback_engine_reuses_matching_stream(
     monkeypatch,
 ):
+    created = []
+
+    def make_stream(**kwargs):
+        stream = FakeOutputStream(**kwargs)
+        created.append(stream)
+        return stream
+
     monkeypatch.setattr(
         playback.sd,
-        "get_stream",
-        lambda: SimpleNamespace(
-            active=False,
-        ),
+        "OutputStream",
+        make_stream,
     )
 
-    assert playback.is_playing() is False
+    engine = playback.PlaybackEngine()
+
+    audio = np.zeros(
+        480,
+        dtype=np.float32,
+    )
+
+    engine.play(
+        audio,
+        48000,
+    )
+
+    first_stream = created[0]
+
+    engine.play(
+        audio,
+        48000,
+    )
+
+    assert len(created) == 1
+    assert first_stream.start_count == 1
+    assert first_stream.abort_count == 0
+    assert first_stream.close_count == 0
+
+    engine.close()
+
+    assert first_stream.close_count == 1
+
+
+def test_playback_engine_recreates_stream_for_new_format(
+    monkeypatch,
+):
+    created = []
+
+    def make_stream(**kwargs):
+        stream = FakeOutputStream(**kwargs)
+        created.append(stream)
+        return stream
+
+    monkeypatch.setattr(
+        playback.sd,
+        "OutputStream",
+        make_stream,
+    )
+
+    engine = playback.PlaybackEngine()
+
+    mono = np.zeros(
+        480,
+        dtype=np.float32,
+    )
+
+    stereo = np.zeros(
+        (480, 2),
+        dtype=np.float32,
+    )
+
+    engine.play(
+        mono,
+        48000,
+    )
+
+    first_stream = created[0]
+
+    engine.play(
+        stereo,
+        48000,
+    )
+
+    second_stream = created[1]
+
+    assert len(created) == 2
+    assert first_stream.abort_count == 0
+    assert first_stream.close_count == 1
+
+    assert second_stream.channels == 2
+    assert second_stream.samplerate == 48000
+
+    engine.close()
+
+
+def test_playback_engine_uses_high_latency(
+    monkeypatch,
+):
+    created = []
+
+    def make_stream(**kwargs):
+        stream = FakeOutputStream(**kwargs)
+        created.append(stream)
+        return stream
+
+    monkeypatch.setattr(
+        playback.sd,
+        "OutputStream",
+        make_stream,
+    )
+
+    engine = playback.PlaybackEngine()
+
+    engine.play(
+        np.zeros(
+            480,
+            dtype=np.float32,
+        ),
+        48000,
+    )
+
+    assert len(created) == 1
+    assert created[0].latency == "high"
+    assert created[0].dtype == "float32"
+
+    engine.close()
+
+
+def test_playback_engine_stop_keeps_stream_active(
+    monkeypatch,
+):
+    created = []
+
+    def make_stream(**kwargs):
+        stream = FakeOutputStream(**kwargs)
+        created.append(stream)
+        return stream
+
+    monkeypatch.setattr(
+        playback.sd,
+        "OutputStream",
+        make_stream,
+    )
+
+    engine = playback.PlaybackEngine()
+
+    engine.play(
+        np.zeros(
+            480,
+            dtype=np.float32,
+        ),
+        48000,
+    )
+
+    stream = created[0]
+
+    assert engine.is_playing() is True
+
+    engine.stop()
+
+    assert stream.abort_count == 0
+    assert stream.active is True
+    assert engine.is_playing() is False
+
+    engine.close()
+
+
+def test_playback_engine_callback_writes_audio():
+    engine = playback.PlaybackEngine()
+
+    engine._audio = np.array(
+        [
+            [0.1],
+            [0.2],
+            [0.3],
+            [0.4],
+        ],
+        dtype=np.float32,
+    )
+    engine._position = 0
+    engine._finished.clear()
+
+    outdata = np.zeros(
+        (2, 1),
+        dtype=np.float32,
+    )
+
+    status = SimpleNamespace(
+        output_underflow=False,
+    )
+
+    engine._callback(
+        outdata,
+        2,
+        None,
+        status,
+    )
+
+    assert outdata[:, 0] == pytest.approx(
+        [
+            0.1,
+            0.2,
+        ]
+    )
+
+    assert engine._position == 2
+
+
+def test_playback_engine_counts_output_underflows():
+    engine = playback.PlaybackEngine()
+
+    engine._audio = np.zeros(
+        (4, 1),
+        dtype=np.float32,
+    )
+    engine._position = 0
+    engine._finished.clear()
+
+    outdata = np.zeros(
+        (2, 1),
+        dtype=np.float32,
+    )
+
+    status = SimpleNamespace(
+        output_underflow=True,
+    )
+
+    engine._callback(
+        outdata,
+        2,
+        None,
+        status,
+    )
+
+    diagnostics = engine.diagnostics()
+
+    assert diagnostics["output_underflows"] == 1
+
+
+def test_playback_engine_finished_callback_marks_idle():
+    engine = playback.PlaybackEngine()
+
+    engine._finished.clear()
+
+    assert engine.is_playing() is True
+
+    engine._on_finished()
+
+    assert engine.is_playing() is False

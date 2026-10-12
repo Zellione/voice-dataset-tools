@@ -1,12 +1,220 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+import atexit
+import threading
 
+import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
 from .media import extract_media_audio_region
 from .timeline import representation_time_to_media_time
+
+
+class PlaybackEngine:
+    """Reusable non-blocking audio output stream."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._finished = threading.Event()
+        self._finished.set()
+
+        self._stream = None
+        self._sample_rate: int | None = None
+        self._channels: int | None = None
+
+        self._audio: np.ndarray | None = None
+        self._position = 0
+
+        self._output_underflows = 0
+
+    def _callback(
+        self,
+        outdata,
+        frames,
+        time_info,
+        status,
+    ) -> None:
+        del time_info
+
+        with self._lock:
+            if status.output_underflow:
+                self._output_underflows += 1
+
+            outdata.fill(0)
+
+            audio = self._audio
+
+            if audio is None:
+                return
+
+            remaining = len(audio) - self._position
+
+            if remaining <= 0:
+                self._audio = None
+                self._position = 0
+                self._finished.set()
+                return
+
+            count = min(
+                frames,
+                remaining,
+            )
+
+            start = self._position
+            end = start + count
+
+            outdata[:count] = audio[start:end]
+
+            self._position = end
+
+            if self._position >= len(audio):
+                self._audio = None
+                self._position = 0
+                self._finished.set()
+
+    def _on_finished(self) -> None:
+        self._finished.set()
+
+    def _close_stream_locked(self) -> None:
+        stream = self._stream
+
+        self._stream = None
+        self._sample_rate = None
+        self._channels = None
+
+        if stream is None:
+            return
+
+        stream.close()
+
+    def _ensure_stream_locked(
+        self,
+        sample_rate: int,
+        channels: int,
+    ):
+        stream = self._stream
+
+        if (
+            stream is not None
+            and self._sample_rate == sample_rate
+            and self._channels == channels
+            and not stream.closed
+        ):
+            return stream
+
+        self._close_stream_locked()
+
+        stream = sd.OutputStream(
+            samplerate=sample_rate,
+            channels=channels,
+            dtype="float32",
+            latency="high",
+            callback=self._callback,
+            finished_callback=self._on_finished,
+        )
+
+        self._stream = stream
+        self._sample_rate = sample_rate
+        self._channels = channels
+
+        return stream
+
+    def play(
+        self,
+        audio,
+        sample_rate: int,
+    ) -> None:
+        samples = np.asarray(
+            audio,
+            dtype=np.float32,
+        )
+
+        if samples.ndim == 1:
+            samples = samples.reshape(
+                -1,
+                1,
+            )
+        elif samples.ndim != 2:
+            raise ValueError(
+                "Playback audio must be one- or "
+                "two-dimensional"
+            )
+
+        if not len(samples):
+            raise ValueError(
+                "Playback audio must not be empty"
+            )
+
+        if sample_rate <= 0:
+            raise ValueError(
+                f"Invalid sample rate: {sample_rate}"
+            )
+
+        channels = int(samples.shape[1])
+
+        with self._lock:
+            stream = self._ensure_stream_locked(
+                sample_rate,
+                channels,
+            )
+
+            self._audio = samples
+            self._position = 0
+            self._finished.clear()
+
+            should_start = not stream.active
+
+        if should_start:
+            try:
+                stream.start()
+            except Exception:
+                with self._lock:
+                    self._audio = None
+                    self._position = 0
+                    self._finished.set()
+
+                raise
+
+    def stop(self) -> None:
+        with self._lock:
+            self._audio = None
+            self._position = 0
+            self._finished.set()
+
+    def wait(self) -> None:
+        self._finished.wait()
+
+    def is_playing(self) -> bool:
+        return not self._finished.is_set()
+
+    def diagnostics(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "sample_rate": self._sample_rate,
+                "channels": self._channels,
+                "output_underflows": (
+                    self._output_underflows
+                ),
+                "playing": (
+                    not self._finished.is_set()
+                ),
+            }
+
+    def close(self) -> None:
+        self.stop()
+
+        with self._lock:
+            self._close_stream_locked()
+
+
+_playback_engine = PlaybackEngine()
+atexit.register(_playback_engine.close)
+
+
+def playback_diagnostics() -> dict[str, Any]:
+    return _playback_engine.diagnostics()
 
 
 def representation_path(
@@ -157,11 +365,9 @@ def play_file(path: Path) -> None:
         dtype="float32",
     )
 
-    sd.stop()
-    sd.play(
+    _playback_engine.play(
         audio,
         sample_rate,
-        latency="high",
     )
 
 
@@ -221,31 +427,24 @@ def play_file_region(
             dtype="float32",
         )
 
-    sd.stop()
-    sd.play(
+    _playback_engine.play(
         audio,
         sample_rate,
-        latency="high",
     )
 
     return actual_start, actual_end
 
 
 def wait() -> None:
-    sd.wait()
+    _playback_engine.wait()
 
 
 def stop() -> None:
-    sd.stop()
+    _playback_engine.stop()
 
 
 def is_playing() -> bool:
-    try:
-        stream = sd.get_stream()
-    except RuntimeError:
-        return False
-
-    return bool(stream.active)
+    return _playback_engine.is_playing()
 
 
 def play_representation(
