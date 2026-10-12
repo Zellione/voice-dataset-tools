@@ -642,9 +642,23 @@ def test_split_and_prepare_turn_projects_children_and_prepares(
     source = storage.get_source("source_001")
     
     assert source is not None
-    assert source["metadata"][
+    reconciliation = source["metadata"][
         "utterance_reconciliation"
-    ]["mode"] == "curated"
+    ]
+
+    assert reconciliation["mode"] == "curated"
+
+    assert reconciliation[
+        "automatic_word_ranges"
+    ] == [
+        [0, 1],
+        [2, 2],
+    ]
+
+    assert reconciliation["word_ranges"] == [
+        [0, 0],
+        [1, 1],
+    ]
 
 
 def test_split_and_prepare_turn_does_not_split_when_projection_fails(
@@ -3229,3 +3243,90 @@ def test_manual_merge_marks_boundaries_as_manual(
     assert merged["metadata"]["boundary_curation"] == {
         "method": "manual",
     }
+
+
+def test_trim_marks_source_reconciliation_curated(
+    tmp_path,
+    monkeypatch,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 0.9,
+            "source_end": 1.9,
+            "source_regions": [],
+            "language": "en",
+            "transcript": "hello there",
+            "representations": {},
+            "embeddings": {},
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+                "confidence": None,
+            },
+            "review": {
+                "status": "pending",
+            },
+            "curation": {
+                "status": "pending",
+            },
+            "metadata": {
+                "word_range": {
+                    "start": 0,
+                    "end": 1,
+                },
+                "continuous_asr": {
+                    "evidence": "qwen3",
+                    "word_indices": [
+                        0,
+                        1,
+                    ],
+                },
+            },
+        }
+    )
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        lambda *args, **kwargs: None,
+    )
+
+    result = trim_and_prepare_turn(
+        storage,
+        "turn_000001",
+        source_end=1.85,
+    )
+
+    assert result["source_end"] == 1.85
+
+    source = storage.get_source(
+        "source_001"
+    )
+
+    assert source is not None
+
+    reconciliation = source["metadata"][
+        "utterance_reconciliation"
+    ]
+
+    assert reconciliation["mode"] == "curated"
+
+    assert reconciliation[
+        "automatic_word_ranges"
+    ] == [
+        [0, 1],
+        [2, 2],
+    ]
+
+    assert reconciliation[
+        "word_ranges"
+    ] == [
+        [0, 1],
+    ]

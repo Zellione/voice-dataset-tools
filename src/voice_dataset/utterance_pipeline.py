@@ -843,10 +843,80 @@ def mark_source_utterance_reconciliation_curated(
     *,
     asr_evidence_name: str = "qwen3",
 ) -> None:
-    require_source_utterance_reconciliation(
-        storage,
-        source_id,
-        asr_evidence_name=asr_evidence_name,
+    reconciliation = (
+        require_source_utterance_reconciliation(
+            storage,
+            source_id,
+            asr_evidence_name=asr_evidence_name,
+        )
+    )
+
+    original_word_ranges = reconciliation.get(
+        "word_ranges"
+    )
+
+    if not isinstance(
+        original_word_ranges,
+        list,
+    ):
+        raise ValueError(
+            "Source utterance reconciliation has "
+            "invalid word_ranges"
+        )
+
+    curated_ranges: list[list[int]] = []
+
+    for turn in storage.turns.load():
+        if turn.get("source_id") != source_id:
+            continue
+
+        metadata = turn.get("metadata")
+
+        if not isinstance(metadata, dict):
+            continue
+
+        continuous_asr = metadata.get(
+            "continuous_asr"
+        )
+
+        if not isinstance(
+            continuous_asr,
+            dict,
+        ):
+            continue
+
+        if (
+            continuous_asr.get("evidence")
+            != asr_evidence_name
+        ):
+            continue
+
+        word_indices = continuous_asr.get(
+            "word_indices"
+        )
+
+        if not (
+            isinstance(word_indices, list)
+            and word_indices
+            and all(
+                isinstance(index, int)
+                for index in word_indices
+            )
+        ):
+            continue
+
+        curated_ranges.append(
+            [
+                min(word_indices),
+                max(word_indices),
+            ]
+        )
+
+    curated_ranges.sort(
+        key=lambda item: (
+            item[0],
+            item[1],
+        )
     )
 
     def update(record: dict) -> dict:
@@ -854,6 +924,23 @@ def mark_source_utterance_reconciliation_curated(
         reconciliation = metadata[
             "utterance_reconciliation"
         ]
+
+        if (
+            reconciliation.get("mode")
+            == "automatic"
+            and "automatic_word_ranges"
+            not in reconciliation
+        ):
+            reconciliation[
+                "automatic_word_ranges"
+            ] = [
+                list(item)
+                for item in original_word_ranges
+            ]
+
+        reconciliation["word_ranges"] = (
+            curated_ranges
+        )
 
         reconciliation["mode"] = "curated"
 

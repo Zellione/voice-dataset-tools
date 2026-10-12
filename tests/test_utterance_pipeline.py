@@ -1117,7 +1117,7 @@ def test_legacy_utterance_reconciliation_is_not_curated(
     )
 
 
-def test_mark_source_utterance_reconciliation_curated_preserves_plan(
+def test_mark_source_utterance_reconciliation_curated_tracks_current_plan(
     tmp_path: Path,
 ):
     storage = DatasetStorage(tmp_path)
@@ -1140,6 +1140,50 @@ def test_mark_source_utterance_reconciliation_curated_preserves_plan(
         }
     )
 
+    for turn_id, word_indices in (
+        (
+            "turn_000001",
+            [0, 1, 2, 3, 4],
+        ),
+        (
+            "turn_000002",
+            [5, 6, 7, 8, 9, 10, 11, 12],
+        ),
+    ):
+        storage.turns.append(
+            {
+                "schema_version": 2,
+                "record_type": "turn",
+                "id": turn_id,
+                "source_id": "source",
+                "source_start": 0.0,
+                "source_end": 1.0,
+                "source_regions": [],
+                "representations": {},
+                "embeddings": {},
+                "assignment": {
+                    "status": "unknown",
+                    "voice_id": None,
+                    "method": None,
+                    "confidence": None,
+                },
+                "review": {
+                    "status": "pending",
+                },
+                "curation": {
+                    "status": "pending",
+                },
+                "metadata": {
+                    "continuous_asr": {
+                        "evidence": "qwen3",
+                        "word_indices": (
+                            word_indices
+                        ),
+                    },
+                },
+            }
+        )
+
     mark_source_utterance_reconciliation_curated(
         storage,
         "source",
@@ -1149,14 +1193,21 @@ def test_mark_source_utterance_reconciliation_curated_preserves_plan(
     source = storage.get_source("source")
 
     assert source is not None
-    assert source["metadata"][
+
+    reconciliation = source["metadata"][
         "utterance_reconciliation"
-    ] == {
+    ]
+
+    assert reconciliation == {
         "mode": "curated",
         "asr_evidence": "qwen3",
-        "word_ranges": [
+        "automatic_word_ranges": [
             [0, 8],
             [9, 12],
+        ],
+        "word_ranges": [
+            [0, 4],
+            [5, 12],
         ],
     }
 
@@ -1165,6 +1216,98 @@ def test_mark_source_utterance_reconciliation_curated_preserves_plan(
         "source",
         asr_evidence_name="qwen3",
     )
+
+
+def test_mark_curated_reconciliation_preserves_original_automatic_plan(
+    tmp_path: Path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    storage.sources.append(
+        {
+            "schema_version": 1,
+            "record_type": "source",
+            "id": "source",
+            "metadata": {
+                "utterance_reconciliation": {
+                    "mode": "automatic",
+                    "asr_evidence": "qwen3",
+                    "word_ranges": [
+                        [0, 4],
+                        [5, 9],
+                    ],
+                },
+            },
+        }
+    )
+
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source",
+            "source_start": 0.0,
+            "source_end": 1.0,
+            "source_regions": [],
+            "representations": {},
+            "embeddings": {},
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+                "confidence": None,
+            },
+            "review": {
+                "status": "pending",
+            },
+            "curation": {
+                "status": "pending",
+            },
+            "metadata": {
+                "continuous_asr": {
+                    "evidence": "qwen3",
+                    "word_indices": [
+                        0, 1, 2, 3, 4,
+                        5, 6, 7, 8, 9,
+                    ],
+                },
+            },
+        }
+    )
+
+    mark_source_utterance_reconciliation_curated(
+        storage,
+        "source",
+        asr_evidence_name="qwen3",
+    )
+
+    # Calling it again after further curation must not
+    # replace the original automatic plan.
+    mark_source_utterance_reconciliation_curated(
+        storage,
+        "source",
+        asr_evidence_name="qwen3",
+    )
+
+    source = storage.get_source("source")
+
+    reconciliation = source["metadata"][
+        "utterance_reconciliation"
+    ]
+
+    assert reconciliation[
+        "automatic_word_ranges"
+    ] == [
+        [0, 4],
+        [5, 9],
+    ]
+
+    assert reconciliation[
+        "word_ranges"
+    ] == [
+        [0, 9],
+    ]
 
 
 def test_prepare_source_speaker_evidence_can_capture_worker_output(
@@ -1488,4 +1631,86 @@ def test_utterance_candidate_marks_additional_alignment_issue(
         candidates[0]
         .alignment_issue_word_indices
         == (10, 11)
+    )
+
+
+def test_mark_curated_reconciliation_does_not_invent_legacy_automatic_plan(
+    tmp_path: Path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    storage.sources.append(
+        {
+            "schema_version": 1,
+            "record_type": "source",
+            "id": "source",
+            "metadata": {
+                "utterance_reconciliation": {
+                    "mode": "curated",
+                    "asr_evidence": "qwen3",
+                    "word_ranges": [
+                        [0, 9],
+                    ],
+                },
+            },
+        }
+    )
+
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source",
+            "source_start": 0.0,
+            "source_end": 1.0,
+            "source_regions": [],
+            "representations": {},
+            "embeddings": {},
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+                "confidence": None,
+            },
+            "review": {
+                "status": "pending",
+            },
+            "curation": {
+                "status": "pending",
+            },
+            "metadata": {
+                "continuous_asr": {
+                    "evidence": "qwen3",
+                    "word_indices": [
+                        0, 1, 2, 3, 4,
+                    ],
+                },
+            },
+        }
+    )
+
+    mark_source_utterance_reconciliation_curated(
+        storage,
+        "source",
+        asr_evidence_name="qwen3",
+    )
+
+    source = storage.get_source("source")
+
+    assert source is not None
+
+    reconciliation = source["metadata"][
+        "utterance_reconciliation"
+    ]
+
+    assert reconciliation["mode"] == "curated"
+
+    assert reconciliation["word_ranges"] == [
+        [0, 4],
+    ]
+
+    assert (
+        "automatic_word_ranges"
+        not in reconciliation
     )

@@ -992,6 +992,12 @@ def trim_and_prepare_turn(
         update,
     )
 
+    mark_source_utterance_reconciliation_curated(
+        storage,
+        source_id,
+        asr_evidence_name=evidence_name,
+    )
+
     prepare_curated_source_turns(
         storage,
         source_id,
