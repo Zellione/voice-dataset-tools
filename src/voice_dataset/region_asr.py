@@ -76,7 +76,69 @@ def transcribe_regions(
                 f"Invalid transcripts for {region_id}"
             )
 
-        if transcript_name in transcripts:
+        existing_transcript = transcripts.get(
+            transcript_name
+        )
+
+        if existing_transcript is not None:
+            if not isinstance(
+                existing_transcript,
+                dict,
+            ):
+                raise ValueError(
+                    f"Invalid transcript "
+                    f"{region_id}/{transcript_name}"
+                )
+
+            existing_metadata = (
+                existing_transcript.get(
+                    "metadata"
+                )
+            )
+
+            if not isinstance(
+                existing_metadata,
+                dict,
+            ):
+                existing_metadata = {}
+
+            expected = {
+                "model": WHISPER_MODEL,
+                "representation": (
+                    representation_name
+                ),
+                "language_override": language,
+            }
+
+            actual = {
+                "model": (
+                    existing_transcript.get(
+                        "model"
+                    )
+                ),
+                "representation": (
+                    existing_transcript.get(
+                        "representation"
+                    )
+                ),
+                "language_override": (
+                    existing_metadata.get(
+                        "language_override"
+                    )
+                ),
+            }
+
+            if actual != expected:
+                raise ValueError(
+                    "Region transcript already "
+                    "exists with different "
+                    "provenance: "
+                    f"{region_id}/"
+                    f"{transcript_name}: "
+                    f"{actual!r} != "
+                    f"{expected!r}"
+                )
+
             skipped += 1
             continue
 
