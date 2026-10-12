@@ -451,3 +451,246 @@ def test_suspected_speaker_change_uses_adaptive_threshold():
         change,
         boundary,
     )
+
+
+def _speaker_change_test_storage(
+    tmp_path,
+    *,
+    automatic_pipeline=None,
+):
+    from voice_dataset.schema import (
+        TurnRecord,
+    )
+    from voice_dataset.storage import (
+        DatasetStorage,
+    )
+
+    storage = DatasetStorage(
+        tmp_path
+    )
+
+    metadata = {}
+
+    if automatic_pipeline is not None:
+        metadata["automatic_pipeline"] = (
+            automatic_pipeline
+        )
+
+    storage.add_turn(
+        TurnRecord(
+            id="turn_000001",
+            source_id="source_001",
+            source_start=10.0,
+            source_end=12.0,
+            metadata=metadata,
+        )
+    )
+
+    return storage
+
+
+def test_apply_speaker_change_evidence_adds_review_reason(
+    tmp_path,
+):
+    from voice_dataset.speaker_change import (
+        apply_source_speaker_change_evidence,
+    )
+
+    storage = _speaker_change_test_storage(
+        tmp_path,
+        automatic_pipeline={
+            "status": "ready",
+            "review_reasons": [],
+        },
+    )
+
+    boundary = SpeakerChangeBoundary(
+        turn_id="turn_000001",
+        boundary=11.0,
+        left_start=10.0,
+        left_end=11.0,
+        right_start=11.0,
+        right_end=12.0,
+    )
+
+    change = SpeakerEmbeddingChange(
+        turn_id="turn_000001",
+        boundary=11.0,
+        ecapa_similarity=0.05,
+        wespeaker_similarity=0.07,
+        mean_similarity=0.06,
+        encoder_disagreement=0.02,
+        divergence=0.94,
+    )
+
+    result = (
+        apply_source_speaker_change_evidence(
+            storage,
+            "source_001",
+            [boundary],
+            (change,),
+            step=0.5,
+        )
+    )
+
+    turn = storage.get_turn(
+        "turn_000001"
+    )
+
+    metadata = turn["metadata"]
+
+    evidence = metadata[
+        "speaker_change_evidence"
+    ]
+
+    assert evidence["status"] == "suspected"
+    assert evidence["strongest"][
+        "divergence"
+    ] == pytest.approx(0.94)
+
+    assert (
+        evidence["strongest"][
+            "window_kind"
+        ]
+        == "full"
+    )
+
+    assert (
+        metadata[
+            "automatic_pipeline"
+        ]["status"]
+        == "review"
+    )
+
+    assert (
+        metadata[
+            "automatic_pipeline"
+        ]["review_reasons"]
+        == ["suspected_speaker_change"]
+    )
+
+    assert result.suspected_turns == 1
+    assert result.comparisons == 1
+
+
+def test_apply_speaker_change_evidence_preserves_other_review_reasons(
+    tmp_path,
+):
+    from voice_dataset.speaker_change import (
+        apply_source_speaker_change_evidence,
+    )
+
+    storage = _speaker_change_test_storage(
+        tmp_path,
+        automatic_pipeline={
+            "status": "review",
+            "review_reasons": [
+                "invalid_alignment",
+            ],
+        },
+    )
+
+    boundary = SpeakerChangeBoundary(
+        turn_id="turn_000001",
+        boundary=11.0,
+        left_start=10.0,
+        left_end=11.0,
+        right_start=11.0,
+        right_end=12.0,
+    )
+
+    change = SpeakerEmbeddingChange(
+        turn_id="turn_000001",
+        boundary=11.0,
+        ecapa_similarity=0.10,
+        wespeaker_similarity=0.12,
+        mean_similarity=0.11,
+        encoder_disagreement=0.02,
+        divergence=0.89,
+    )
+
+    apply_source_speaker_change_evidence(
+        storage,
+        "source_001",
+        [boundary],
+        (change,),
+        step=0.5,
+    )
+
+    turn = storage.get_turn(
+        "turn_000001"
+    )
+
+    pipeline = (
+        turn["metadata"]
+        ["automatic_pipeline"]
+    )
+
+    assert pipeline["status"] == "review"
+    assert pipeline["review_reasons"] == [
+        "invalid_alignment",
+    ]
+
+
+def test_apply_speaker_change_evidence_removes_stale_reason(
+    tmp_path,
+):
+    from voice_dataset.speaker_change import (
+        apply_source_speaker_change_evidence,
+    )
+
+    storage = _speaker_change_test_storage(
+        tmp_path,
+        automatic_pipeline={
+            "status": "review",
+            "review_reasons": [
+                "suspected_speaker_change",
+            ],
+        },
+    )
+
+    boundary = SpeakerChangeBoundary(
+        turn_id="turn_000001",
+        boundary=11.0,
+        left_start=10.0,
+        left_end=11.0,
+        right_start=11.0,
+        right_end=12.0,
+    )
+
+    change = SpeakerEmbeddingChange(
+        turn_id="turn_000001",
+        boundary=11.0,
+        ecapa_similarity=0.15,
+        wespeaker_similarity=0.15,
+        mean_similarity=0.15,
+        encoder_disagreement=0.0,
+        divergence=0.85,
+    )
+
+    apply_source_speaker_change_evidence(
+        storage,
+        "source_001",
+        [boundary],
+        (change,),
+        step=0.5,
+    )
+
+    turn = storage.get_turn(
+        "turn_000001"
+    )
+
+    pipeline = (
+        turn["metadata"]
+        ["automatic_pipeline"]
+    )
+
+    assert pipeline["status"] == "ready"
+    assert pipeline["review_reasons"] == []
+
+    assert (
+        turn["metadata"]
+        ["speaker_change_evidence"]
+        ["status"]
+        == "clear"
+    )

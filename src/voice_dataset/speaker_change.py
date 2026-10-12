@@ -891,3 +891,412 @@ def analyze_source_speaker_changes(
         for turn in turns
         if turn["id"] in changes_by_turn
     )
+
+@dataclass(frozen=True)
+class PersistSpeakerChangeEvidenceResult:
+    analyzed_turns: int
+    comparisons: int
+    suspected_turns: int
+
+
+def _speaker_change_evidence_record(
+    boundary: SpeakerChangeBoundary,
+    change: SpeakerEmbeddingChange,
+) -> dict[str, Any]:
+    return {
+        "boundary": change.boundary,
+        "window_kind": (
+            speaker_change_window_kind(
+                boundary
+            )
+        ),
+        "left_start": boundary.left_start,
+        "left_end": boundary.left_end,
+        "right_start": boundary.right_start,
+        "right_end": boundary.right_end,
+        "ecapa_similarity": (
+            change.ecapa_similarity
+        ),
+        "wespeaker_similarity": (
+            change.wespeaker_similarity
+        ),
+        "mean_similarity": (
+            change.mean_similarity
+        ),
+        "encoder_disagreement": (
+            change.encoder_disagreement
+        ),
+        "divergence": change.divergence,
+        "suspected": (
+            is_suspected_speaker_change(
+                change,
+                boundary,
+            )
+        ),
+    }
+
+
+def apply_source_speaker_change_evidence(
+    storage: DatasetStorage,
+    source_id: str,
+    boundaries: list[SpeakerChangeBoundary],
+    changes: tuple[
+        SpeakerEmbeddingChange,
+        ...,
+    ],
+    *,
+    step: float,
+) -> PersistSpeakerChangeEvidenceResult:
+    if len(boundaries) != len(changes):
+        raise ValueError(
+            "Speaker-change boundaries and "
+            "changes must have equal length"
+        )
+
+    boundaries_by_key = {
+        (
+            boundary.turn_id,
+            round(
+                boundary.boundary,
+                9,
+            ),
+        ): boundary
+        for boundary in boundaries
+    }
+
+    if (
+        len(boundaries_by_key)
+        != len(boundaries)
+    ):
+        raise ValueError(
+            "Duplicate speaker-change boundary"
+        )
+
+    changes_by_turn: dict[
+        str,
+        list[
+            tuple[
+                SpeakerChangeBoundary,
+                SpeakerEmbeddingChange,
+            ]
+        ],
+    ] = {}
+
+    for change in changes:
+        key = (
+            change.turn_id,
+            round(
+                change.boundary,
+                9,
+            ),
+        )
+
+        boundary = boundaries_by_key.get(
+            key
+        )
+
+        if boundary is None:
+            raise ValueError(
+                "Speaker-change result has no "
+                "matching boundary: "
+                f"{change.turn_id}/"
+                f"{change.boundary}"
+            )
+
+        changes_by_turn.setdefault(
+            change.turn_id,
+            [],
+        ).append(
+            (
+                boundary,
+                change,
+            )
+        )
+
+    turns = [
+        turn
+        for turn in storage.turns.load()
+        if (
+            turn.get("source_id")
+            == source_id
+        )
+    ]
+
+    suspected_turns = 0
+
+    for turn in turns:
+        turn_id = str(turn["id"])
+
+        pairs = changes_by_turn.get(
+            turn_id,
+            [],
+        )
+
+        records = [
+            _speaker_change_evidence_record(
+                boundary,
+                change,
+            )
+            for boundary, change in pairs
+        ]
+
+        records.sort(
+            key=lambda item: float(
+                item["boundary"]
+            )
+        )
+
+        suspected = any(
+            bool(record["suspected"])
+            for record in records
+        )
+
+        if suspected:
+            suspected_turns += 1
+
+        if records:
+            status = (
+                "suspected"
+                if suspected
+                else "clear"
+            )
+
+            strongest = max(
+                records,
+                key=lambda item: float(
+                    item["divergence"]
+                ),
+            )
+        else:
+            status = (
+                "insufficient_evidence"
+            )
+            strongest = None
+
+        evidence = {
+            "status": status,
+            "step": step,
+            "full_threshold": (
+                DEFAULT_SPEAKER_CHANGE_FULL_THRESHOLD
+            ),
+            "adaptive_threshold": (
+                DEFAULT_SPEAKER_CHANGE_ADAPTIVE_THRESHOLD
+            ),
+            "strongest": strongest,
+            "changes": records,
+        }
+
+        def update(
+            record: dict[str, Any],
+            *,
+            evidence=evidence,
+            suspected=suspected,
+        ) -> dict[str, Any]:
+            metadata = dict(
+                record.get("metadata")
+                or {}
+            )
+
+            metadata[
+                "speaker_change_evidence"
+            ] = evidence
+
+            existing_pipeline = (
+                metadata.get(
+                    "automatic_pipeline"
+                )
+            )
+
+            has_pipeline = isinstance(
+                existing_pipeline,
+                dict,
+            )
+
+            pipeline = dict(
+                existing_pipeline
+                if has_pipeline
+                else {}
+            )
+
+            raw_reasons = pipeline.get(
+                "review_reasons"
+            )
+
+            reasons = (
+                [
+                    reason
+                    for reason in raw_reasons
+                    if isinstance(
+                        reason,
+                        str,
+                    )
+                ]
+                if isinstance(
+                    raw_reasons,
+                    list,
+                )
+                else []
+            )
+
+            # This analysis owns this reason.
+            reasons = [
+                reason
+                for reason in reasons
+                if reason
+                != "suspected_speaker_change"
+            ]
+
+            if suspected:
+                reasons.append(
+                    "suspected_speaker_change"
+                )
+
+            # Existing automatic turns keep their
+            # automatic-pipeline state. A manually
+            # created turn only gets one when there
+            # is an actual automatic review reason.
+            if has_pipeline or suspected:
+                pipeline[
+                    "review_reasons"
+                ] = reasons
+
+                pipeline["status"] = (
+                    "review"
+                    if reasons
+                    else "ready"
+                )
+
+                metadata[
+                    "automatic_pipeline"
+                ] = pipeline
+
+            record["metadata"] = metadata
+
+            return record
+
+        storage.update_turn(
+            turn_id,
+            update,
+        )
+
+    return PersistSpeakerChangeEvidenceResult(
+        analyzed_turns=len(
+            changes_by_turn
+        ),
+        comparisons=len(changes),
+        suspected_turns=(
+            suspected_turns
+        ),
+    )
+
+
+def prepare_source_speaker_change_evidence(
+    storage: DatasetStorage,
+    source_id: str,
+    *,
+    evidence_name: str = "qwen3",
+    step: float = 0.5,
+    capture_output: bool = False,
+) -> PersistSpeakerChangeEvidenceResult:
+    source = storage.get_source(
+        source_id
+    )
+
+    if source is None:
+        raise KeyError(
+            f"Source does not exist: "
+            f"{source_id}"
+        )
+
+    metadata = source.get(
+        "metadata"
+    )
+
+    if not isinstance(metadata, dict):
+        raise ValueError(
+            f"Source has invalid metadata: "
+            f"{source_id}"
+        )
+
+    continuous_asr = metadata.get(
+        "continuous_asr"
+    )
+
+    if not isinstance(
+        continuous_asr,
+        dict,
+    ):
+        raise ValueError(
+            "Source has no continuous ASR metadata"
+        )
+
+    evidence = continuous_asr.get(
+        evidence_name
+    )
+
+    if not isinstance(evidence, dict):
+        raise ValueError(
+            "Continuous ASR evidence does not exist: "
+            f"{source_id}/{evidence_name}"
+        )
+
+    words = evidence.get("words")
+
+    if not isinstance(words, list):
+        raise ValueError(
+            "Continuous ASR evidence has "
+            "invalid words"
+        )
+
+    turns = [
+        turn
+        for turn in storage.turns.load()
+        if (
+            turn.get("source_id")
+            == source_id
+        )
+    ]
+
+    turns.sort(
+        key=lambda turn: (
+            float(
+                turn["source_start"]
+            ),
+            float(
+                turn["source_end"]
+            ),
+            str(turn["id"]),
+        )
+    )
+
+    boundaries: list[
+        SpeakerChangeBoundary
+    ] = []
+
+    for turn in turns:
+        boundaries.extend(
+            plan_turn_speaker_change_boundaries(
+                turn,
+                words=words,
+                step=step,
+            )
+        )
+
+    changes = (
+        analyze_speaker_change_boundaries(
+            storage,
+            source_id,
+            boundaries,
+            capture_output=(
+                capture_output
+            ),
+        )
+    )
+
+    return apply_source_speaker_change_evidence(
+        storage,
+        source_id,
+        boundaries,
+        changes,
+        step=step,
+    )
