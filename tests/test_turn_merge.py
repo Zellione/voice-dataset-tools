@@ -591,3 +591,207 @@ def test_manual_merge_preserves_retained_review_queue_status(
             "turn_000002",
         ],
     }
+
+
+def test_merge_preserves_and_extends_provenance(
+    tmp_path: Path,
+) -> None:
+    storage = make_storage(tmp_path)
+
+    add_region(
+        storage,
+        region_id="region_000001",
+        start=1.0,
+        end=2.0,
+    )
+
+    add_turn(
+        storage,
+        turn_id="turn_000010",
+        start=1.0,
+        end=1.5,
+        region_ids=["region_000001"],
+    )
+    add_turn(
+        storage,
+        turn_id="turn_000020",
+        start=1.5,
+        end=2.0,
+        region_ids=["region_000001"],
+    )
+
+    def add_history(record):
+        record["metadata"]["provenance"] = {
+            "source_turn_ids": [
+                "turn_000001",
+                "turn_000002",
+            ],
+            "operations": [
+                {
+                    "method": "manual_split",
+                    "source_turn_id": (
+                        "turn_000001"
+                    ),
+                    "split_after_region": None,
+                    "split_time": 1.5,
+                    "split_side": "left",
+                },
+            ],
+        }
+        return record
+
+    storage.update_turn(
+        "turn_000010",
+        add_history,
+    )
+
+    merged = merge_turns(
+        storage,
+        [
+            "turn_000010",
+            "turn_000020",
+        ],
+    )
+
+    provenance = merged["metadata"][
+        "provenance"
+    ]
+
+    assert provenance["source_turn_ids"] == [
+        "turn_000001",
+        "turn_000002",
+        "turn_000020",
+    ]
+
+    assert provenance["operations"] == [
+        {
+            "method": "manual_split",
+            "source_turn_id": "turn_000001",
+            "split_after_region": None,
+            "split_time": 1.5,
+            "split_side": "left",
+        },
+        {
+            "method": "manual_merge",
+            "source_turn_ids": [
+                "turn_000010",
+                "turn_000020",
+            ],
+        },
+    ]
+
+
+def test_split_then_merge_deduplicates_shared_provenance(
+    tmp_path: Path,
+) -> None:
+    from voice_dataset.reconciliation import (
+        split_turn,
+    )
+
+    storage = make_storage(tmp_path)
+
+    for region_id, start, end in (
+        ("region_000001", 1.0, 2.0),
+        ("region_000002", 2.0, 3.0),
+        ("region_000003", 3.0, 4.0),
+    ):
+        add_region(
+            storage,
+            region_id=region_id,
+            start=start,
+            end=end,
+        )
+
+    add_turn(
+        storage,
+        turn_id="turn_000001",
+        start=1.0,
+        end=4.0,
+        region_ids=[
+            "region_000001",
+            "region_000002",
+            "region_000003",
+        ],
+    )
+
+    def add_history(record):
+        record["metadata"]["provenance"] = {
+            "source_turn_ids": [
+                "turn_000010",
+                "turn_000011",
+            ],
+            "operations": [
+                {
+                    "method": "manual_merge",
+                    "source_turn_ids": [
+                        "turn_000010",
+                        "turn_000011",
+                    ],
+                },
+            ],
+        }
+        return record
+
+    storage.update_turn(
+        "turn_000001",
+        add_history,
+    )
+
+    left, right = split_turn(
+        storage,
+        "turn_000001",
+        after_region_id="region_000002",
+    )
+
+    merged = merge_turns(
+        storage,
+        [
+            left["id"],
+            right["id"],
+        ],
+    )
+
+    provenance = merged["metadata"][
+        "provenance"
+    ]
+
+    assert provenance[
+        "source_turn_ids"
+    ] == [
+        "turn_000010",
+        "turn_000011",
+    ]
+
+    operations = provenance[
+        "operations"
+    ]
+
+    assert [
+        operation["method"]
+        for operation in operations
+    ] == [
+        "manual_merge",
+        "manual_split",
+        "manual_split",
+        "manual_merge",
+    ]
+
+    # Shared ancestry occurs only once.
+    assert operations.count(
+        {
+            "method": "manual_merge",
+            "source_turn_ids": [
+                "turn_000010",
+                "turn_000011",
+            ],
+        }
+    ) == 1
+
+    assert (
+        operations[1]["split_side"]
+        == "left"
+    )
+    assert (
+        operations[2]["split_side"]
+        == "right"
+    )

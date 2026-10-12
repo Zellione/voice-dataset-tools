@@ -657,6 +657,129 @@ def _turn_derived_paths(
     return stale_paths
 
 
+def _turn_provenance(
+    turn: dict[str, Any],
+) -> tuple[list[str], list[dict[str, Any]]]:
+    turn_id = turn.get("id")
+
+    if not isinstance(turn_id, str) or not turn_id:
+        raise ValueError(
+            "Turn has invalid id"
+        )
+
+    metadata = turn.get("metadata")
+
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    provenance = metadata.get("provenance")
+
+    if not isinstance(provenance, dict):
+        return [turn_id], []
+
+    raw_source_turn_ids = provenance.get(
+        "source_turn_ids"
+    )
+
+    source_turn_ids = (
+        [
+            item
+            for item in raw_source_turn_ids
+            if isinstance(item, str)
+            and item
+        ]
+        if isinstance(
+            raw_source_turn_ids,
+            list,
+        )
+        else []
+    )
+
+    if not source_turn_ids:
+        source_turn_ids = [turn_id]
+
+    raw_operations = provenance.get(
+        "operations"
+    )
+
+    operations = (
+        [
+            dict(item)
+            for item in raw_operations
+            if isinstance(item, dict)
+        ]
+        if isinstance(raw_operations, list)
+        else []
+    )
+
+    return source_turn_ids, operations
+
+
+def _merge_provenance(
+    turns: list[dict[str, Any]],
+    turn_ids: list[str],
+) -> dict[str, Any]:
+    source_turn_ids: list[str] = []
+    operations: list[dict[str, Any]] = []
+
+    for turn in turns:
+        roots, history = _turn_provenance(
+            turn
+        )
+
+        for root in roots:
+            if root not in source_turn_ids:
+                source_turn_ids.append(root)
+
+        for operation in history:
+            if operation not in operations:
+                operations.append(operation)
+
+    operations.append(
+        {
+            "method": "manual_merge",
+            "source_turn_ids": list(
+                turn_ids
+            ),
+        }
+    )
+
+    return {
+        "source_turn_ids": source_turn_ids,
+        "operations": operations,
+    }
+
+
+def _split_provenance(
+    turn: dict[str, Any],
+    *,
+    source_turn_id: str,
+    split_side: str,
+    after_region_id: str | None,
+    split_time: float | None,
+) -> dict[str, Any]:
+    source_turn_ids, operations = (
+        _turn_provenance(turn)
+    )
+
+    operations.append(
+        {
+            "method": "manual_split",
+            "source_turn_id": source_turn_id,
+            "split_after_region": (
+                after_region_id
+            ),
+            "split_time": split_time,
+            "split_side": split_side,
+        }
+    )
+
+    return {
+        "source_turn_ids": source_turn_ids,
+        "operations": operations,
+    }
+
+
 def merge_turns(
     storage: DatasetStorage,
     turn_ids: list[str],
@@ -884,6 +1007,13 @@ def merge_turns(
             "method": "manual_merge",
             "source_turn_ids": list(turn_ids),
         },
+        "provenance": _merge_provenance(
+            [
+                turn
+                for _, turn in ordered
+            ],
+            turn_ids,
+        ),
         "boundary_curation": {
             "method": "manual",
         },
@@ -1286,6 +1416,15 @@ def split_turn(
                 "split_time": split_time,
                 "split_side": split_side,
             },
+            "provenance": _split_provenance(
+                original,
+                source_turn_id=turn_id,
+                split_side=split_side,
+                after_region_id=(
+                    after_region_id
+                ),
+                split_time=split_time,
+            ),
             "boundary_curation": {
                 "method": "manual",
             },

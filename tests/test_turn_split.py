@@ -358,3 +358,164 @@ def test_split_recalculates_boundary_evidence(
         right["metadata"]["creation"]["method"]
         == "manual_split"
     )
+
+
+def test_split_preserves_and_extends_provenance(
+    tmp_path: Path,
+) -> None:
+    storage = make_split_dataset(tmp_path)
+
+    def add_history(record):
+        record["metadata"]["provenance"] = {
+            "source_turn_ids": [
+                "turn_000010",
+                "turn_000011",
+            ],
+            "operations": [
+                {
+                    "method": "manual_merge",
+                    "source_turn_ids": [
+                        "turn_000010",
+                        "turn_000011",
+                    ],
+                },
+            ],
+        }
+        return record
+
+    storage.update_turn(
+        "turn_000001",
+        add_history,
+    )
+
+    left, right = split_turn(
+        storage,
+        "turn_000001",
+        after_region_id="region_000002",
+    )
+
+    for child, side in (
+        (left, "left"),
+        (right, "right"),
+    ):
+        provenance = child["metadata"][
+            "provenance"
+        ]
+
+        assert provenance[
+            "source_turn_ids"
+        ] == [
+            "turn_000010",
+            "turn_000011",
+        ]
+
+        assert provenance["operations"] == [
+            {
+                "method": "manual_merge",
+                "source_turn_ids": [
+                    "turn_000010",
+                    "turn_000011",
+                ],
+            },
+            {
+                "method": "manual_split",
+                "source_turn_id": (
+                    "turn_000001"
+                ),
+                "split_after_region": (
+                    "region_000002"
+                ),
+                "split_time": None,
+                "split_side": side,
+            },
+        ]
+
+
+def test_merge_then_split_keeps_root_provenance(
+    tmp_path: Path,
+) -> None:
+    from voice_dataset.reconciliation import (
+        merge_turns,
+    )
+
+    storage = make_storage(tmp_path)
+
+    for region_id, start, end in (
+        ("region_000001", 1.0, 2.0),
+        ("region_000002", 2.0, 3.0),
+        ("region_000003", 3.0, 4.0),
+    ):
+        add_region(
+            storage,
+            region_id=region_id,
+            start=start,
+            end=end,
+        )
+
+    add_turn(
+        storage,
+        start=1.0,
+        end=3.0,
+    )
+
+    # Give the second source turn a distinct id.
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "id": "turn_000002",
+            "source_id": "source_001",
+            "source_start": 3.0,
+            "source_end": 4.0,
+            "source_regions": [
+                "region_000003",
+            ],
+            "language": "en",
+            "transcript": "second",
+            "representations": {},
+            "embeddings": {},
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "character_id": None,
+            },
+            "review": {
+                "status": "pending",
+            },
+            "metadata": {},
+        }
+    )
+
+    merged = merge_turns(
+        storage,
+        [
+            "turn_000001",
+            "turn_000002",
+        ],
+    )
+
+    left, right = split_turn(
+        storage,
+        merged["id"],
+        after_region_id="region_000002",
+    )
+
+    for child in (left, right):
+        provenance = child["metadata"][
+            "provenance"
+        ]
+
+        assert provenance[
+            "source_turn_ids"
+        ] == [
+            "turn_000001",
+            "turn_000002",
+        ]
+
+        assert [
+            operation["method"]
+            for operation
+            in provenance["operations"]
+        ] == [
+            "manual_merge",
+            "manual_split",
+        ]
