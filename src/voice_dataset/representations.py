@@ -75,6 +75,7 @@ def materialize_region_audio(
     purposes: list[str],
     sample_rate: int | None = None,
     channels: int | None = None,
+    replace_existing: bool = False,
 ) -> AudioRepresentation:
     source = source.resolve()
 
@@ -129,7 +130,10 @@ def materialize_region_audio(
         representation_name
     )
 
-    if existing is not None:
+    if (
+        existing is not None
+        and not replace_existing
+    ):
         raise ValueError(
             f"Representation already exists: "
             f"{region_id}/{representation_name}"
@@ -159,6 +163,18 @@ def materialize_region_audio(
             f"Invalid source_end for {region_id}"
         )
 
+    canonical_start = float(start)
+    canonical_end = float(end)
+
+    if (
+        canonical_start < 0
+        or canonical_end <= canonical_start
+    ):
+        raise ValueError(
+            f"Invalid source range for {region_id}: "
+            f"{canonical_start}-{canonical_end}"
+        )
+
     relative_path = (
         Path("regions")
         / region_id
@@ -174,28 +190,158 @@ def materialize_region_audio(
         f".{destination.name}.tmp.wav"
     )
 
-    if destination.exists():
+    backup = destination.with_name(
+        f".{destination.name}.backup"
+    )
+
+    if (
+        destination.exists()
+        and not replace_existing
+    ):
         raise ValueError(
             f"Representation file already exists: "
             f"{destination}"
         )
 
+    if (
+        replace_existing
+        and existing is None
+    ):
+        raise ValueError(
+            "Cannot replace missing representation: "
+            f"{region_id}/{representation_name}"
+        )
+
+    stale_embedding_names: list[str] = []
+    invalidated_embedding_paths: list[Path] = []
+    stale_transcript_names: list[str] = []
+
+    if replace_existing:
+        transcripts = region.get(
+            "transcripts"
+        )
+
+        if not isinstance(
+            transcripts,
+            dict,
+        ):
+            raise ValueError(
+                f"Invalid transcripts for {region_id}"
+            )
+
+        for (
+            transcript_name,
+            transcript,
+        ) in transcripts.items():
+            if not isinstance(
+                transcript,
+                dict,
+            ):
+                raise ValueError(
+                    f"Invalid transcript "
+                    f"{region_id}/{transcript_name}"
+                )
+
+            if (
+                transcript.get("representation")
+                == representation_name
+            ):
+                stale_transcript_names.append(
+                    transcript_name
+                )
+
+        embeddings = region.get(
+            "embeddings"
+        )
+
+        if not isinstance(
+            embeddings,
+            dict,
+        ):
+            raise ValueError(
+                f"Invalid embeddings for {region_id}"
+            )
+
+        for (
+            embedding_name,
+            embedding,
+        ) in embeddings.items():
+            if not isinstance(
+                embedding,
+                dict,
+            ):
+                raise ValueError(
+                    f"Invalid embedding "
+                    f"{region_id}/{embedding_name}"
+                )
+
+            if (
+                embedding.get("representation")
+                != representation_name
+            ):
+                continue
+
+            embedding_path = embedding.get(
+                "path"
+            )
+
+            if not isinstance(
+                embedding_path,
+                str,
+            ) or not embedding_path:
+                raise ValueError(
+                    f"Invalid embedding path "
+                    f"{region_id}/{embedding_name}"
+                )
+
+            stale_embedding_names.append(
+                embedding_name
+            )
+
+            invalidated_embedding_paths.append(
+                storage.root / embedding_path
+            )
+
     temporary.unlink(
         missing_ok=True
     )
+
+    if backup.exists():
+        raise ValueError(
+            "Representation backup already exists: "
+            f"{backup}"
+        )
+
+    backup_created = False
+    destination_replaced = False
 
     try:
         extract_audio_region(
             source=source,
             destination=temporary,
-            start=float(start),
-            end=float(end),
+            start=canonical_start,
+            end=canonical_end,
         )
+
+        if replace_existing:
+            if not destination.is_file():
+                raise ValueError(
+                    "Representation metadata exists "
+                    "but file is missing: "
+                    f"{destination}"
+                )
+
+            os.replace(
+                destination,
+                backup,
+            )
+            backup_created = True
 
         os.replace(
             temporary,
             destination,
         )
+        destination_replaced = True
 
         representation = AudioRepresentation(
             path=relative_path.as_posix(),
@@ -205,6 +351,8 @@ def materialize_region_audio(
             purposes=list(purposes),
             metadata={
                 "source": str(source),
+                "canonical_start": canonical_start,
+                "canonical_end": canonical_end,
             },
         )
 
@@ -224,7 +372,10 @@ def materialize_region_audio(
                     f"for {region_id}"
                 )
 
-            if representation_name in current:
+            if (
+                representation_name in current
+                and not replace_existing
+            ):
                 raise ValueError(
                     f"Representation already exists: "
                     f"{region_id}/"
@@ -234,6 +385,49 @@ def materialize_region_audio(
             current[
                 representation_name
             ] = representation.to_dict()
+
+            if replace_existing:
+                transcripts = record.get(
+                    "transcripts"
+                )
+
+                if not isinstance(
+                    transcripts,
+                    dict,
+                ):
+                    raise ValueError(
+                        f"Invalid transcripts "
+                        f"for {region_id}"
+                    )
+
+                for transcript_name in (
+                    stale_transcript_names
+                ):
+                    transcripts.pop(
+                        transcript_name,
+                        None,
+                    )
+
+                embeddings = record.get(
+                    "embeddings"
+                )
+
+                if not isinstance(
+                    embeddings,
+                    dict,
+                ):
+                    raise ValueError(
+                        f"Invalid embeddings "
+                        f"for {region_id}"
+                    )
+
+                for embedding_name in (
+                    stale_embedding_names
+                ):
+                    embeddings.pop(
+                        embedding_name,
+                        None,
+                    )
 
             return record
 
@@ -247,11 +441,30 @@ def materialize_region_audio(
             missing_ok=True
         )
 
-        destination.unlink(
-            missing_ok=True
-        )
+        if destination_replaced:
+            destination.unlink(
+                missing_ok=True
+            )
+
+        if backup_created:
+            os.replace(
+                backup,
+                destination,
+            )
 
         raise
+
+    backup.unlink(
+        missing_ok=True
+    )
+
+    for embedding_path in invalidated_embedding_paths:
+        try:
+            embedding_path.unlink(
+                missing_ok=True
+            )
+        except OSError:
+            pass
 
     return representation
 
@@ -358,7 +571,67 @@ def materialize_regions(
                     f"{expected_destination}"
                 )
 
-            skipped += 1
+            metadata = existing.get(
+                "metadata"
+            )
+
+            stale = True
+
+            if isinstance(metadata, dict):
+                existing_start = metadata.get(
+                    "canonical_start"
+                )
+                existing_end = metadata.get(
+                    "canonical_end"
+                )
+
+                if (
+                    isinstance(
+                        existing_start,
+                        (int, float),
+                    )
+                    and isinstance(
+                        existing_end,
+                        (int, float),
+                    )
+                    and float(existing_start)
+                    == float(region["source_start"])
+                    and float(existing_end)
+                    == float(region["source_end"])
+                ):
+                    stale = False
+
+                # Legacy region representations did
+                # not persist their geometry. Preserve
+                # them rather than forcing a rebuild
+                # of existing datasets.
+                elif (
+                    "canonical_start"
+                    not in metadata
+                    and "canonical_end"
+                    not in metadata
+                ):
+                    stale = False
+
+            if not stale:
+                skipped += 1
+                continue
+
+            materialize_region_audio(
+                storage=storage,
+                region_id=region_id,
+                source=source,
+                representation_name=(
+                    representation_name
+                ),
+                kind=kind,
+                purposes=purposes,
+                sample_rate=sample_rate,
+                channels=channels,
+                replace_existing=True,
+            )
+
+            created += 1
             continue
 
         if expected_destination.exists():

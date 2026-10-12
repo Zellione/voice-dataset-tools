@@ -860,3 +860,273 @@ def test_manual_boundary_turn_audio_is_not_padded(
     assert metadata[
         "padding_after"
     ] == pytest.approx(0.0)
+
+
+def make_region_storage(
+    tmp_path: Path,
+) -> tuple[DatasetStorage, Path]:
+    storage = DatasetStorage(
+        tmp_path / "region-dataset"
+    )
+
+    source_audio = (
+        tmp_path / "region-source.wav"
+    )
+    source_audio.touch()
+
+    storage.regions.append(
+        {
+            "schema_version": 2,
+            "record_type": "candidate_region",
+            "id": "region_000001",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 2.0,
+            "detector": "test",
+            "detector_label": "speaker_0",
+            "representations": {},
+            "transcripts": {},
+            "embeddings": {},
+            "reconciliation": {
+                "status": "pending",
+                "reason": None,
+                "notes": None,
+            },
+            "metadata": {},
+        }
+    )
+
+    return storage, source_audio
+
+
+def test_materialize_regions_rebuilds_stale_region_audio(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage, source_audio = (
+        make_region_storage(tmp_path)
+    )
+
+    calls = []
+
+    prepare_audio_mocks(
+        monkeypatch,
+        calls,
+    )
+
+    first = representations.materialize_regions(
+        storage=storage,
+        source_id="source_001",
+        source=source_audio,
+        representation_name="center",
+        kind="center",
+        purposes=["asr"],
+    )
+
+    assert first.created == 1
+    assert first.skipped == 0
+
+    calls.clear()
+
+    def trim_region(record):
+        record["source_end"] = 1.8
+        return record
+
+    storage.update_region(
+        "region_000001",
+        trim_region,
+    )
+
+    second = (
+        representations.materialize_regions(
+            storage=storage,
+            source_id="source_001",
+            source=source_audio,
+            representation_name="center",
+            kind="center",
+            purposes=["asr"],
+        )
+    )
+
+    assert second.created == 1
+    assert second.skipped == 0
+
+    assert len(calls) == 1
+
+    assert calls[0][
+        "start"
+    ] == pytest.approx(1.0)
+
+    assert calls[0][
+        "end"
+    ] == pytest.approx(1.8)
+
+    region = storage.get_region(
+        "region_000001"
+    )
+
+    metadata = region["representations"][
+        "center"
+    ]["metadata"]
+
+    assert metadata[
+        "canonical_start"
+    ] == pytest.approx(1.0)
+
+    assert metadata[
+        "canonical_end"
+    ] == pytest.approx(1.8)
+
+
+def test_materialize_regions_accepts_legacy_geometry_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage, source_audio = (
+        make_region_storage(tmp_path)
+    )
+
+    calls = []
+
+    prepare_audio_mocks(
+        monkeypatch,
+        calls,
+    )
+
+    relative_path = (
+        "regions/region_000001/"
+        "center.wav"
+    )
+
+    destination = (
+        storage.root / relative_path
+    )
+
+    destination.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    destination.touch()
+
+    def add_legacy(record):
+        record["representations"][
+            "center"
+        ] = {
+            "path": relative_path,
+            "kind": "center",
+            "sample_rate": 48000,
+            "channels": 1,
+            "purposes": ["asr"],
+            "metadata": {
+                "source": str(
+                    source_audio.resolve()
+                ),
+            },
+        }
+
+        return record
+
+    storage.update_region(
+        "region_000001",
+        add_legacy,
+    )
+
+    result = representations.materialize_regions(
+        storage=storage,
+        source_id="source_001",
+        source=source_audio,
+        representation_name="center",
+        kind="center",
+        purposes=["asr"],
+    )
+
+    assert result.created == 0
+    assert result.skipped == 1
+    assert calls == []
+
+
+def test_rebuilding_region_representation_invalidates_dependent_transcripts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage, source_audio = (
+        make_region_storage(tmp_path)
+    )
+
+    calls = []
+
+    prepare_audio_mocks(
+        monkeypatch,
+        calls,
+    )
+
+    representations.materialize_regions(
+        storage=storage,
+        source_id="source_001",
+        source=source_audio,
+        representation_name="center",
+        kind="center",
+        purposes=["asr"],
+    )
+
+    def add_transcripts(record):
+        record["transcripts"]["whisper"] = {
+            "text": "old transcript",
+            "language": "en",
+            "model": "large-v3",
+            "representation": "center",
+            "confidence": None,
+            "metadata": {
+                "language_override": "en",
+            },
+        }
+
+        record["transcripts"]["other"] = {
+            "text": "keep me",
+            "language": "en",
+            "model": "test",
+            "representation": "other",
+            "confidence": None,
+            "metadata": {},
+        }
+
+        return record
+
+    storage.update_region(
+        "region_000001",
+        add_transcripts,
+    )
+
+    def trim_region(record):
+        record["source_end"] = 1.8
+        return record
+
+    storage.update_region(
+        "region_000001",
+        trim_region,
+    )
+
+    representations.materialize_regions(
+        storage=storage,
+        source_id="source_001",
+        source=source_audio,
+        representation_name="center",
+        kind="center",
+        purposes=["asr"],
+    )
+
+    region = storage.get_region(
+        "region_000001"
+    )
+
+    assert region is not None
+
+    assert (
+        "whisper"
+        not in region["transcripts"]
+    )
+
+    assert (
+        "other"
+        in region["transcripts"]
+    )

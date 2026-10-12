@@ -24,6 +24,8 @@ BANDIT_CHECKPOINT_SHA256 = (
     "ca039d2ea98e64cfc"
 )
 
+SEPARATION_PROVENANCE_VERSION = 1
+
 
 @dataclass(frozen=True)
 class SeparationResult:
@@ -81,6 +83,14 @@ def separate_source(
             BANDIT_CHECKPOINT_SHA256
         ),
         "parameters": parameters,
+        "provenance": {
+            "version": (
+                SEPARATION_PROVENANCE_VERSION
+            ),
+            "input_representation": (
+                input_representation
+            ),
+        },
     }
 
     existing_source = storage.get_source(source_id)
@@ -112,11 +122,73 @@ def separate_source(
                 "review",
                 "tts_candidate",
             ],
-            "metadata": metadata,
         }
 
         for key, value in expected.items():
             if existing.get(key) != value:
+                raise ValueError(
+                    "Source representation already "
+                    "exists with different provenance: "
+                    f"{output_representation}"
+                )
+
+        existing_metadata = existing.get(
+            "metadata"
+        )
+
+        if not isinstance(
+            existing_metadata,
+            dict,
+        ):
+            raise ValueError(
+                "Source representation has invalid "
+                "separation metadata: "
+                f"{output_representation}"
+            )
+
+        if (
+            existing_metadata.get(
+                "checkpoint_sha256"
+            )
+            != BANDIT_CHECKPOINT_SHA256
+            or existing_metadata.get(
+                "parameters"
+            )
+            != parameters
+        ):
+            raise ValueError(
+                "Source representation already "
+                "exists with different provenance: "
+                f"{output_representation}"
+            )
+
+        provenance = existing_metadata.get(
+            "provenance"
+        )
+
+        # Legacy separated representations predate
+        # explicit parent provenance. Preserve them
+        # when all historical provenance still
+        # matches.
+        if provenance is not None:
+            if not isinstance(
+                provenance,
+                dict,
+            ):
+                raise ValueError(
+                    "Source representation has invalid "
+                    "separation provenance: "
+                    f"{output_representation}"
+                )
+
+            if (
+                provenance.get("version")
+                != SEPARATION_PROVENANCE_VERSION
+                or provenance.get(
+                    "input_representation"
+                )
+                != input_representation
+            ):
                 raise ValueError(
                     "Source representation already "
                     "exists with different provenance: "
