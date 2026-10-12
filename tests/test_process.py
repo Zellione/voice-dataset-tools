@@ -266,6 +266,27 @@ def test_process_source_runs_pipeline_in_order(
         fake_prepare,
     )
 
+    def fake_prepare_speaker_change(
+        storage,
+        source_id,
+        *,
+        evidence_name,
+        step,
+    ):
+        calls.append(
+            (
+                "speaker_changes",
+                evidence_name,
+                step,
+            )
+        )
+
+    monkeypatch.setattr(
+        process_module,
+        "prepare_source_speaker_change_evidence",
+        fake_prepare_speaker_change,
+    )
+
     result = process_module.process_source(
         source,
         output,
@@ -312,6 +333,11 @@ def test_process_source_runs_pipeline_in_order(
         ("apply", "English", "qwen3"),
         ("review",),
         ("speakers",),
+        (
+            "speaker_changes",
+            "qwen3",
+            0.5,
+        ),
     ]
 
     assert result == process_module.ProcessResult(
@@ -511,6 +537,29 @@ def test_process_source_skips_expensive_completed_steps(
         lambda *args, **kwargs: None,
     )
 
+    speaker_change_calls = []
+
+    def fake_prepare_speaker_change(
+        storage,
+        source_id,
+        *,
+        evidence_name,
+        step,
+    ):
+        speaker_change_calls.append(
+            (
+                source_id,
+                evidence_name,
+                step,
+            )
+        )
+
+    monkeypatch.setattr(
+        process_module,
+        "prepare_source_speaker_change_evidence",
+        fake_prepare_speaker_change,
+    )
+
     review_calls = []
 
     def fake_prepare_review(
@@ -533,6 +582,14 @@ def test_process_source_skips_expensive_completed_steps(
     )
 
     assert review_calls == ["episode"]
+
+    assert speaker_change_calls == [
+        (
+            "episode",
+            "qwen3",
+            0.5,
+        ),
+    ]
 
     assert result.detector_ran is False
     assert result.qwen_ran is False

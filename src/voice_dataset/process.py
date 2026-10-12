@@ -13,6 +13,9 @@ from .sources import (
     resolve_source_representation_for_purpose,
 )
 from .storage import DatasetStorage
+from .speaker_change import (
+    prepare_source_speaker_change_evidence,
+)
 from .utterance_pipeline import (
     apply_source_utterance_turns,
     build_source_utterances,
@@ -307,6 +310,13 @@ def process_source(
     prepare_source_speaker_evidence(
         storage,
         source_id,
+    )
+
+    prepare_source_speaker_change_evidence(
+        storage,
+        source_id,
+        evidence_name="qwen3",
+        step=0.5,
     )
 
     return ProcessResult(
