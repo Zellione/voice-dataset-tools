@@ -4889,3 +4889,79 @@ async def test_voice_picker_renames_selected_voice(
         )
 
         assert len(app.screen_stack) == 1
+
+
+def test_reviewer_formats_speaker_change_evidence(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=10.0,
+    )
+
+    def update(record):
+        metadata = dict(
+            record.get("metadata") or {}
+        )
+
+        metadata["automatic_pipeline"] = {
+            "status": "review",
+            "review_reasons": [
+                "suspected_speaker_change",
+            ],
+        }
+
+        metadata["speaker_change_evidence"] = {
+            "status": "suspected",
+            "strongest": {
+                "boundary": 10.5,
+                "window_kind": "adaptive",
+                "left_start": 10.0,
+                "left_end": 10.5,
+                "right_start": 10.5,
+                "right_end": 11.0,
+                "ecapa_similarity": 0.05,
+                "wespeaker_similarity": 0.07,
+                "mean_similarity": 0.06,
+                "encoder_disagreement": 0.02,
+                "divergence": 0.94,
+                "suspected": True,
+            },
+            "changes": [],
+        }
+
+        record["metadata"] = metadata
+        return record
+
+    storage.update_turn(
+        "turn_000001",
+        update,
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    view = session.current_view(
+        embedding_names=(),
+        speaker_limit=3,
+    )
+
+    assert view is not None
+
+    rendered = app._format_evidence(view)
+
+    assert "suspected_speaker_change" in rendered
+    assert "Spk change: suspected" in rendered
+    assert "Change at: 00:10.500 (adaptive)" in rendered
+    assert "Divergence: 0.9400" in rendered
+    assert "ECAPA:     0.0500" in rendered
+    assert "WeSpeaker: 0.0700" in rendered
+    assert "Disagree:  0.0200" in rendered

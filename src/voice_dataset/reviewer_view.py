@@ -28,6 +28,31 @@ class ReviewerAutomaticPipelineView:
 
 
 @dataclass(frozen=True)
+class ReviewerSpeakerChangeItemView:
+    boundary: float
+    window_kind: str
+
+    left_start: float
+    left_end: float
+    right_start: float
+    right_end: float
+
+    ecapa_similarity: float
+    wespeaker_similarity: float
+    mean_similarity: float
+    encoder_disagreement: float
+    divergence: float
+
+    suspected: bool
+
+
+@dataclass(frozen=True)
+class ReviewerSpeakerChangeView:
+    status: str | None
+    strongest: ReviewerSpeakerChangeItemView | None
+
+
+@dataclass(frozen=True)
 class ReviewerEmbeddingScoreView:
     embedding_name: str
     score: float
@@ -70,6 +95,7 @@ class ReviewerTurnView:
     assignment: ReviewerAssignmentView
     automatic_pipeline: ReviewerAutomaticPipelineView
     speaker_evidence: ReviewerSpeakerEvidenceView
+    speaker_change: ReviewerSpeakerChangeView
 
     speaker_candidates: tuple[
         ReviewerSpeakerCandidateView,
@@ -218,6 +244,15 @@ def build_reviewer_turn_view(
     )
     if not isinstance(speaker_evidence, dict):
         speaker_evidence = {}
+
+    speaker_change_evidence = metadata.get(
+        "speaker_change_evidence"
+    )
+    if not isinstance(
+        speaker_change_evidence,
+        dict,
+    ):
+        speaker_change_evidence = {}
 
     alignment_evidence = metadata.get(
         "alignment_evidence"
@@ -419,6 +454,127 @@ def build_reviewer_turn_view(
     if not isinstance(auto_status, str):
         auto_status = None
 
+    speaker_change_status = (
+        speaker_change_evidence.get(
+            "status"
+        )
+    )
+
+    if not isinstance(
+        speaker_change_status,
+        str,
+    ):
+        speaker_change_status = None
+
+    strongest_data = (
+        speaker_change_evidence.get(
+            "strongest"
+        )
+    )
+
+    speaker_change_strongest = None
+
+    if isinstance(strongest_data, dict):
+        def required_float(
+            key: str,
+        ) -> float | None:
+            value = strongest_data.get(key)
+
+            if isinstance(
+                value,
+                (int, float),
+            ):
+                return float(value)
+
+            return None
+
+        boundary_value = required_float(
+            "boundary"
+        )
+        left_start = required_float(
+            "left_start"
+        )
+        left_end = required_float(
+            "left_end"
+        )
+        right_start = required_float(
+            "right_start"
+        )
+        right_end = required_float(
+            "right_end"
+        )
+        ecapa_similarity = required_float(
+            "ecapa_similarity"
+        )
+        wespeaker_similarity = required_float(
+            "wespeaker_similarity"
+        )
+        mean_similarity = required_float(
+            "mean_similarity"
+        )
+        encoder_disagreement = required_float(
+            "encoder_disagreement"
+        )
+        divergence = required_float(
+            "divergence"
+        )
+
+        window_kind = strongest_data.get(
+            "window_kind"
+        )
+
+        if not isinstance(window_kind, str):
+            window_kind = None
+
+        required_values = (
+            boundary_value,
+            left_start,
+            left_end,
+            right_start,
+            right_end,
+            ecapa_similarity,
+            wespeaker_similarity,
+            mean_similarity,
+            encoder_disagreement,
+            divergence,
+        )
+
+        if (
+            window_kind is not None
+            and all(
+                value is not None
+                for value in required_values
+            )
+        ):
+            speaker_change_strongest = (
+                ReviewerSpeakerChangeItemView(
+                    boundary=boundary_value,
+                    window_kind=window_kind,
+                    left_start=left_start,
+                    left_end=left_end,
+                    right_start=right_start,
+                    right_end=right_end,
+                    ecapa_similarity=(
+                        ecapa_similarity
+                    ),
+                    wespeaker_similarity=(
+                        wespeaker_similarity
+                    ),
+                    mean_similarity=(
+                        mean_similarity
+                    ),
+                    encoder_disagreement=(
+                        encoder_disagreement
+                    ),
+                    divergence=divergence,
+                    suspected=bool(
+                        strongest_data.get(
+                            "suspected"
+                        )
+                    ),
+                )
+            )
+
     assignment_status = assignment.get("status")
     if not isinstance(assignment_status, str):
         assignment_status = "unknown"
@@ -531,6 +687,10 @@ def build_reviewer_turn_view(
                 for index in unresolved_word_indices
                 if isinstance(index, int)
             ),
+        ),
+        speaker_change=ReviewerSpeakerChangeView(
+            status=speaker_change_status,
+            strongest=speaker_change_strongest,
         ),
         alignment=ReviewerAlignmentView(
             status=alignment_status,

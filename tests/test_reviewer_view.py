@@ -583,3 +583,78 @@ def test_reviewer_view_defaults_curation_to_pending():
     )
 
     assert view.curation_status == "pending"
+
+
+def test_reviewer_view_maps_speaker_change_evidence():
+    view = build_reviewer_turn_view(
+        {
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 10.0,
+            "source_end": 13.0,
+            "metadata": {
+                "automatic_pipeline": {
+                    "status": "review",
+                    "review_reasons": [
+                        "suspected_speaker_change",
+                    ],
+                },
+                "speaker_change_evidence": {
+                    "status": "suspected",
+                    "strongest": {
+                        "boundary": 11.5,
+                        "window_kind": "full",
+                        "left_start": 10.5,
+                        "left_end": 11.5,
+                        "right_start": 11.5,
+                        "right_end": 12.5,
+                        "ecapa_similarity": 0.04,
+                        "wespeaker_similarity": 0.08,
+                        "mean_similarity": 0.06,
+                        "encoder_disagreement": 0.04,
+                        "divergence": 0.94,
+                        "suspected": True,
+                    },
+                    "changes": [],
+                },
+            },
+        },
+        position=1,
+        total=1,
+        voices={},
+        speaker_candidates=[],
+    )
+
+    assert (
+        view.speaker_change.status
+        == "suspected"
+    )
+
+    change = view.speaker_change.strongest
+
+    assert change is not None
+    assert change.boundary == 11.5
+    assert change.window_kind == "full"
+    assert change.divergence == 0.94
+    assert change.ecapa_similarity == 0.04
+    assert change.wespeaker_similarity == 0.08
+    assert change.encoder_disagreement == 0.04
+    assert change.suspected is True
+
+
+def test_reviewer_view_defaults_missing_speaker_change_evidence():
+    view = build_reviewer_turn_view(
+        {
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 2.0,
+        },
+        position=1,
+        total=1,
+        voices={},
+        speaker_candidates=[],
+    )
+
+    assert view.speaker_change.status is None
+    assert view.speaker_change.strongest is None

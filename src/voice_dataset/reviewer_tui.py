@@ -4944,6 +4944,54 @@ class ReviewerTUI(App[None]):
                     or "-"
                 )
             ),
+        ])
+
+        if view.speaker_change.status is not None:
+            change = (
+                view.speaker_change.strongest
+            )
+
+            lines.extend([
+                "",
+                (
+                    "Spk change:"
+                    f" {view.speaker_change.status}"
+                ),
+            ])
+
+            if change is not None:
+                lines.extend([
+                    (
+                        "Change at: "
+                        f"{format_source_time(change.boundary)}"
+                        f" ({change.window_kind})"
+                    ),
+                    (
+                        "Divergence:"
+                        f" {change.divergence:.4f}"
+                    ),
+                    (
+                        "ECAPA:     "
+                        f"{change.ecapa_similarity:.4f}"
+                    ),
+                    (
+                        "WeSpeaker: "
+                        f"{change.wespeaker_similarity:.4f}"
+                    ),
+                    (
+                        "Disagree:  "
+                        f"{change.encoder_disagreement:.4f}"
+                    ),
+                    (
+                        "Windows:   "
+                        f"{change.left_start:.3f}-"
+                        f"{change.left_end:.3f} / "
+                        f"{change.right_start:.3f}-"
+                        f"{change.right_end:.3f}"
+                    ),
+                ])
+
+        lines.extend([
             "",
             (
                 "Alignment: "
