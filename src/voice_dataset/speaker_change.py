@@ -20,6 +20,10 @@ from .storage import DatasetStorage
 
 DEFAULT_SPEAKER_CHANGE_WINDOW = 1.0
 DEFAULT_SPEAKER_CHANGE_STEP = 0.25
+DEFAULT_SPEAKER_CHANGE_MIN_WINDOW = 0.5
+DEFAULT_SPEAKER_CHANGE_MAX_SHIFT = 0.75
+DEFAULT_SPEAKER_CHANGE_SHIFT_STEP = 0.05
+DEFAULT_SPEAKER_CHANGE_MIN_SPEECH_RATIO = 0.5
 
 
 @dataclass(frozen=True)
@@ -63,11 +67,145 @@ class _AnalysisPair:
     right_window_id: str
 
 
+def _speech_coverage(
+    words: list[dict[str, Any]],
+    start: float,
+    end: float,
+) -> float:
+    total = 0.0
+
+    for word in words:
+        word_start = float(word["start"])
+        word_end = float(word["end"])
+
+        total += max(
+            0.0,
+            min(end, word_end)
+            - max(start, word_start),
+        )
+
+    return total
+
+
+def _best_speech_window(
+    words: list[dict[str, Any]],
+    *,
+    boundary: float,
+    range_start: float,
+    range_end: float,
+    side: str,
+    target_window: float,
+    minimum_window: float,
+    max_shift: float,
+    shift_step: float,
+    minimum_speech_ratio: float,
+) -> tuple[float, float] | None:
+    if side not in {"left", "right"}:
+        raise ValueError(
+            f"Unsupported speaker-change side: {side}"
+        )
+
+    if side == "left":
+        available = boundary - range_start
+    else:
+        available = range_end - boundary
+
+    duration = min(
+        target_window,
+        available,
+    )
+
+    if duration < minimum_window:
+        return None
+
+    best: tuple[
+        float,
+        float,
+        float,
+        float,
+    ] | None = None
+
+    shift = 0.0
+
+    while shift <= max_shift + 1e-9:
+        if side == "left":
+            end = boundary - shift
+            start = end - duration
+
+            if start < range_start:
+                shift += shift_step
+                continue
+
+        else:
+            start = boundary + shift
+            end = start + duration
+
+            if end > range_end:
+                shift += shift_step
+                continue
+
+        coverage = _speech_coverage(
+            words,
+            start,
+            end,
+        )
+
+        ratio = (
+            coverage / duration
+            if duration > 0
+            else 0.0
+        )
+
+        candidate = (
+            coverage,
+            -shift,
+            start,
+            end,
+        )
+
+        if (
+            best is None
+            or candidate > best
+        ):
+            best = candidate
+
+        shift += shift_step
+
+    if best is None:
+        return None
+
+    coverage, _, start, end = best
+
+    if (
+        coverage / (end - start)
+        < minimum_speech_ratio
+    ):
+        return None
+
+    return (
+        start,
+        end,
+    )
+
+
 def plan_turn_speaker_change_boundaries(
     turn: dict[str, Any],
     *,
+    words: list[dict[str, Any]] | None = None,
     window: float = DEFAULT_SPEAKER_CHANGE_WINDOW,
     step: float = DEFAULT_SPEAKER_CHANGE_STEP,
+    minimum_window: float = (
+        DEFAULT_SPEAKER_CHANGE_MIN_WINDOW
+    ),
+    max_shift: float = (
+        DEFAULT_SPEAKER_CHANGE_MAX_SHIFT
+    ),
+    shift_step: float = (
+        DEFAULT_SPEAKER_CHANGE_SHIFT_STEP
+    ),
+    minimum_speech_ratio: float = (
+        DEFAULT_SPEAKER_CHANGE_MIN_SPEECH_RATIO
+    ),
 ) -> tuple[SpeakerChangeBoundary, ...]:
     if window <= 0:
         raise ValueError(
@@ -77,6 +215,36 @@ def plan_turn_speaker_change_boundaries(
     if step <= 0:
         raise ValueError(
             "step must be positive"
+        )
+
+    if minimum_window <= 0:
+        raise ValueError(
+            "minimum_window must be positive"
+        )
+
+    if minimum_window > window:
+        raise ValueError(
+            "minimum_window must not exceed window"
+        )
+
+    if max_shift < 0:
+        raise ValueError(
+            "max_shift must not be negative"
+        )
+
+    if shift_step <= 0:
+        raise ValueError(
+            "shift_step must be positive"
+        )
+
+    if not (
+        0.0
+        <= minimum_speech_ratio
+        <= 1.0
+    ):
+        raise ValueError(
+            "minimum_speech_ratio must be between "
+            "zero and one"
         )
 
     turn_id = turn.get("id")
@@ -116,8 +284,14 @@ def plan_turn_speaker_change_boundaries(
             f"{turn_id}: invalid source range"
         )
 
-    first = start + window
-    last = end - window
+    minimum_side = (
+        minimum_window
+        if words is not None
+        else window
+    )
+
+    first = start + minimum_side
+    last = end - minimum_side
 
     if first > last:
         return ()
@@ -132,14 +306,65 @@ def plan_turn_speaker_change_boundaries(
             last,
         )
 
+        if words is None:
+            left_start = (
+                boundary - window
+            )
+            left_end = boundary
+            right_start = boundary
+            right_end = (
+                boundary + window
+            )
+
+        else:
+            left = _best_speech_window(
+                words,
+                boundary=boundary,
+                range_start=start,
+                range_end=end,
+                side="left",
+                target_window=window,
+                minimum_window=minimum_window,
+                max_shift=max_shift,
+                shift_step=shift_step,
+                minimum_speech_ratio=(
+                    minimum_speech_ratio
+                ),
+            )
+
+            right = _best_speech_window(
+                words,
+                boundary=boundary,
+                range_start=start,
+                range_end=end,
+                side="right",
+                target_window=window,
+                minimum_window=minimum_window,
+                max_shift=max_shift,
+                shift_step=shift_step,
+                minimum_speech_ratio=(
+                    minimum_speech_ratio
+                ),
+            )
+
+            if left is None or right is None:
+                if boundary >= last:
+                    break
+
+                boundary += step
+                continue
+
+            left_start, left_end = left
+            right_start, right_end = right
+
         boundaries.append(
             SpeakerChangeBoundary(
                 turn_id=turn_id,
                 boundary=boundary,
-                left_start=boundary - window,
-                left_end=boundary,
-                right_start=boundary,
-                right_end=boundary + window,
+                left_start=left_start,
+                left_end=left_end,
+                right_start=right_start,
+                right_end=right_end,
             )
         )
 
@@ -508,12 +733,54 @@ def analyze_source_speaker_changes(
         )
     )
 
+    source = storage.get_source(
+        source_id
+    )
+
+    if source is None:
+        raise KeyError(
+            f"Source does not exist: {source_id}"
+        )
+
+    metadata = source.get(
+        "metadata",
+        {},
+    )
+
+    continuous_asr = (
+        metadata.get("continuous_asr", {})
+        if isinstance(metadata, dict)
+        else {}
+    )
+
+    qwen = (
+        continuous_asr.get("qwen3")
+        if isinstance(
+            continuous_asr,
+            dict,
+        )
+        else None
+    )
+
+    words = (
+        qwen.get("words")
+        if isinstance(qwen, dict)
+        else None
+    )
+
+    if not isinstance(words, list):
+        raise ValueError(
+            "Source has no valid qwen3 "
+            "continuous ASR words"
+        )
+
     boundaries = []
 
     for turn in turns:
         boundaries.extend(
             plan_turn_speaker_change_boundaries(
                 turn,
+                words=words,
                 window=window,
                 step=step,
             )

@@ -177,3 +177,111 @@ def test_adjacent_boundaries_reuse_shared_window_geometry():
         second.left_start,
         second.left_end,
     )
+
+
+def test_speech_aware_planning_rejects_pause_only_side():
+    words = [
+        {
+            "text": "right",
+            "start": 11.5,
+            "end": 12.0,
+        },
+    ]
+
+    boundaries = (
+        plan_turn_speaker_change_boundaries(
+            {
+                "id": "turn_001",
+                "source_start": 9.0,
+                "source_end": 12.0,
+            },
+            words=words,
+            window=1.0,
+            step=0.25,
+            minimum_window=0.5,
+            minimum_speech_ratio=0.5,
+        )
+    )
+
+    assert boundaries == ()
+
+
+def test_speech_aware_planning_accepts_short_valid_side():
+    words = [
+        {
+            "text": "left",
+            "start": 10.0,
+            "end": 11.0,
+        },
+        {
+            "text": "right",
+            "start": 11.0,
+            "end": 11.64,
+        },
+    ]
+
+    boundaries = (
+        plan_turn_speaker_change_boundaries(
+            {
+                "id": "turn_001",
+                "source_start": 10.0,
+                "source_end": 11.64,
+            },
+            words=words,
+            window=1.0,
+            step=0.25,
+            minimum_window=0.5,
+            minimum_speech_ratio=0.5,
+        )
+    )
+
+    assert len(boundaries) >= 1
+
+    assert (
+        boundaries[0].left_end
+        - boundaries[0].left_start
+    ) >= 0.5
+
+    assert (
+        boundaries[0].right_end
+        - boundaries[0].right_start
+    ) >= 0.5
+
+
+def test_speech_aware_planning_shifts_away_from_pause():
+    words = [
+        {
+            "text": "speech",
+            "start": 10.0,
+            "end": 10.8,
+        },
+        {
+            "text": "speech",
+            "start": 11.2,
+            "end": 12.0,
+        },
+    ]
+
+    boundaries = (
+        plan_turn_speaker_change_boundaries(
+            {
+                "id": "turn_001",
+                "source_start": 9.5,
+                "source_end": 12.5,
+            },
+            words=words,
+            window=1.0,
+            step=1.0,
+            minimum_window=0.5,
+            max_shift=0.75,
+            shift_step=0.05,
+            minimum_speech_ratio=0.5,
+        )
+    )
+
+    assert boundaries
+
+    boundary = boundaries[0]
+
+    assert boundary.left_start >= 9.5
+    assert boundary.right_end <= 12.5
