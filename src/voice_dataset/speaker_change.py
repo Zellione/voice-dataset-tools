@@ -25,6 +25,9 @@ DEFAULT_SPEAKER_CHANGE_MAX_SHIFT = 0.75
 DEFAULT_SPEAKER_CHANGE_SHIFT_STEP = 0.05
 DEFAULT_SPEAKER_CHANGE_MIN_SPEECH_RATIO = 0.5
 
+DEFAULT_SPEAKER_CHANGE_FULL_THRESHOLD = 0.92
+DEFAULT_SPEAKER_CHANGE_ADAPTIVE_THRESHOLD = 0.92
+
 
 @dataclass(frozen=True)
 class SpeakerChangeBoundary:
@@ -392,6 +395,56 @@ def plan_turn_speaker_change_boundaries(
         boundary += step
 
     return tuple(boundaries)
+
+
+def speaker_change_window_kind(
+    boundary: SpeakerChangeBoundary,
+) -> str:
+    left_duration = (
+        boundary.left_end
+        - boundary.left_start
+    )
+    right_duration = (
+        boundary.right_end
+        - boundary.right_start
+    )
+
+    if (
+        left_duration
+        >= DEFAULT_SPEAKER_CHANGE_WINDOW - 1e-6
+        and right_duration
+        >= DEFAULT_SPEAKER_CHANGE_WINDOW - 1e-6
+    ):
+        return "full"
+
+    return "adaptive"
+
+
+def is_suspected_speaker_change(
+    change: SpeakerEmbeddingChange,
+    boundary: SpeakerChangeBoundary,
+    *,
+    full_threshold: float = (
+        DEFAULT_SPEAKER_CHANGE_FULL_THRESHOLD
+    ),
+    adaptive_threshold: float = (
+        DEFAULT_SPEAKER_CHANGE_ADAPTIVE_THRESHOLD
+    ),
+) -> bool:
+    kind = speaker_change_window_kind(
+        boundary
+    )
+
+    threshold = (
+        full_threshold
+        if kind == "full"
+        else adaptive_threshold
+    )
+
+    return (
+        change.divergence
+        >= threshold
+    )
 
 
 def cosine_similarity(

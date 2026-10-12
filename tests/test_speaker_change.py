@@ -2,8 +2,11 @@ import numpy as np
 import pytest
 
 from voice_dataset.speaker_change import (
+    SpeakerEmbeddingChange,
     SpeakerChangeBoundary,
     cosine_similarity,
+    is_suspected_speaker_change,
+    speaker_change_window_kind,
     plan_turn_speaker_change_boundaries,
     score_speaker_change,
 )
@@ -359,4 +362,92 @@ def test_short_turn_uses_single_adaptive_center_boundary():
     assert len(boundaries) == 1
     assert boundaries[0].boundary == pytest.approx(
         10.8
+    )
+
+
+def test_speaker_change_window_kind_full():
+    boundary = SpeakerChangeBoundary(
+        turn_id="turn_001",
+        boundary=11.0,
+        left_start=10.0,
+        left_end=11.0,
+        right_start=11.0,
+        right_end=12.0,
+    )
+
+    assert (
+        speaker_change_window_kind(
+            boundary
+        )
+        == "full"
+    )
+
+
+def test_speaker_change_window_kind_adaptive():
+    boundary = SpeakerChangeBoundary(
+        turn_id="turn_001",
+        boundary=11.0,
+        left_start=10.0,
+        left_end=11.0,
+        right_start=11.0,
+        right_end=11.7,
+    )
+
+    assert (
+        speaker_change_window_kind(
+            boundary
+        )
+        == "adaptive"
+    )
+
+
+def test_suspected_speaker_change_uses_full_threshold():
+    boundary = SpeakerChangeBoundary(
+        turn_id="turn_001",
+        boundary=11.0,
+        left_start=10.0,
+        left_end=11.0,
+        right_start=11.0,
+        right_end=12.0,
+    )
+
+    change = SpeakerEmbeddingChange(
+        turn_id="turn_001",
+        boundary=11.0,
+        ecapa_similarity=0.08,
+        wespeaker_similarity=0.06,
+        mean_similarity=0.07,
+        encoder_disagreement=0.02,
+        divergence=0.93,
+    )
+
+    assert is_suspected_speaker_change(
+        change,
+        boundary,
+    )
+
+
+def test_suspected_speaker_change_uses_adaptive_threshold():
+    boundary = SpeakerChangeBoundary(
+        turn_id="turn_001",
+        boundary=11.0,
+        left_start=10.0,
+        left_end=11.0,
+        right_start=11.0,
+        right_end=11.7,
+    )
+
+    change = SpeakerEmbeddingChange(
+        turn_id="turn_001",
+        boundary=11.0,
+        ecapa_similarity=0.08,
+        wespeaker_similarity=0.06,
+        mean_similarity=0.07,
+        encoder_disagreement=0.02,
+        divergence=0.93,
+    )
+
+    assert is_suspected_speaker_change(
+        change,
+        boundary,
     )
