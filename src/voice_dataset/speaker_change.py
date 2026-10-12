@@ -1196,6 +1196,158 @@ def apply_source_speaker_change_evidence(
     )
 
 
+def _speaker_change_evidence_is_current(
+    turn: dict[str, Any],
+    boundaries: list[SpeakerChangeBoundary],
+    *,
+    step: float,
+) -> bool:
+    metadata = turn.get("metadata")
+
+    if not isinstance(metadata, dict):
+        return False
+
+    evidence = metadata.get(
+        "speaker_change_evidence"
+    )
+
+    if not isinstance(evidence, dict):
+        return False
+
+    if evidence.get("step") != step:
+        return False
+
+    if (
+        evidence.get("full_threshold")
+        != DEFAULT_SPEAKER_CHANGE_FULL_THRESHOLD
+    ):
+        return False
+
+    if (
+        evidence.get("adaptive_threshold")
+        != DEFAULT_SPEAKER_CHANGE_ADAPTIVE_THRESHOLD
+    ):
+        return False
+
+    changes = evidence.get("changes")
+
+    if not isinstance(changes, list):
+        return False
+
+    if len(changes) != len(boundaries):
+        return False
+
+    def same_float(
+        left: Any,
+        right: float,
+    ) -> bool:
+        return (
+            isinstance(left, (int, float))
+            and round(float(left), 9)
+            == round(float(right), 9)
+        )
+
+    for record, boundary in zip(
+        changes,
+        boundaries,
+        strict=True,
+    ):
+        if not isinstance(record, dict):
+            return False
+
+        if not same_float(
+            record.get("boundary"),
+            boundary.boundary,
+        ):
+            return False
+
+        if not same_float(
+            record.get("left_start"),
+            boundary.left_start,
+        ):
+            return False
+
+        if not same_float(
+            record.get("left_end"),
+            boundary.left_end,
+        ):
+            return False
+
+        if not same_float(
+            record.get("right_start"),
+            boundary.right_start,
+        ):
+            return False
+
+        if not same_float(
+            record.get("right_end"),
+            boundary.right_end,
+        ):
+            return False
+
+        if (
+            record.get("window_kind")
+            != speaker_change_window_kind(
+                boundary
+            )
+        ):
+            return False
+
+    expected_status = (
+        "insufficient_evidence"
+        if not boundaries
+        else None
+    )
+
+    if (
+        expected_status is not None
+        and evidence.get("status")
+        != expected_status
+    ):
+        return False
+
+    return True
+
+
+def _persisted_speaker_change_result(
+    turns: list[dict[str, Any]],
+) -> PersistSpeakerChangeEvidenceResult:
+    analyzed_turns = 0
+    comparisons = 0
+    suspected_turns = 0
+
+    for turn in turns:
+        metadata = turn.get("metadata")
+
+        evidence = (
+            metadata.get(
+                "speaker_change_evidence"
+            )
+            if isinstance(metadata, dict)
+            else None
+        )
+
+        if not isinstance(evidence, dict):
+            continue
+
+        changes = evidence.get("changes")
+
+        if isinstance(changes, list):
+            comparisons += len(changes)
+
+            if changes:
+                analyzed_turns += 1
+
+        if evidence.get("status") == "suspected":
+            suspected_turns += 1
+
+    return PersistSpeakerChangeEvidenceResult(
+        analyzed_turns=analyzed_turns,
+        comparisons=comparisons,
+        suspected_turns=suspected_turns,
+    )
+
+
 def prepare_source_speaker_change_evidence(
     storage: DatasetStorage,
     source_id: str,
@@ -1299,13 +1451,40 @@ def prepare_source_speaker_change_evidence(
         SpeakerChangeBoundary
     ] = []
 
+    boundaries_by_turn: dict[
+        str,
+        list[SpeakerChangeBoundary],
+    ] = {}
+
     for turn in turns:
-        boundaries.extend(
+        turn_id = str(turn["id"])
+
+        planned = list(
             plan_turn_speaker_change_boundaries(
                 turn,
                 words=words,
                 step=step,
             )
+        )
+
+        boundaries_by_turn[
+            turn_id
+        ] = planned
+
+        boundaries.extend(planned)
+
+    if all(
+        _speaker_change_evidence_is_current(
+            turn,
+            boundaries_by_turn[
+                str(turn["id"])
+            ],
+            step=step,
+        )
+        for turn in turns
+    ):
+        return _persisted_speaker_change_result(
+            turns
         )
 
     changes = (

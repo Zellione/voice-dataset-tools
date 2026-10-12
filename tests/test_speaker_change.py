@@ -845,3 +845,267 @@ def test_prepare_speaker_change_evidence_skips_curated_turns(
     assert result.analyzed_turns == 0
     assert result.comparisons == 0
     assert result.suspected_turns == 0
+
+
+def test_prepare_speaker_change_evidence_reuses_current_evidence(
+    tmp_path,
+    monkeypatch,
+):
+    from voice_dataset.schema import (
+        SourceRecord,
+        TurnRecord,
+    )
+    from voice_dataset.speaker_change import (
+        SpeakerEmbeddingChange,
+        apply_source_speaker_change_evidence,
+        prepare_source_speaker_change_evidence,
+        plan_turn_speaker_change_boundaries,
+    )
+    from voice_dataset.storage import (
+        DatasetStorage,
+    )
+
+    storage = DatasetStorage(tmp_path)
+
+    words = [
+        {
+            "text": "hello",
+            "start": 10.0,
+            "end": 11.0,
+        },
+        {
+            "text": "there",
+            "start": 11.0,
+            "end": 12.0,
+        },
+    ]
+
+    storage.add_source(
+        SourceRecord(
+            id="source_001",
+            metadata={
+                "continuous_asr": {
+                    "qwen3": {
+                        "words": words,
+                    },
+                },
+            },
+        )
+    )
+
+    storage.add_turn(
+        TurnRecord(
+            id="turn_000001",
+            source_id="source_001",
+            source_start=10.0,
+            source_end=12.0,
+        )
+    )
+
+    turn = storage.get_turn(
+        "turn_000001"
+    )
+
+    boundaries = list(
+        plan_turn_speaker_change_boundaries(
+            turn,
+            words=words,
+            step=0.5,
+        )
+    )
+
+    assert len(boundaries) == 1
+
+    boundary = boundaries[0]
+
+    apply_source_speaker_change_evidence(
+        storage,
+        "source_001",
+        boundaries,
+        (
+            SpeakerEmbeddingChange(
+                turn_id="turn_000001",
+                boundary=boundary.boundary,
+                ecapa_similarity=0.2,
+                wespeaker_similarity=0.2,
+                mean_similarity=0.2,
+                encoder_disagreement=0.0,
+                divergence=0.8,
+            ),
+        ),
+        step=0.5,
+    )
+
+    def fail_analysis(*args, **kwargs):
+        raise AssertionError(
+            "current evidence must skip GPU analysis"
+        )
+
+    monkeypatch.setattr(
+        "voice_dataset.speaker_change."
+        "analyze_speaker_change_boundaries",
+        fail_analysis,
+    )
+
+    result = (
+        prepare_source_speaker_change_evidence(
+            storage,
+            "source_001",
+            step=0.5,
+        )
+    )
+
+    assert result.analyzed_turns == 1
+    assert result.comparisons == 1
+    assert result.suspected_turns == 0
+
+
+def test_prepare_speaker_change_evidence_reruns_when_step_changes(
+    tmp_path,
+    monkeypatch,
+):
+    from voice_dataset.schema import (
+        SourceRecord,
+        TurnRecord,
+    )
+    from voice_dataset.speaker_change import (
+        SpeakerEmbeddingChange,
+        apply_source_speaker_change_evidence,
+        prepare_source_speaker_change_evidence,
+        plan_turn_speaker_change_boundaries,
+    )
+    from voice_dataset.storage import (
+        DatasetStorage,
+    )
+
+    storage = DatasetStorage(tmp_path)
+
+    words = [
+        {
+            "text": "one",
+            "start": 10.0,
+            "end": 11.0,
+        },
+        {
+            "text": "two",
+            "start": 11.0,
+            "end": 12.0,
+        },
+        {
+            "text": "three",
+            "start": 12.0,
+            "end": 13.0,
+        },
+        {
+            "text": "four",
+            "start": 13.0,
+            "end": 14.0,
+        },
+    ]
+
+    storage.add_source(
+        SourceRecord(
+            id="source_001",
+            metadata={
+                "continuous_asr": {
+                    "qwen3": {
+                        "words": words,
+                    },
+                },
+            },
+        )
+    )
+
+    storage.add_turn(
+        TurnRecord(
+            id="turn_000001",
+            source_id="source_001",
+            source_start=10.0,
+            source_end=14.0,
+        )
+    )
+
+    turn = storage.get_turn(
+        "turn_000001"
+    )
+
+    old_boundaries = list(
+        plan_turn_speaker_change_boundaries(
+            turn,
+            words=words,
+            step=0.5,
+        )
+    )
+
+    old_changes = tuple(
+        SpeakerEmbeddingChange(
+            turn_id=boundary.turn_id,
+            boundary=boundary.boundary,
+            ecapa_similarity=0.2,
+            wespeaker_similarity=0.2,
+            mean_similarity=0.2,
+            encoder_disagreement=0.0,
+            divergence=0.8,
+        )
+        for boundary in old_boundaries
+    )
+
+    apply_source_speaker_change_evidence(
+        storage,
+        "source_001",
+        old_boundaries,
+        old_changes,
+        step=0.5,
+    )
+
+    calls = []
+
+    def fake_analysis(
+        storage_arg,
+        source_id,
+        boundaries,
+        *,
+        capture_output=True,
+    ):
+        calls.append(
+            list(boundaries)
+        )
+
+        return tuple(
+            SpeakerEmbeddingChange(
+                turn_id=boundary.turn_id,
+                boundary=boundary.boundary,
+                ecapa_similarity=0.2,
+                wespeaker_similarity=0.2,
+                mean_similarity=0.2,
+                encoder_disagreement=0.0,
+                divergence=0.8,
+            )
+            for boundary in boundaries
+        )
+
+    monkeypatch.setattr(
+        "voice_dataset.speaker_change."
+        "analyze_speaker_change_boundaries",
+        fake_analysis,
+    )
+
+    prepare_source_speaker_change_evidence(
+        storage,
+        "source_001",
+        step=0.25,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]
+
+    turn = storage.get_turn(
+        "turn_000001"
+    )
+
+    assert (
+        turn["metadata"]
+        ["speaker_change_evidence"]
+        ["step"]
+        == 0.25
+    )
