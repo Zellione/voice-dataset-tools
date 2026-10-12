@@ -1109,3 +1109,217 @@ def test_prepare_speaker_change_evidence_reruns_when_step_changes(
         ["step"]
         == 0.25
     )
+
+
+def test_speaker_change_evidence_persists_analysis_version(
+    tmp_path,
+):
+    from voice_dataset.speaker_change import (
+        SPEAKER_CHANGE_EVIDENCE_VERSION,
+        apply_source_speaker_change_evidence,
+    )
+
+    storage = _speaker_change_test_storage(
+        tmp_path,
+        automatic_pipeline={
+            "status": "ready",
+            "review_reasons": [],
+        },
+    )
+
+    boundary = SpeakerChangeBoundary(
+        turn_id="turn_000001",
+        boundary=11.0,
+        left_start=10.0,
+        left_end=11.0,
+        right_start=11.0,
+        right_end=12.0,
+    )
+
+    change = SpeakerEmbeddingChange(
+        turn_id="turn_000001",
+        boundary=11.0,
+        ecapa_similarity=0.2,
+        wespeaker_similarity=0.2,
+        mean_similarity=0.2,
+        encoder_disagreement=0.0,
+        divergence=0.8,
+    )
+
+    apply_source_speaker_change_evidence(
+        storage,
+        "source_001",
+        [boundary],
+        (change,),
+        step=0.5,
+    )
+
+    turn = storage.get_turn(
+        "turn_000001"
+    )
+
+    assert (
+        turn["metadata"]
+        ["speaker_change_evidence"]
+        ["version"]
+        == SPEAKER_CHANGE_EVIDENCE_VERSION
+    )
+
+
+def test_prepare_speaker_change_evidence_reruns_stale_version(
+    tmp_path,
+    monkeypatch,
+):
+    from voice_dataset.schema import (
+        SourceRecord,
+        TurnRecord,
+    )
+    from voice_dataset.speaker_change import (
+        SpeakerEmbeddingChange,
+        SPEAKER_CHANGE_EVIDENCE_VERSION,
+        apply_source_speaker_change_evidence,
+        prepare_source_speaker_change_evidence,
+        plan_turn_speaker_change_boundaries,
+    )
+    from voice_dataset.storage import (
+        DatasetStorage,
+    )
+
+    storage = DatasetStorage(tmp_path)
+
+    words = [
+        {
+            "text": "hello",
+            "start": 10.0,
+            "end": 11.0,
+        },
+        {
+            "text": "there",
+            "start": 11.0,
+            "end": 12.0,
+        },
+    ]
+
+    storage.add_source(
+        SourceRecord(
+            id="source_001",
+            metadata={
+                "continuous_asr": {
+                    "qwen3": {
+                        "words": words,
+                    },
+                },
+            },
+        )
+    )
+
+    storage.add_turn(
+        TurnRecord(
+            id="turn_000001",
+            source_id="source_001",
+            source_start=10.0,
+            source_end=12.0,
+        )
+    )
+
+    turn = storage.get_turn(
+        "turn_000001"
+    )
+
+    boundaries = list(
+        plan_turn_speaker_change_boundaries(
+            turn,
+            words=words,
+            step=0.5,
+        )
+    )
+
+    assert len(boundaries) == 1
+
+    boundary = boundaries[0]
+
+    change = SpeakerEmbeddingChange(
+        turn_id=boundary.turn_id,
+        boundary=boundary.boundary,
+        ecapa_similarity=0.2,
+        wespeaker_similarity=0.2,
+        mean_similarity=0.2,
+        encoder_disagreement=0.0,
+        divergence=0.8,
+    )
+
+    apply_source_speaker_change_evidence(
+        storage,
+        "source_001",
+        boundaries,
+        (change,),
+        step=0.5,
+    )
+
+    def make_stale(record):
+        evidence = record["metadata"][
+            "speaker_change_evidence"
+        ]
+
+        evidence["version"] = (
+            SPEAKER_CHANGE_EVIDENCE_VERSION
+            - 1
+        )
+
+        return record
+
+    storage.update_turn(
+        "turn_000001",
+        make_stale,
+    )
+
+    calls = []
+
+    def fake_analysis(
+        storage_arg,
+        source_id,
+        boundaries,
+        *,
+        capture_output=True,
+    ):
+        calls.append(
+            list(boundaries)
+        )
+
+        return tuple(
+            SpeakerEmbeddingChange(
+                turn_id=item.turn_id,
+                boundary=item.boundary,
+                ecapa_similarity=0.2,
+                wespeaker_similarity=0.2,
+                mean_similarity=0.2,
+                encoder_disagreement=0.0,
+                divergence=0.8,
+            )
+            for item in boundaries
+        )
+
+    monkeypatch.setattr(
+        "voice_dataset.speaker_change."
+        "analyze_speaker_change_boundaries",
+        fake_analysis,
+    )
+
+    prepare_source_speaker_change_evidence(
+        storage,
+        "source_001",
+        step=0.5,
+    )
+
+    assert len(calls) == 1
+
+    turn = storage.get_turn(
+        "turn_000001"
+    )
+
+    assert (
+        turn["metadata"]
+        ["speaker_change_evidence"]
+        ["version"]
+        == SPEAKER_CHANGE_EVIDENCE_VERSION
+    )

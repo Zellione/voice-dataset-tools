@@ -28,6 +28,8 @@ DEFAULT_SPEAKER_CHANGE_MIN_SPEECH_RATIO = 0.5
 DEFAULT_SPEAKER_CHANGE_FULL_THRESHOLD = 0.92
 DEFAULT_SPEAKER_CHANGE_ADAPTIVE_THRESHOLD = 0.92
 
+SPEAKER_CHANGE_EVIDENCE_VERSION = 1
+
 
 @dataclass(frozen=True)
 class SpeakerChangeBoundary:
@@ -1080,6 +1082,9 @@ def apply_source_speaker_change_evidence(
             strongest = None
 
         evidence = {
+            "version": (
+                SPEAKER_CHANGE_EVIDENCE_VERSION
+            ),
             "status": status,
             "step": step,
             "full_threshold": (
@@ -1212,6 +1217,12 @@ def _speaker_change_evidence_is_current(
     )
 
     if not isinstance(evidence, dict):
+        return False
+
+    if (
+        evidence.get("version")
+        != SPEAKER_CHANGE_EVIDENCE_VERSION
+    ):
         return False
 
     if evidence.get("step") != step:
