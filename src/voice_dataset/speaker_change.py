@@ -946,6 +946,7 @@ def apply_source_speaker_change_evidence(
     ],
     *,
     step: float,
+    turn_ids: set[str] | None = None,
 ) -> PersistSpeakerChangeEvidenceResult:
     if len(boundaries) != len(changes):
         raise ValueError(
@@ -1019,6 +1020,11 @@ def apply_source_speaker_change_evidence(
         if (
             turn.get("source_id")
             == source_id
+            and (
+                turn_ids is None
+                or turn.get("id")
+                in turn_ids
+            )
         )
     ]
 
@@ -1254,6 +1260,26 @@ def prepare_source_speaker_change_evidence(
         if (
             turn.get("source_id")
             == source_id
+            and (
+                (
+                    turn.get("review")
+                    or {}
+                ).get(
+                    "status",
+                    "pending",
+                )
+                != "reviewed"
+            )
+            and (
+                (
+                    turn.get("curation")
+                    or {}
+                ).get(
+                    "status",
+                    "pending",
+                )
+                == "pending"
+            )
         )
     ]
 
@@ -1299,4 +1325,8 @@ def prepare_source_speaker_change_evidence(
         boundaries,
         changes,
         step=step,
+        turn_ids={
+            str(turn["id"])
+            for turn in turns
+        },
     )

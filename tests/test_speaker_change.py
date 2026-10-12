@@ -694,3 +694,154 @@ def test_apply_speaker_change_evidence_removes_stale_reason(
         ["status"]
         == "clear"
     )
+
+
+def test_prepare_speaker_change_evidence_skips_reviewed_turns(
+    tmp_path,
+    monkeypatch,
+):
+    from voice_dataset.schema import (
+        SourceRecord,
+        TurnRecord,
+    )
+    from voice_dataset.storage import (
+        DatasetStorage,
+    )
+    from voice_dataset.speaker_change import (
+        prepare_source_speaker_change_evidence,
+    )
+
+    storage = DatasetStorage(tmp_path)
+
+    storage.add_source(
+        SourceRecord(
+            id="source_001",
+            metadata={
+                "continuous_asr": {
+                    "qwen3": {
+                        "words": [
+                            {
+                                "text": "hello",
+                                "start": 10.0,
+                                "end": 12.0,
+                            },
+                        ],
+                    },
+                },
+            },
+        )
+    )
+
+    storage.add_turn(
+        TurnRecord(
+            id="turn_000001",
+            source_id="source_001",
+            source_start=10.0,
+            source_end=12.0,
+            review={
+                "status": "reviewed",
+            },
+        )
+    )
+
+    monkeypatch.setattr(
+        "voice_dataset.speaker_change."
+        "analyze_speaker_change_boundaries",
+        lambda *args, **kwargs: (),
+    )
+
+    result = (
+        prepare_source_speaker_change_evidence(
+            storage,
+            "source_001",
+        )
+    )
+
+    turn = storage.get_turn(
+        "turn_000001"
+    )
+
+    assert (
+        "speaker_change_evidence"
+        not in turn["metadata"]
+    )
+
+    assert result.analyzed_turns == 0
+    assert result.comparisons == 0
+    assert result.suspected_turns == 0
+
+
+def test_prepare_speaker_change_evidence_skips_curated_turns(
+    tmp_path,
+    monkeypatch,
+):
+    from voice_dataset.schema import (
+        SourceRecord,
+        TurnRecord,
+        TurnCuration,
+    )
+    from voice_dataset.storage import (
+        DatasetStorage,
+    )
+    from voice_dataset.speaker_change import (
+        prepare_source_speaker_change_evidence,
+    )
+
+    storage = DatasetStorage(tmp_path)
+
+    storage.add_source(
+        SourceRecord(
+            id="source_001",
+            metadata={
+                "continuous_asr": {
+                    "qwen3": {
+                        "words": [
+                            {
+                                "text": "hello",
+                                "start": 10.0,
+                                "end": 12.0,
+                            },
+                        ],
+                    },
+                },
+            },
+        )
+    )
+
+    storage.add_turn(
+        TurnRecord(
+            id="turn_000001",
+            source_id="source_001",
+            source_start=10.0,
+            source_end=12.0,
+            curation=TurnCuration(
+                status="accepted",
+            ),
+        )
+    )
+
+    monkeypatch.setattr(
+        "voice_dataset.speaker_change."
+        "analyze_speaker_change_boundaries",
+        lambda *args, **kwargs: (),
+    )
+
+    result = (
+        prepare_source_speaker_change_evidence(
+            storage,
+            "source_001",
+        )
+    )
+
+    turn = storage.get_turn(
+        "turn_000001"
+    )
+
+    assert (
+        "speaker_change_evidence"
+        not in turn["metadata"]
+    )
+
+    assert result.analyzed_turns == 0
+    assert result.comparisons == 0
+    assert result.suspected_turns == 0
