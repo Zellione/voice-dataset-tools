@@ -82,8 +82,11 @@ preload_cuda_libraries()
 from .ingest import ingest as ingest_source
 from .speaker_similarity import rank_voice_matches
 from .speaker_calibration import (
-    SpeakerCalibrationRule,
+    DEFAULT_SPEAKER_PREFILL_RULE,
+    DEFAULT_SPEAKER_SUGGEST_RULE,
     build_speaker_calibration_report,
+    calibration_rule_is_trusted,
+    evaluate_speaker_calibration_rule,
     load_calibration_observations,
 )
 from .continuous_asr import transcribe_source_qwen3
@@ -2412,6 +2415,67 @@ def turn_speaker_calibration_report(
         )
         return
 
+    typer.echo()
+    typer.echo("Active reviewer rules:")
+
+    for name, rule in (
+        (
+            "suggest",
+            DEFAULT_SPEAKER_SUGGEST_RULE,
+        ),
+        (
+            "prefill",
+            DEFAULT_SPEAKER_PREFILL_RULE,
+        ),
+    ):
+        evaluation = (
+            evaluate_speaker_calibration_rule(
+                observations,
+                rule,
+            )
+        )
+
+        precision = (
+            f"{evaluation.precision * 100:.2f}%"
+            if evaluation.precision is not None
+            else "-"
+        )
+
+        coverage = (
+            f"{evaluation.coverage * 100:.2f}%"
+            if evaluation.coverage is not None
+            else "-"
+        )
+
+        trusted = calibration_rule_is_trusted(
+            evaluation,
+            rule,
+        )
+
+        typer.echo(
+            f"  {name}:"
+        )
+        typer.echo(
+            "    thresholds: "
+            f"margin>={rule.minimum_margin:.2f}, "
+            f"refs>={rule.minimum_reference_support}, "
+            f"sources>={rule.minimum_source_support}, "
+            f"encoders>={rule.minimum_encoder_count}"
+        )
+        typer.echo(
+            "    trust:      "
+            f"precision>={rule.minimum_precision * 100:.2f}%, "
+            f"eligible>={rule.minimum_eligible_count}"
+        )
+        typer.echo(
+            "    observed:   "
+            f"eligible={evaluation.eligible_count}, "
+            f"errors={evaluation.error_count}, "
+            f"precision={precision}, "
+            f"coverage={coverage}, "
+            f"trusted={'yes' if trusted else 'no'}"
+        )
+
     rows = build_speaker_calibration_report(
         observations
     )
@@ -2512,22 +2576,8 @@ def turn_review(
             source_id=source_id,
             auto_review_only=auto_review_only,
             embedding_names=embedding_names,
-            suggest_rule=SpeakerCalibrationRule(
-                minimum_margin=0.15,
-                minimum_reference_support=2,
-                minimum_source_support=1,
-                minimum_encoder_count=2,
-                minimum_precision=0.80,
-                minimum_eligible_count=3,
-            ),
-            prefill_rule=SpeakerCalibrationRule(
-                minimum_margin=0.30,
-                minimum_reference_support=4,
-                minimum_source_support=1,
-                minimum_encoder_count=2,
-                minimum_precision=0.95,
-                minimum_eligible_count=5,
-            ),
+            suggest_rule=DEFAULT_SPEAKER_SUGGEST_RULE,
+            prefill_rule=DEFAULT_SPEAKER_PREFILL_RULE,
         )
 
         if session.total == 0:

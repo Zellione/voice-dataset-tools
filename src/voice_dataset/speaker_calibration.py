@@ -91,6 +91,26 @@ SpeakerReviewMode = Literal[
 ]
 
 
+DEFAULT_SPEAKER_SUGGEST_RULE = SpeakerCalibrationRule(
+    minimum_margin=0.15,
+    minimum_reference_support=2,
+    minimum_source_support=1,
+    minimum_encoder_count=2,
+    minimum_precision=0.80,
+    minimum_eligible_count=3,
+)
+
+
+DEFAULT_SPEAKER_PREFILL_RULE = SpeakerCalibrationRule(
+    minimum_margin=0.30,
+    minimum_reference_support=4,
+    minimum_source_support=1,
+    minimum_encoder_count=2,
+    minimum_precision=0.95,
+    minimum_eligible_count=5,
+)
+
+
 SPEAKER_CALIBRATION_SCHEMA_VERSION = 1
 
 

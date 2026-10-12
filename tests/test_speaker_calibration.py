@@ -1589,3 +1589,32 @@ def test_filter_calibration_observations_uses_reference_support():
         [observation],
         minimum_reference_support=4,
     ) == []
+
+
+def test_default_speaker_review_rules_match_reviewer_policy():
+    from voice_dataset.speaker_calibration import (
+        DEFAULT_SPEAKER_PREFILL_RULE,
+        DEFAULT_SPEAKER_SUGGEST_RULE,
+    )
+
+    assert DEFAULT_SPEAKER_SUGGEST_RULE == (
+        SpeakerCalibrationRule(
+            minimum_margin=0.15,
+            minimum_reference_support=2,
+            minimum_source_support=1,
+            minimum_encoder_count=2,
+            minimum_precision=0.80,
+            minimum_eligible_count=3,
+        )
+    )
+
+    assert DEFAULT_SPEAKER_PREFILL_RULE == (
+        SpeakerCalibrationRule(
+            minimum_margin=0.30,
+            minimum_reference_support=4,
+            minimum_source_support=1,
+            minimum_encoder_count=2,
+            minimum_precision=0.95,
+            minimum_eligible_count=5,
+        )
+    )
