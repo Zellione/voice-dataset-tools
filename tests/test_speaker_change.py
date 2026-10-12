@@ -285,3 +285,78 @@ def test_speech_aware_planning_shifts_away_from_pause():
 
     assert boundary.left_start >= 9.5
     assert boundary.right_end <= 12.5
+
+
+def test_long_turn_uses_only_full_speaker_change_windows():
+    words = [
+        {
+            "text": "speech",
+            "start": 10.0,
+            "end": 16.0,
+        },
+    ]
+
+    boundaries = (
+        plan_turn_speaker_change_boundaries(
+            {
+                "id": "turn_001",
+                "source_start": 10.0,
+                "source_end": 16.0,
+            },
+            words=words,
+            window=1.0,
+            step=0.5,
+            minimum_window=0.5,
+            minimum_speech_ratio=0.5,
+        )
+    )
+
+    assert boundaries
+
+    assert boundaries[0].boundary == pytest.approx(
+        11.0
+    )
+    assert boundaries[-1].boundary == pytest.approx(
+        15.0
+    )
+
+    for boundary in boundaries:
+        assert (
+            boundary.left_end
+            - boundary.left_start
+        ) == pytest.approx(1.0)
+
+        assert (
+            boundary.right_end
+            - boundary.right_start
+        ) == pytest.approx(1.0)
+
+
+def test_short_turn_uses_single_adaptive_center_boundary():
+    words = [
+        {
+            "text": "speech",
+            "start": 10.0,
+            "end": 11.6,
+        },
+    ]
+
+    boundaries = (
+        plan_turn_speaker_change_boundaries(
+            {
+                "id": "turn_001",
+                "source_start": 10.0,
+                "source_end": 11.6,
+            },
+            words=words,
+            window=1.0,
+            step=0.25,
+            minimum_window=0.5,
+            minimum_speech_ratio=0.5,
+        )
+    )
+
+    assert len(boundaries) == 1
+    assert boundaries[0].boundary == pytest.approx(
+        10.8
+    )

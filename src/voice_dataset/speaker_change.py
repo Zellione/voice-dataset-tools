@@ -284,16 +284,34 @@ def plan_turn_speaker_change_boundaries(
             f"{turn_id}: invalid source range"
         )
 
-    minimum_side = (
-        minimum_window
-        if words is not None
-        else window
-    )
+    duration = end - start
 
-    first = start + minimum_side
-    last = end - minimum_side
+    if words is None:
+        # Without speech timing evidence we cannot
+        # safely shorten or reposition the windows.
+        if duration < 2.0 * window:
+            return ()
 
-    if first > last:
+        first = start + window
+        last = end - window
+
+    elif duration >= 2.0 * window:
+        # Long turns have enough room for full target
+        # windows on both sides.
+        first = start + window
+        last = end - window
+
+    elif duration >= 2.0 * minimum_window:
+        # Short turns cannot support full target
+        # windows on both sides. With speech timing
+        # evidence available, analyze exactly one
+        # central boundary using adaptive flanks.
+        first = (
+            start + end
+        ) / 2.0
+        last = first
+
+    else:
         return ()
 
     boundaries = []
