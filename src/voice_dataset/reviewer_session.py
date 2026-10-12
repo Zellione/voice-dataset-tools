@@ -29,6 +29,7 @@ from .voices import (
     assign_turn,
     create_voice,
     mark_turn_unknown,
+    rename_voice,
     set_voice_ignored,
 )
 from .speaker_candidates import (
@@ -336,6 +337,17 @@ class ReviewerSession:
             self.storage,
             self._require_current_id(),
             voice_id,
+        )
+
+    def rename_voice(
+        self,
+        voice_id: str,
+        character: str | None,
+    ) -> dict[str, Any]:
+        return rename_voice(
+            self.storage,
+            voice_id,
+            character,
         )
 
     def create_and_assign_voice(

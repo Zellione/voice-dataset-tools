@@ -4807,3 +4807,85 @@ async def test_manual_split_without_diarization_uses_midpoint(
         ]
 
         assert len(app.screen_stack) == 1
+
+
+@pytest.mark.asyncio
+async def test_voice_picker_renames_selected_voice(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.voices.append(
+        {
+            "schema_version": 1,
+            "record_type": "voice_profile",
+            "id": "voice_001",
+            "character": "Vi",
+            "language": "en",
+            "aliases": [],
+            "ignored": False,
+            "notes": None,
+            "metadata": {},
+        }
+    )
+
+    session = ReviewerSession(storage)
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("v")
+        await pilot.pause()
+
+        options = app.screen.query_one(
+            "#voice-options",
+            OptionList,
+        )
+        options.highlighted = 0
+
+        await pilot.press("e")
+        await pilot.pause()
+
+        field = app.screen.query_one(
+            "#edit-value",
+            Input,
+        )
+
+        assert field.value == "Vi"
+
+        field.value = "Vi (young)"
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        voice = storage.get_voice(
+            "voice_001"
+        )
+
+        assert voice is not None
+        assert (
+            voice["character"]
+            == "Vi (young)"
+        )
+
+        turn = storage.get_turn(
+            "turn_000001"
+        )
+
+        assert turn is not None
+        assert (
+            turn["assignment"]["status"]
+            == "unknown"
+        )
+
+        assert len(app.screen_stack) == 1

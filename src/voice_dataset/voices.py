@@ -36,6 +36,34 @@ def create_voice(
     return result
 
 
+def rename_voice(
+    storage: DatasetStorage,
+    voice_id: str,
+    character: str | None,
+) -> dict[str, Any]:
+    if storage.get_voice(voice_id) is None:
+        raise KeyError(
+            f"Voice does not exist: {voice_id}"
+        )
+
+    if character is not None:
+        character = character.strip()
+
+        if not character:
+            character = None
+
+    def update(
+        record: dict[str, Any],
+    ) -> dict[str, Any]:
+        record["character"] = character
+        return record
+
+    return storage.voices.update(
+        voice_id,
+        update,
+    )
+
+
 def assign_turn(
     storage: DatasetStorage,
     turn_id: str,

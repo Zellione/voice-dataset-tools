@@ -145,3 +145,50 @@ def test_rejected_turn_does_not_ignore_voice(
         == "rejected"
     )
     assert stored_voice["ignored"] is False
+
+
+def test_rename_voice_preserves_voice_id_and_assignments(
+    tmp_path,
+):
+    from voice_dataset.voices import rename_voice
+
+    storage = DatasetStorage(tmp_path)
+
+    voice = create_voice(
+        storage,
+        character="Vi",
+    )
+
+    storage.turns.append(
+        {
+            "schema_version": 2,
+            "record_type": "turn",
+            "id": "turn_001",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 2.0,
+            "assignment": {
+                "status": "assigned",
+                "voice_id": voice["id"],
+                "method": "manual",
+                "confidence": None,
+            },
+        }
+    )
+
+    updated = rename_voice(
+        storage,
+        voice["id"],
+        "Vi (young)",
+    )
+
+    assert updated["id"] == voice["id"]
+    assert updated["character"] == "Vi (young)"
+
+    turn = storage.get_turn("turn_001")
+
+    assert turn is not None
+    assert (
+        turn["assignment"]["voice_id"]
+        == voice["id"]
+    )

@@ -175,6 +175,13 @@ class NewVoiceRequest:
     language: str | None
     ignored: bool = False
 
+
+@dataclass(frozen=True)
+class EditVoiceRequest:
+    voice_id: str
+    character: str | None
+
+
 @dataclass(frozen=True)
 class TrimTurnRequest:
     source_start: float
@@ -355,7 +362,12 @@ class NewVoiceScreen(
 
 
 class VoicePickerScreen(
-    ModalScreen[str | NewVoiceRequest | None]
+    ModalScreen[
+        str
+        | NewVoiceRequest
+        | EditVoiceRequest
+        | None
+    ]
 ):
     def __init__(
         self,
@@ -434,6 +446,11 @@ class VoicePickerScreen(
             "enter",
             "assign",
             "Assign",
+        ),
+        Binding(
+            "e",
+            "edit_voice",
+            "Edit Voice",
         ),
         Binding(
             "n",
@@ -536,6 +553,7 @@ class VoicePickerScreen(
         yield Static(
             (
                 "Enter Assign   "
+                "e Edit   "
                 "n New Voice   "
                 "g New Ignored   "
                 "Esc Cancel"
@@ -580,6 +598,45 @@ class VoicePickerScreen(
     def action_cancel(self) -> None:
         self.dismiss(None)
 
+    def action_edit_voice(self) -> None:
+        if not self.voice_ids:
+            return
+
+        options = self.query_one(
+            "#voice-options",
+            OptionList,
+        )
+
+        highlighted = options.highlighted
+
+        if highlighted is None:
+            return
+
+        voice_id = self.voice_ids[
+            highlighted
+        ]
+
+        voice = self._voices_by_id[
+            voice_id
+        ]
+
+        character = voice.get(
+            "character"
+        )
+
+        if not isinstance(
+            character,
+            str,
+        ):
+            character = None
+
+        self.dismiss(
+            EditVoiceRequest(
+                voice_id=voice_id,
+                character=character,
+            )
+        )
+
     def action_new_voice(self) -> None:
         self.app.push_screen(
             NewVoiceScreen(),
@@ -599,7 +656,10 @@ class VoicePickerScreen(
         action: str,
         parameters: tuple,
     ) -> bool | None:
-        if action == "assign":
+        if action in {
+            "assign",
+            "edit_voice",
+        }:
             return bool(self.voice_ids)
 
         return super().check_action(
@@ -3404,12 +3464,41 @@ class ReviewerTUI(App[None]):
 
     def _voice_selected(
         self,
-        result: str | NewVoiceRequest | None,
+        result: (
+            str
+            | NewVoiceRequest
+            | EditVoiceRequest
+            | None
+        ),
     ) -> None:
         if result is None:
             return
 
         try:
+            if isinstance(
+                result,
+                EditVoiceRequest,
+            ):
+                self.push_screen(
+                    EditValueScreen(
+                        title=(
+                            f"Rename {result.voice_id}"
+                        ),
+                        value=(
+                            result.character
+                            or ""
+                        ),
+                        placeholder="Character name",
+                    ),
+                    lambda value: (
+                        self._voice_renamed(
+                            result.voice_id,
+                            value,
+                        )
+                    ),
+                )
+                return
+
             if isinstance(
                 result,
                 NewVoiceRequest,
@@ -3451,6 +3540,36 @@ class ReviewerTUI(App[None]):
         ) as exc:
             self._set_status(
                 f"Voice assignment failed: {exc}"
+            )
+
+    def _voice_renamed(
+        self,
+        voice_id: str,
+        value: str | None,
+    ) -> None:
+        if value is None:
+            return
+
+        try:
+            voice = self.session.rename_voice(
+                voice_id,
+                value.strip() or None,
+            )
+
+            self._refresh_view()
+            self._set_status(
+                "Renamed voice "
+                f"{voice['id']}: "
+                f"{voice.get('character') or '-'}"
+            )
+        except (
+            ValueError,
+            KeyError,
+            RuntimeError,
+            OSError,
+        ) as exc:
+            self._set_status(
+                f"Voice rename failed: {exc}"
             )
 
     def action_assign_voice(self) -> None:
