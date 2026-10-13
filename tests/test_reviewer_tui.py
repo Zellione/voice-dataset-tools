@@ -2232,6 +2232,7 @@ async def test_merge_screen_has_contextual_footer(
                     first,
                     second,
                 ),
+                original_index=0,
             )
         )
         await pilot.pause()
@@ -2254,8 +2255,9 @@ async def test_merge_screen_has_contextual_footer(
             shortcuts.render()
         )
 
-        assert "+ Add" in rendered
-        assert "- Remove" in rendered
+        assert "- Add Previous" in rendered
+        assert "+ Add Next" in rendered
+        assert "Del Remove Edge" in rendered
         assert "p Play Turn" in rendered
         assert "Space Play All" in rendered
         assert "Enter Merge" in rendered
@@ -4965,3 +4967,349 @@ def test_reviewer_formats_speaker_change_evidence(
     assert "ECAPA:     0.0500" in rendered
     assert "WeSpeaker: 0.0700" in rendered
     assert "Disagree:  0.0200" in rendered
+
+
+@pytest.mark.asyncio
+async def test_merge_screen_can_prepend_and_remove_previous_turn(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+    add_turn(
+        storage,
+        "turn_000002",
+        source_start=2.0,
+    )
+    add_turn(
+        storage,
+        "turn_000003",
+        source_start=3.0,
+    )
+
+    storage.update_turn(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "transcript": "Previous turn",
+        },
+    )
+
+    storage.update_turn(
+        "turn_000002",
+        lambda turn: {
+            **turn,
+            "transcript": "Original turn",
+        },
+    )
+
+    storage.update_turn(
+        "turn_000003",
+        lambda turn: {
+            **turn,
+            "transcript": "Next turn",
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    session.select_turn(
+        "turn_000002"
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("m")
+        await pilot.pause()
+
+        assert isinstance(
+            app.screen,
+            ConfirmMergeScreen,
+        )
+
+        content = app.screen.query_one(
+            "#merge-content",
+            Static,
+        )
+
+        rendered = str(
+            content.render()
+        )
+
+        assert "turn_000002" in rendered
+        assert "turn_000003" in rendered
+        assert "turn_000001" not in rendered
+
+        await pilot.press("-")
+        await pilot.pause()
+
+        rendered = str(
+            content.render()
+        )
+
+        assert "turn_000001" in rendered
+        assert "turn_000002" in rendered
+        assert "turn_000003" in rendered
+
+        assert (
+            app.screen.highlighted_index
+            == 0
+        )
+
+        await pilot.press("delete")
+        await pilot.pause()
+
+        rendered = str(
+            content.render()
+        )
+
+        assert "turn_000001" not in rendered
+        assert "turn_000002" in rendered
+        assert "turn_000003" in rendered
+
+
+@pytest.mark.asyncio
+async def test_merge_screen_cannot_remove_original_turn(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+    add_turn(
+        storage,
+        "turn_000002",
+        source_start=2.0,
+    )
+    add_turn(
+        storage,
+        "turn_000003",
+        source_start=3.0,
+    )
+
+    session = ReviewerSession(storage)
+    session.select_turn(
+        "turn_000002"
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("m")
+        await pilot.pause()
+
+        screen = app.screen
+
+        assert isinstance(
+            screen,
+            ConfirmMergeScreen,
+        )
+
+        assert (
+            screen.highlighted_index
+            == screen.original_index
+        )
+
+        before = [
+            turn["id"]
+            for turn in screen._selected_turns()
+        ]
+
+        await pilot.press("delete")
+        await pilot.pause()
+
+        after = [
+            turn["id"]
+            for turn in screen._selected_turns()
+        ]
+
+        assert after == before
+        assert "turn_000002" in after
+
+
+@pytest.mark.asyncio
+async def test_merge_screen_can_remove_appended_edge_turn(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+    add_turn(
+        storage,
+        "turn_000002",
+        source_start=2.0,
+    )
+    add_turn(
+        storage,
+        "turn_000003",
+        source_start=3.0,
+    )
+    add_turn(
+        storage,
+        "turn_000004",
+        source_start=4.0,
+    )
+
+    session = ReviewerSession(storage)
+    session.select_turn(
+        "turn_000002"
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("m")
+        await pilot.pause()
+
+        screen = app.screen
+
+        assert isinstance(
+            screen,
+            ConfirmMergeScreen,
+        )
+
+        assert [
+            turn["id"]
+            for turn in screen._selected_turns()
+        ] == [
+            "turn_000002",
+            "turn_000003",
+        ]
+
+        await pilot.press("+")
+        await pilot.pause()
+
+        assert [
+            turn["id"]
+            for turn in screen._selected_turns()
+        ] == [
+            "turn_000002",
+            "turn_000003",
+            "turn_000004",
+        ]
+
+        assert (
+            screen.highlighted_index
+            == 3
+        )
+
+        await pilot.press("delete")
+        await pilot.pause()
+
+        assert [
+            turn["id"]
+            for turn in screen._selected_turns()
+        ] == [
+            "turn_000002",
+            "turn_000003",
+        ]
+
+
+@pytest.mark.asyncio
+async def test_reviewer_tui_merge_opens_on_last_turn_with_previous(
+    tmp_path,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+    add_turn(
+        storage,
+        "turn_000002",
+        source_start=2.0,
+    )
+
+    storage.update_turn(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "transcript": "Previous turn",
+        },
+    )
+
+    storage.update_turn(
+        "turn_000002",
+        lambda turn: {
+            **turn,
+            "transcript": "Last original turn",
+        },
+    )
+
+    session = ReviewerSession(storage)
+    session.select_turn(
+        "turn_000002"
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("m")
+        await pilot.pause()
+
+        assert isinstance(
+            app.screen,
+            ConfirmMergeScreen,
+        )
+
+        screen = app.screen
+
+        assert [
+            turn["id"]
+            for turn in screen._selected_turns()
+        ] == [
+            "turn_000001",
+            "turn_000002",
+        ]
+
+        assert (
+            screen.original_index
+            == 1
+        )
+
+        assert (
+            screen.highlighted_index
+            == 1
+        )
+
+        content = screen.query_one(
+            "#merge-content",
+            Static,
+        )
+
+        rendered = str(
+            content.render()
+        )
+
+        assert "Previous turn" in rendered
+        assert "Last original turn" in rendered

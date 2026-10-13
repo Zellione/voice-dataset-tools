@@ -594,9 +594,18 @@ class ReviewerSession:
         self,
         turn_ids: list[str],
     ) -> dict[str, Any]:
+        retained_turn_id = self._require_current_id()
+
+        if retained_turn_id not in turn_ids:
+            raise ValueError(
+                "Current reviewer turn must be part "
+                "of the merge"
+            )
+
         merged = merge_and_prepare_turns(
             self.storage,
             turn_ids,
+            retained_turn_id=retained_turn_id,
             capture_output=True,
         )
 

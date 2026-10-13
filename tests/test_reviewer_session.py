@@ -586,6 +586,7 @@ def test_session_merge_with_next_refreshes_and_reanchors(
         actual_storage,
         turn_ids,
         *,
+        retained_turn_id=None,
         capture_output=False,
     ):
         assert capture_output is True
@@ -594,6 +595,7 @@ def test_session_merge_with_next_refreshes_and_reanchors(
             "turn_000001",
             "turn_000002",
         ]
+        assert retained_turn_id == "turn_000001"
 
         storage.turns.replace([
             turn
@@ -953,13 +955,15 @@ def test_merge_with_next_uses_canonical_next_turn_when_filtered(
         storage_arg,
         turn_ids,
         *,
+        retained_turn_id=None,
         capture_output=False,
     ):
         assert capture_output is True
         assert storage_arg is storage
+        assert retained_turn_id == "turn_000001"
         merged_ids.extend(turn_ids)
 
-        return storage.get_turn(turn_ids[0])
+        return storage.get_turn(retained_turn_id)
 
     monkeypatch.setattr(
         "voice_dataset.reviewer_session."
@@ -2134,3 +2138,88 @@ def test_session_uses_project_speaker_references(
     assert len(candidates) == 1
     assert candidates[0].voice_id == voice["id"]
     assert candidates[0].score == pytest.approx(1.0)
+
+
+def test_session_prepend_merge_keeps_review_anchor(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+        auto_status="accepted",
+    )
+    add_turn(
+        storage,
+        "turn_000002",
+        source_start=2.0,
+        auto_status="review",
+    )
+    add_turn(
+        storage,
+        "turn_000003",
+        source_start=3.0,
+        auto_status="review",
+    )
+
+    session = ReviewerSession(
+        storage,
+        auto_review_only=True,
+    )
+
+    assert session.turn_ids == (
+        "turn_000002",
+        "turn_000003",
+    )
+    assert session.current_turn_id == "turn_000002"
+
+    calls = []
+
+    def fake_merge(
+        storage_arg,
+        turn_ids,
+        *,
+        retained_turn_id=None,
+        capture_output=False,
+    ):
+        calls.append(
+            (
+                list(turn_ids),
+                retained_turn_id,
+                capture_output,
+            )
+        )
+
+        assert storage_arg is storage
+
+        return storage.get_turn(
+            retained_turn_id
+        )
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_session."
+        "merge_and_prepare_turns",
+        fake_merge,
+    )
+
+    merged = session.merge([
+        "turn_000001",
+        "turn_000002",
+    ])
+
+    assert calls == [
+        (
+            [
+                "turn_000001",
+                "turn_000002",
+            ],
+            "turn_000002",
+            True,
+        )
+    ]
+
+    assert merged["id"] == "turn_000002"
+    assert session.current_turn_id == "turn_000002"

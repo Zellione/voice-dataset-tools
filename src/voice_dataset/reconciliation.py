@@ -783,6 +783,8 @@ def _split_provenance(
 def merge_turns(
     storage: DatasetStorage,
     turn_ids: list[str],
+    *,
+    retained_turn_id: str | None = None,
 ) -> dict[str, Any]:
     if len(turn_ids) < 2:
         raise ValueError(
@@ -934,7 +936,18 @@ def merge_turns(
             "Invalid merged turn source range"
         )
 
-    retained_id = turn_ids[0]
+    retained_id = (
+        turn_ids[0]
+        if retained_turn_id is None
+        else retained_turn_id
+    )
+
+    if retained_id not in turn_ids:
+        raise ValueError(
+            "Retained turn must be part of the merge"
+        )
+
+    retained_turn = by_id[retained_id][1]
 
     assignments = [
         turn.get("assignment") or {}
@@ -1020,7 +1033,7 @@ def merge_turns(
     }
 
     retained_metadata = (
-        ordered[0][1].get("metadata")
+        retained_turn.get("metadata")
         or {}
     )
 

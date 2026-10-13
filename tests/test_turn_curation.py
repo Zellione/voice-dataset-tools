@@ -301,12 +301,16 @@ def test_merge_and_prepare_turns_adds_asr_provenance_and_prepares(
     def fake_merge(
         actual_storage,
         turn_ids,
+        *,
+        retained_turn_id=None,
     ):
         assert actual_storage is storage
         assert turn_ids == [
             "turn_000001",
             "turn_000002",
         ]
+        assert retained_turn_id is None
+
         return actual_storage.get_turn(
             "turn_000001"
         )
@@ -3330,3 +3334,108 @@ def test_trim_marks_source_reconciliation_curated(
     ] == [
         [0, 1],
     ]
+
+
+def test_merge_preserves_retained_turn_identity_and_auto_review_status(
+    tmp_path,
+):
+    from voice_dataset.reconciliation import merge_turns
+    from voice_dataset.schema import TurnRecord
+    from voice_dataset.storage import DatasetStorage
+
+    storage = DatasetStorage(tmp_path)
+
+    storage.regions.append(
+        {
+            "schema_version": 2,
+            "record_type": "region",
+            "id": "region_000001",
+            "source_id": "source_001",
+            "source_start": 1.0,
+            "source_end": 2.0,
+            "speaker": "SPEAKER_01",
+            "transcript": "Previous",
+            "metadata": {},
+        }
+    )
+
+    storage.regions.append(
+        {
+            "schema_version": 2,
+            "record_type": "region",
+            "id": "region_000002",
+            "source_id": "source_001",
+            "source_start": 2.0,
+            "source_end": 3.0,
+            "speaker": "SPEAKER_01",
+            "transcript": "Original",
+            "metadata": {},
+        }
+    )
+
+    storage.add_turn(
+        TurnRecord(
+            id="turn_000001",
+            source_id="source_001",
+            source_start=1.0,
+            source_end=2.0,
+            source_regions=[
+                "region_000001",
+            ],
+            transcript="Previous",
+            metadata={
+                "automatic_pipeline": {
+                    "status": "accepted",
+                },
+            },
+        )
+    )
+
+    storage.add_turn(
+        TurnRecord(
+            id="turn_000002",
+            source_id="source_001",
+            source_start=2.0,
+            source_end=3.0,
+            source_regions=[
+                "region_000002",
+            ],
+            transcript="Original",
+            metadata={
+                "automatic_pipeline": {
+                    "status": "review",
+                },
+            },
+        )
+    )
+
+    merged = merge_turns(
+        storage,
+        [
+            "turn_000001",
+            "turn_000002",
+        ],
+        retained_turn_id="turn_000002",
+    )
+
+    assert merged["id"] == "turn_000002"
+    assert merged["source_start"] == 1.0
+    assert merged["source_end"] == 3.0
+
+    assert merged["source_regions"] == [
+        "region_000001",
+        "region_000002",
+    ]
+
+    assert (
+        merged["metadata"]["automatic_pipeline"]["status"]
+        == "review"
+    )
+
+    assert storage.get_turn(
+        "turn_000001"
+    ) is None
+
+    assert storage.get_turn(
+        "turn_000002"
+    ) is not None

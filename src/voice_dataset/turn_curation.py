@@ -613,6 +613,7 @@ def merge_and_prepare_turns(
     storage: DatasetStorage,
     turn_ids: list[str],
     *,
+    retained_turn_id: str | None = None,
     evidence_name: str = "qwen3",
     capture_output: bool = False,
 ) -> dict[str, Any]:
@@ -635,6 +636,7 @@ def merge_and_prepare_turns(
     merged = merge_turns(
         storage,
         turn_ids,
+        retained_turn_id=retained_turn_id,
     )
 
     source_id = merged.get("source_id")

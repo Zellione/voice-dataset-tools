@@ -892,16 +892,22 @@ class ConfirmMergeScreen(
             show=False,
         ),
         Binding(
+            "minus",
+            "prepend_selection",
+            "Add Previous",
+            key_display="-",
+        ),
+        Binding(
             "plus",
-            "extend_selection",
-            "Add Turn",
+            "append_selection",
+            "Add Next",
             key_display="+",
         ),
         Binding(
-            "minus",
-            "shrink_selection",
-            "Remove Turn",
-            key_display="-",
+            "delete",
+            "remove_selected",
+            "Remove",
+            key_display="Del",
         ),
         Binding(
             "p",
@@ -935,6 +941,7 @@ class ConfirmMergeScreen(
         self,
         *,
         turns: tuple[dict, ...],
+        original_index: int,
         audio_path: Path | None = None,
     ) -> None:
         super().__init__()
@@ -944,11 +951,26 @@ class ConfirmMergeScreen(
                 "Merge screen requires at least two turns"
             )
 
+        if not (
+            0 <= original_index < len(turns)
+        ):
+            raise ValueError(
+                "Merge screen has invalid original index"
+            )
+
         self.turns = turns
+        self.original_index = original_index
         self.audio_path = audio_path
 
-        self.selected_count = 2
-        self.highlighted_index = 0
+        self.selected_start = original_index
+
+        if original_index + 1 < len(turns):
+            self.selected_end = original_index + 1
+        else:
+            self.selected_start = original_index - 1
+            self.selected_end = original_index
+
+        self.highlighted_index = original_index
 
     def compose(self) -> ComposeResult:
         with Vertical(id="merge-dialog"):
@@ -964,8 +986,9 @@ class ConfirmMergeScreen(
 
         yield Static(
             (
-                "+ Add   "
-                "- Remove   "
+                "- Add Previous   "
+                "+ Add Next   "
+                "Del Remove Edge   "
                 "↑/↓ Select   "
                 "p Play Turn   "
                 "Space Play All   "
@@ -982,23 +1005,30 @@ class ConfirmMergeScreen(
         self,
     ) -> tuple[dict, ...]:
         return self.turns[
-            :self.selected_count
+            self.selected_start:
+            self.selected_end + 1
         ]
 
     def _refresh_content(self) -> None:
         result = Text()
 
+        selected_turns = self._selected_turns()
+
         result.append(
             (
-                f"Selected {self.selected_count} "
+                f"Selected {len(selected_turns)} "
                 "consecutive turns\n\n"
             ),
             style="dim",
         )
 
-        for index, turn in enumerate(
-            self._selected_turns()
+        for offset, turn in enumerate(
+            selected_turns
         ):
+            index = (
+                self.selected_start
+                + offset
+            )
             start = float(
                 turn["source_start"]
             )
@@ -1032,19 +1062,21 @@ class ConfirmMergeScreen(
             )
             result.append("\n\n")
 
-        if self.selected_count < len(self.turns):
-            result.append(
-                (
-                    f"+ can add {len(self.turns) - self.selected_count} "
-                    "following turn(s)"
-                ),
-                style="dim",
-            )
-        else:
-            result.append(
-                "No more following turns.",
-                style="dim",
-            )
+        previous_count = self.selected_start
+        following_count = (
+            len(self.turns)
+            - self.selected_end
+            - 1
+        )
+
+        result.append(
+            (
+                f"- can add {previous_count} previous turn(s)"
+                "    "
+                f"+ can add {following_count} following turn(s)"
+            ),
+            style="dim",
+        )
 
         self.query_one(
             "#merge-content",
@@ -1052,38 +1084,73 @@ class ConfirmMergeScreen(
         ).update(result)
 
     def action_previous_selected(self) -> None:
-        if self.highlighted_index > 0:
+        if (
+            self.highlighted_index
+            > self.selected_start
+        ):
             self.highlighted_index -= 1
             self._refresh_content()
 
     def action_next_selected(self) -> None:
         if (
             self.highlighted_index
-            < self.selected_count - 1
+            < self.selected_end
         ):
             self.highlighted_index += 1
             self._refresh_content()
 
-    def action_extend_selection(self) -> None:
-        if self.selected_count >= len(self.turns):
+    def action_prepend_selection(self) -> None:
+        if self.selected_start <= 0:
             return
 
-        self.selected_count += 1
+        self.selected_start -= 1
         self.highlighted_index = (
-            self.selected_count - 1
+            self.selected_start
         )
+
         self._refresh_content()
 
-    def action_shrink_selection(self) -> None:
-        if self.selected_count <= 2:
+    def action_append_selection(self) -> None:
+        if (
+            self.selected_end
+            >= len(self.turns) - 1
+        ):
             return
 
-        self.selected_count -= 1
-
-        self.highlighted_index = min(
-            self.highlighted_index,
-            self.selected_count - 1,
+        self.selected_end += 1
+        self.highlighted_index = (
+            self.selected_end
         )
+
+        self._refresh_content()
+
+    def action_remove_selected(self) -> None:
+        if (
+            self.highlighted_index
+            == self.original_index
+        ):
+            return
+
+        if (
+            self.highlighted_index
+            == self.selected_start
+        ):
+            self.selected_start += 1
+            self.highlighted_index = (
+                self.selected_start
+            )
+
+        elif (
+            self.highlighted_index
+            == self.selected_end
+        ):
+            self.selected_end -= 1
+            self.highlighted_index = (
+                self.selected_end
+            )
+
+        else:
+            return
 
         self._refresh_content()
 
@@ -1105,7 +1172,7 @@ class ConfirmMergeScreen(
         )
 
     def action_play_selected(self) -> None:
-        turn = self._selected_turns()[
+        turn = self.turns[
             self.highlighted_index
         ]
 
@@ -1126,11 +1193,16 @@ class ConfirmMergeScreen(
         stop()
 
     def action_accept(self) -> None:
+        turns = self._selected_turns()
+
+        if len(turns) < 2:
+            return
+
         stop()
 
         self.dismiss([
             str(turn["id"])
-            for turn in self._selected_turns()
+            for turn in turns
         ])
 
     def action_cancel(self) -> None:
@@ -4179,12 +4251,12 @@ class ReviewerTUI(App[None]):
             return
 
         merge_candidates = tuple(
-            turns[index:]
+            turns
         )
 
         if len(merge_candidates) < 2:
             self._set_status(
-                "Current turn has no next turn"
+                "Current turn has no adjacent turn"
             )
             return
 
@@ -4212,6 +4284,7 @@ class ReviewerTUI(App[None]):
         self.push_screen(
             ConfirmMergeScreen(
                 turns=merge_candidates,
+                original_index=index,
                 audio_path=audio_path,
             ),
             self._merge_turns_confirmed,
@@ -4563,7 +4636,10 @@ class ReviewerTUI(App[None]):
             except ValueError:
                 return False
 
-            return index < len(turn_ids) - 1
+            return (
+                index > 0
+                or index < len(turn_ids) - 1
+            )
 
         if action == "split_turn":
             turn = self.session.current()
