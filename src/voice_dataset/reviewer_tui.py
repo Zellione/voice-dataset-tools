@@ -2802,21 +2802,31 @@ class UpdatingTurnScreen(
     }
     """
 
+    def __init__(
+        self,
+        *,
+        title: str = "Updating turn",
+        content: str = (
+            "Rebuilding review audio and "
+            "speaker evidence.\n\n"
+            "Please wait."
+        ),
+    ) -> None:
+        super().__init__()
+        self.title_text = title
+        self.content_text = content
+
     def compose(self) -> ComposeResult:
         with Vertical(
             id="updating-audio-dialog"
         ):
             yield Static(
-                "Updating turn",
+                self.title_text,
                 id="updating-audio-title",
             )
 
             yield Static(
-                (
-                    "Rebuilding review audio and "
-                    "speaker evidence.\n\n"
-                    "Please wait."
-                ),
+                self.content_text,
                 id="updating-audio-content",
             )
 
@@ -3894,21 +3904,83 @@ class ReviewerTUI(App[None]):
         if not accepted:
             return
 
+        self.push_screen(
+            UpdatingTurnScreen(
+                title="Alignment recovery",
+                content=(
+                    "Updating turn boundaries and "
+                    "rebuilding review audio and speaker "
+                    "evidence.\n\n"
+                    "Please wait."
+                ),
+            )
+        )
+
+        self._apply_alignment_recovery()
+
+    @work(
+        thread=True,
+        exclusive=True,
+        group="alignment-recovery",
+    )
+    def _apply_alignment_recovery(
+        self,
+    ) -> None:
         try:
             self.session.accept_alignment_recovery()
-            self._refresh_view()
-            self._set_status(
-                "Alignment recovery accepted."
-            )
         except (
             ValueError,
             KeyError,
             RuntimeError,
             OSError,
         ) as exc:
-            self._set_status(
-                f"Action failed: {exc}"
+            self.call_from_thread(
+                self._alignment_recovery_failed,
+                str(exc),
             )
+            return
+
+        self.call_from_thread(
+            self._alignment_recovery_finished
+        )
+
+    def _alignment_recovery_finished(
+        self,
+    ) -> None:
+        self._close_updating_audio_screen()
+
+        self.call_after_refresh(
+            self._alignment_recovery_finished_ui
+        )
+
+    def _alignment_recovery_finished_ui(
+        self,
+    ) -> None:
+        self._refresh_view()
+        self._set_status(
+            "Alignment recovery accepted."
+        )
+
+    def _alignment_recovery_failed(
+        self,
+        message: str,
+    ) -> None:
+        self._close_updating_audio_screen()
+
+        self.call_after_refresh(
+            self._alignment_recovery_failed_ui,
+            message,
+        )
+
+    def _alignment_recovery_failed_ui(
+        self,
+        message: str,
+    ) -> None:
+        self._refresh_view()
+        self._set_status(
+            "Alignment recovery failed: "
+            f"{message}"
+        )
 
     def action_accept_alignment_recovery(
         self,
@@ -4013,21 +4085,83 @@ class ReviewerTUI(App[None]):
         if not accepted:
             return
 
+        self.push_screen(
+            UpdatingTurnScreen(
+                title="Edge recovery",
+                content=(
+                    "Updating turn boundaries and "
+                    "rebuilding review audio and speaker "
+                    "evidence.\n\n"
+                    "Please wait."
+                ),
+            )
+        )
+
+        self._apply_edge_recovery()
+
+    @work(
+        thread=True,
+        exclusive=True,
+        group="edge-recovery",
+    )
+    def _apply_edge_recovery(
+        self,
+    ) -> None:
         try:
             self.session.accept_edge_recovery()
-            self._refresh_view()
-            self._set_status(
-                "Edge recovery accepted."
-            )
         except (
             ValueError,
             KeyError,
             RuntimeError,
             OSError,
         ) as exc:
-            self._set_status(
-                f"Action failed: {exc}"
+            self.call_from_thread(
+                self._edge_recovery_failed,
+                str(exc),
             )
+            return
+
+        self.call_from_thread(
+            self._edge_recovery_finished
+        )
+
+    def _edge_recovery_finished(
+        self,
+    ) -> None:
+        self._close_updating_audio_screen()
+
+        self.call_after_refresh(
+            self._edge_recovery_finished_ui
+        )
+
+    def _edge_recovery_finished_ui(
+        self,
+    ) -> None:
+        self._refresh_view()
+        self._set_status(
+            "Edge recovery accepted."
+        )
+
+    def _edge_recovery_failed(
+        self,
+        message: str,
+    ) -> None:
+        self._close_updating_audio_screen()
+
+        self.call_after_refresh(
+            self._edge_recovery_failed_ui,
+            message,
+        )
+
+    def _edge_recovery_failed_ui(
+        self,
+        message: str,
+    ) -> None:
+        self._refresh_view()
+        self._set_status(
+            "Edge recovery failed: "
+            f"{message}"
+        )
 
     def action_accept_edge_recovery(
         self,

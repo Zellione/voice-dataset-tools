@@ -220,6 +220,12 @@ def accept_alignment_recovery(
             "Alignment recovery has no regions"
         )
 
+    artifact_dir = (
+        storage.root
+        / "turns"
+        / turn_id
+    )
+
     def update(
         record: dict[str, Any],
     ) -> dict[str, Any]:
@@ -260,10 +266,18 @@ def accept_alignment_recovery(
 
         return record
 
-    return storage.update_turn(
+    updated = storage.update_turn(
         turn_id,
         update,
     )
+
+    # Physical files were derived from the old geometry.
+    # Remove them only after the canonical update
+    # succeeded.
+    if artifact_dir.exists():
+        shutil.rmtree(artifact_dir)
+
+    return updated
 
 
 def accept_edge_recovery(

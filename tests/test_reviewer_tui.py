@@ -5313,3 +5313,477 @@ async def test_reviewer_tui_merge_opens_on_last_turn_with_previous(
 
         assert "Previous turn" in rendered
         assert "Last original turn" in rendered
+
+
+@pytest.mark.asyncio
+async def test_alignment_recovery_blocks_tui_with_progress_modal(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.turns.update(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "metadata": {
+                **(turn.get("metadata") or {}),
+                "alignment_evidence": {
+                    "status": "review",
+                    "issue_word_indices": [0],
+                    "recovery": {
+                        "status": "suggested",
+                        "source_start": 0.8,
+                        "source_end": 2.0,
+                        "speaker": "SPEAKER_01",
+                        "region_ids": [
+                            "region_000001",
+                        ],
+                        "matched_token_count": 1,
+                        "candidate_token_count": 1,
+                    },
+                },
+            },
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def accept_alignment_recovery():
+        started.set()
+
+        if not release.wait(timeout=2.0):
+            raise RuntimeError(
+                "test recovery worker timed out"
+            )
+
+        return storage.get_turn(
+            "turn_000001"
+        )
+
+    monkeypatch.setattr(
+        session,
+        "accept_alignment_recovery",
+        accept_alignment_recovery,
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("f")
+        await pilot.pause()
+
+        assert isinstance(
+            app.screen,
+            ConfirmRecoveryScreen,
+        )
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert started.wait(timeout=1.0)
+
+        assert isinstance(
+            app.screen,
+            UpdatingTurnScreen,
+        )
+
+        title = app.screen.query_one(
+            "#updating-audio-title",
+            Static,
+        )
+
+        content = app.screen.query_one(
+            "#updating-audio-content",
+            Static,
+        )
+
+        assert (
+            "Alignment recovery"
+            in str(title.render())
+        )
+
+        assert (
+            "review audio and speaker evidence"
+            in str(content.render())
+        )
+
+        release.set()
+
+        for _ in range(10):
+            await pilot.pause()
+
+            if len(app.screen_stack) == 1:
+                break
+
+        assert len(app.screen_stack) == 1
+
+        status = app.query_one(
+            "#status",
+            Static,
+        )
+
+        assert (
+            "Alignment recovery accepted"
+            in str(status.render())
+        )
+
+
+@pytest.mark.asyncio
+async def test_alignment_recovery_failure_closes_progress_modal(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.turns.update(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "metadata": {
+                **(turn.get("metadata") or {}),
+                "alignment_evidence": {
+                    "status": "review",
+                    "issue_word_indices": [0],
+                    "recovery": {
+                        "status": "suggested",
+                        "source_start": 0.8,
+                        "source_end": 2.0,
+                        "speaker": "SPEAKER_01",
+                        "region_ids": [
+                            "region_000001",
+                        ],
+                        "matched_token_count": 1,
+                        "candidate_token_count": 1,
+                    },
+                },
+            },
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    def accept_alignment_recovery():
+        raise RuntimeError(
+            "synthetic recovery failure"
+        )
+
+    monkeypatch.setattr(
+        session,
+        "accept_alignment_recovery",
+        accept_alignment_recovery,
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("f")
+        await pilot.pause()
+
+        assert isinstance(
+            app.screen,
+            ConfirmRecoveryScreen,
+        )
+
+        await pilot.press("enter")
+
+        for _ in range(10):
+            await pilot.pause()
+
+            if len(app.screen_stack) == 1:
+                break
+
+        assert len(app.screen_stack) == 1
+
+        assert not isinstance(
+            app.screen,
+            UpdatingTurnScreen,
+        )
+
+        status = app.query_one(
+            "#status",
+            Static,
+        )
+
+        rendered = str(
+            status.render()
+        )
+
+        assert (
+            "Alignment recovery failed"
+            in rendered
+        )
+        assert (
+            "synthetic recovery failure"
+            in rendered
+        )
+
+        # Main reviewer must still respond.
+        await pilot.press("?")
+        await pilot.pause()
+
+        assert len(app.screen_stack) == 2
+
+
+@pytest.mark.asyncio
+async def test_edge_recovery_blocks_tui_with_progress_modal(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.turns.update(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "metadata": {
+                **(turn.get("metadata") or {}),
+                "edge_evidence": {
+                    "status": "suggested",
+                    "method": (
+                        "community_whisper_"
+                        "edge_extension"
+                    ),
+                    "edge": "end",
+                    "source_end": 2.4,
+                    "region_id": "region_000020",
+                    "speaker": "SPEAKER_04",
+                    "candidate_token": "kid",
+                    "whisper_token": "kiddo",
+                    "candidate_text": (
+                        "It gets easier kid"
+                    ),
+                    "whisper_text": (
+                        "It gets easier kiddo"
+                    ),
+                },
+            },
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def accept_edge_recovery():
+        started.set()
+
+        if not release.wait(timeout=2.0):
+            raise RuntimeError(
+                "test edge recovery worker timed out"
+            )
+
+        return storage.get_turn(
+            "turn_000001"
+        )
+
+    monkeypatch.setattr(
+        session,
+        "accept_edge_recovery",
+        accept_edge_recovery,
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("e")
+        await pilot.pause()
+
+        assert isinstance(
+            app.screen,
+            ConfirmRecoveryScreen,
+        )
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert started.wait(timeout=1.0)
+
+        assert isinstance(
+            app.screen,
+            UpdatingTurnScreen,
+        )
+
+        title = app.screen.query_one(
+            "#updating-audio-title",
+            Static,
+        )
+
+        content = app.screen.query_one(
+            "#updating-audio-content",
+            Static,
+        )
+
+        assert (
+            "Edge recovery"
+            in str(title.render())
+        )
+
+        assert (
+            "review audio and speaker evidence"
+            in str(content.render())
+        )
+
+        release.set()
+
+        for _ in range(10):
+            await pilot.pause()
+
+            if len(app.screen_stack) == 1:
+                break
+
+        assert len(app.screen_stack) == 1
+
+        status = app.query_one(
+            "#status",
+            Static,
+        )
+
+        assert (
+            "Edge recovery accepted"
+            in str(status.render())
+        )
+
+
+@pytest.mark.asyncio
+async def test_edge_recovery_failure_closes_progress_modal(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    storage.turns.update(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "metadata": {
+                **(turn.get("metadata") or {}),
+                "edge_evidence": {
+                    "status": "suggested",
+                    "method": (
+                        "community_whisper_"
+                        "edge_extension"
+                    ),
+                    "edge": "end",
+                    "source_end": 2.4,
+                    "region_id": "region_000020",
+                    "speaker": "SPEAKER_04",
+                    "candidate_token": "kid",
+                    "whisper_token": "kiddo",
+                    "candidate_text": (
+                        "It gets easier kid"
+                    ),
+                    "whisper_text": (
+                        "It gets easier kiddo"
+                    ),
+                },
+            },
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    def accept_edge_recovery():
+        raise RuntimeError(
+            "synthetic edge recovery failure"
+        )
+
+    monkeypatch.setattr(
+        session,
+        "accept_edge_recovery",
+        accept_edge_recovery,
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("e")
+        await pilot.pause()
+
+        assert isinstance(
+            app.screen,
+            ConfirmRecoveryScreen,
+        )
+
+        await pilot.press("enter")
+
+        for _ in range(10):
+            await pilot.pause()
+
+            if len(app.screen_stack) == 1:
+                break
+
+        assert len(app.screen_stack) == 1
+
+        assert not isinstance(
+            app.screen,
+            UpdatingTurnScreen,
+        )
+
+        status = app.query_one(
+            "#status",
+            Static,
+        )
+
+        rendered = str(
+            status.render()
+        )
+
+        assert (
+            "Edge recovery failed"
+            in rendered
+        )
+        assert (
+            "synthetic edge recovery failure"
+            in rendered
+        )
+
+        # Main reviewer must still respond.
+        await pilot.press("?")
+        await pilot.pause()
+
+        assert len(app.screen_stack) == 2
