@@ -2001,3 +2001,136 @@ def test_pending_navigation_stays_put_when_none_exists(
         session.current_turn_id
         == "turn_000002"
     )
+
+
+def test_session_uses_project_speaker_references(
+    tmp_path,
+) -> None:
+    project_root = tmp_path / "arcane"
+    episode_1_root = project_root / "s01e01"
+    episode_2_root = project_root / "s01e02"
+
+    episode_1_root.mkdir(parents=True)
+    episode_2_root.mkdir(parents=True)
+
+    (project_root / "voices.jsonl").write_text(
+        "",
+        encoding="utf-8",
+    )
+
+    episode_1 = DatasetStorage.for_dataset(
+        episode_1_root
+    )
+    episode_2 = DatasetStorage.for_dataset(
+        episode_2_root
+    )
+
+    voice = create_voice(
+        episode_1,
+        character="Vi",
+        language="en",
+    )
+
+    add_turn(
+        episode_1,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    add_turn(
+        episode_2,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    def add_embedding(
+        storage,
+        turn_id,
+        vector,
+    ):
+        relative_path = (
+            storage.root
+            / "turns"
+            / turn_id
+            / "embeddings"
+            / "ecapa_speaker.npy"
+        )
+
+        relative_path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        np.save(
+            relative_path,
+            np.array(
+                vector,
+                dtype=np.float32,
+            ),
+        )
+
+        dataset_relative = (
+            relative_path.relative_to(
+                storage.root
+            )
+        )
+
+        storage.update_turn(
+            turn_id,
+            lambda record: {
+                **record,
+                "embeddings": {
+                    "ecapa_speaker": {
+                        "encoder": "test-encoder",
+                        "representation": "speech",
+                        "path": dataset_relative.as_posix(),
+                        "dimension": 2,
+                        "metadata": {
+                            "model": "test-model",
+                        },
+                    },
+                },
+            },
+        )
+
+    add_embedding(
+        episode_1,
+        "turn_000001",
+        [1.0, 0.0],
+    )
+
+    add_embedding(
+        episode_2,
+        "turn_000001",
+        [1.0, 0.0],
+    )
+
+    episode_1.update_turn(
+        "turn_000001",
+        lambda record: {
+            **record,
+            "assignment": {
+                "status": "assigned",
+                "voice_id": voice["id"],
+                "method": "manual",
+                "confidence": None,
+            },
+        },
+    )
+
+    session = ReviewerSession(
+        episode_2,
+        embedding_names=(
+            "ecapa_speaker",
+        ),
+    )
+
+    candidates = session.speaker_candidates(
+        embedding_names=(
+            "ecapa_speaker",
+        ),
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].voice_id == voice["id"]
+    assert candidates[0].score == pytest.approx(1.0)

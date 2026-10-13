@@ -144,8 +144,8 @@ app.add_typer(
 
 
 def storage_for(dataset: Path) -> DatasetStorage:
-    return DatasetStorage(
-        dataset.resolve()
+    return DatasetStorage.for_dataset(
+        dataset
     )
 
 

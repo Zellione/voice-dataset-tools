@@ -403,7 +403,7 @@ def speaker_calibration_observation_from_dict(
     return observation
 
 
-def load_calibration_observations(
+def _load_dataset_calibration_observations(
     storage: DatasetStorage,
 ) -> list[SpeakerCalibrationObservation]:
     observations: list[
@@ -485,6 +485,23 @@ def load_calibration_observations(
             )
 
         observations.append(observation)
+
+    return observations
+
+
+def load_calibration_observations(
+    storage: DatasetStorage,
+) -> list[SpeakerCalibrationObservation]:
+    observations: list[
+        SpeakerCalibrationObservation
+    ] = []
+
+    for dataset_storage in storage.project_datasets():
+        observations.extend(
+            _load_dataset_calibration_observations(
+                dataset_storage
+            )
+        )
 
     return observations
 

@@ -163,8 +163,14 @@ class JsonlStore:
 
 
 class DatasetStorage:
-    def __init__(self, root: Path):
+    def __init__(
+        self,
+        root: Path,
+        *,
+        project_root: Path | None = None,
+    ):
         self.root = root
+        self.project_root = project_root
 
         self.sources = JsonlStore(
             root / "sources.jsonl"
@@ -178,9 +184,64 @@ class DatasetStorage:
             root / "turns.jsonl"
         )
 
-        self.voices = JsonlStore(
-            root / "voices.jsonl"
+        voice_root = (
+            project_root
+            if project_root is not None
+            else root
         )
+
+        self.voices = JsonlStore(
+            voice_root / "voices.jsonl"
+        )
+
+    @classmethod
+    def for_dataset(
+        cls,
+        root: Path,
+    ) -> "DatasetStorage":
+        root = root.resolve()
+        project_root = root.parent
+
+        if (
+            project_root / "voices.jsonl"
+        ).is_file():
+            return cls(
+                root,
+                project_root=project_root,
+            )
+
+        return cls(root)
+
+
+    def project_datasets(
+        self,
+    ) -> list["DatasetStorage"]:
+        if self.project_root is None:
+            return [self]
+
+        if not self.project_root.is_dir():
+            return [self]
+
+        dataset_roots = sorted(
+            child
+            for child in self.project_root.iterdir()
+            if (
+                child.is_dir()
+                and (
+                    (child / "sources.jsonl").is_file()
+                    or (child / "turns.jsonl").is_file()
+                )
+            )
+        )
+
+        return [
+            DatasetStorage(
+                dataset_root,
+                project_root=self.project_root,
+            )
+            for dataset_root in dataset_roots
+        ]
+
 
     def add_source(
         self,

@@ -341,144 +341,155 @@ def rank_voice_matches(
         list[VoiceTurnMatch],
     ] = {}
 
-    for reference_turn in turns:
-        reference_turn_id = reference_turn.get(
-            "id"
+    for reference_storage in storage.project_datasets():
+        reference_turns = (
+            reference_storage.turns.load()
         )
 
-        if reference_turn_id == turn_id:
-            continue
-
-        assignment = reference_turn.get(
-            "assignment"
-        )
-
-        if not isinstance(assignment, dict):
-            continue
-
-        if assignment.get("status") != "assigned":
-            continue
-
-        if assignment.get("method") != "manual":
-            continue
-
-        voice_id = assignment.get("voice_id")
-
-        if not isinstance(voice_id, str) or not voice_id:
-            continue
-
-        voice = voices.get(voice_id)
-
-        if voice is None:
-            raise ValueError(
-                f"{reference_turn_id}: assigned voice "
-                f"does not exist: {voice_id}"
+        for reference_turn in reference_turns:
+            reference_turn_id = reference_turn.get(
+                "id"
             )
 
-        if voice.get("ignored") is True:
-            continue
+            if (
+                reference_storage.root == storage.root
+                and reference_turn_id == turn_id
+            ):
+                continue
 
-        embeddings = reference_turn.get(
-            "embeddings"
-        )
-
-        if not isinstance(embeddings, dict):
-            continue
-
-        if embedding_name not in embeddings:
-            continue
-
-        reference_vector, reference = (
-            _load_embedding_from_turn(
-                storage,
-                reference_turn,
-                embedding_name,
-            )
-        )
-
-        if reference["encoder"] != query_encoder:
-            raise ValueError(
-                "Cannot compare embeddings from "
-                "different encoders"
+            assignment = reference_turn.get(
+                "assignment"
             )
 
-        if reference["dimension"] != query_dimension:
-            raise ValueError(
-                "Cannot compare embeddings with "
-                "different dimensions"
+            if not isinstance(assignment, dict):
+                continue
+
+            if assignment.get("status") != "assigned":
+                continue
+
+            if assignment.get("method") != "manual":
+                continue
+
+            voice_id = assignment.get("voice_id")
+
+            if (
+                not isinstance(voice_id, str)
+                or not voice_id
+            ):
+                continue
+
+            voice = voices.get(voice_id)
+
+            if voice is None:
+                raise ValueError(
+                    f"{reference_turn_id}: assigned voice "
+                    f"does not exist: {voice_id}"
+                )
+
+            if voice.get("ignored") is True:
+                continue
+
+            embeddings = reference_turn.get(
+                "embeddings"
             )
 
-        reference_metadata = reference.get(
-            "metadata"
-        )
+            if not isinstance(embeddings, dict):
+                continue
 
-        if not isinstance(
-            reference_metadata,
-            dict,
-        ):
-            raise ValueError(
-                f"{reference_turn_id}: embedding has "
-                f"invalid metadata"
+            if embedding_name not in embeddings:
+                continue
+
+            reference_vector, reference = (
+                _load_embedding_from_turn(
+                    reference_storage,
+                    reference_turn,
+                    embedding_name,
+                )
             )
 
-        if (
-            reference_metadata.get("model")
-            != query_model
-        ):
-            raise ValueError(
-                "Cannot compare embeddings from "
-                "different models"
+            if reference["encoder"] != query_encoder:
+                raise ValueError(
+                    "Cannot compare embeddings from "
+                    "different encoders"
+                )
+
+            if reference["dimension"] != query_dimension:
+                raise ValueError(
+                    "Cannot compare embeddings with "
+                    "different dimensions"
+                )
+
+            reference_metadata = reference.get(
+                "metadata"
             )
 
-        if (
-            reference.get("representation")
-            != query_representation
-        ):
-            raise ValueError(
-                "Cannot compare embeddings from "
-                "different representations"
+            if not isinstance(
+                reference_metadata,
+                dict,
+            ):
+                raise ValueError(
+                    f"{reference_turn_id}: embedding has "
+                    f"invalid metadata"
+                )
+
+            if (
+                reference_metadata.get("model")
+                != query_model
+            ):
+                raise ValueError(
+                    "Cannot compare embeddings from "
+                    "different models"
+                )
+
+            if (
+                reference.get("representation")
+                != query_representation
+            ):
+                raise ValueError(
+                    "Cannot compare embeddings from "
+                    "different representations"
+                )
+
+            reference_norm = float(
+                np.linalg.norm(reference_vector)
             )
 
-        reference_norm = float(
-            np.linalg.norm(reference_vector)
-        )
+            if reference_norm == 0.0:
+                raise ValueError(
+                    "Cannot compare zero-norm "
+                    "embedding vectors"
+                )
 
-        if reference_norm == 0.0:
-            raise ValueError(
-                "Cannot compare zero-norm "
-                "embedding vectors"
+            similarity = float(
+                np.dot(
+                    query_vector,
+                    reference_vector,
+                )
+                / (
+                    query_norm
+                    * reference_norm
+                )
             )
 
-        similarity = float(
-            np.dot(
-                query_vector,
-                reference_vector,
+            source_id = reference_turn.get(
+                "source_id"
             )
-            / (
-                query_norm
-                * reference_norm
+
+            if not isinstance(source_id, str):
+                source_id = None
+
+            matches_by_voice.setdefault(
+                voice_id,
+                [],
+            ).append(
+                VoiceTurnMatch(
+                    turn_id=str(
+                        reference_turn_id
+                    ),
+                    similarity=similarity,
+                    source_id=source_id,
+                )
             )
-        )
-
-        source_id = reference_turn.get(
-            "source_id"
-        )
-
-        if not isinstance(source_id, str):
-            source_id = None
-
-        matches_by_voice.setdefault(
-            voice_id,
-            [],
-        ).append(
-            VoiceTurnMatch(
-                turn_id=str(
-                    reference_turn_id
-                ),
-                similarity=similarity,
-                source_id=source_id,
-            )
-        )
 
     results = []
 

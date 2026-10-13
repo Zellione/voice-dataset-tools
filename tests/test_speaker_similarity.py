@@ -680,3 +680,123 @@ def test_rank_voice_matches_rejects_incompatible_embedding(
             "turn_query",
             "speaker",
         )
+
+
+def test_rank_voice_matches_uses_project_reference_turns(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "arcane"
+
+    episode_1 = DatasetStorage(
+        project_root / "s01e01",
+        project_root=project_root,
+    )
+
+    episode_2 = DatasetStorage(
+        project_root / "s01e02",
+        project_root=project_root,
+    )
+
+    add_voice(
+        episode_1,
+        "voice_001",
+    )
+
+    add_turn_with_embedding(
+        episode_1,
+        turn_id="turn_ep1_reference",
+        vector=np.array(
+            [1.0, 0.0],
+            dtype=np.float32,
+        ),
+        voice_id="voice_001",
+        assignment_method="manual",
+    )
+
+    add_turn_with_embedding(
+        episode_2,
+        turn_id="turn_ep2_query",
+        vector=np.array(
+            [1.0, 0.0],
+            dtype=np.float32,
+        ),
+    )
+
+    results = rank_voice_matches(
+        episode_2,
+        "turn_ep2_query",
+        "speaker",
+    )
+
+    assert len(results) == 1
+    assert results[0].voice_id == "voice_001"
+
+    assert len(results[0].matches) == 1
+
+    match = results[0].matches[0]
+
+    assert match.turn_id == "turn_ep1_reference"
+    assert match.similarity == pytest.approx(1.0)
+    assert match.source_id == "source_001"
+
+
+def test_rank_voice_matches_keeps_same_turn_id_from_other_dataset(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "arcane"
+
+    episode_1 = DatasetStorage(
+        project_root / "s01e01",
+        project_root=project_root,
+    )
+
+    episode_2 = DatasetStorage(
+        project_root / "s01e02",
+        project_root=project_root,
+    )
+
+    add_voice(
+        episode_1,
+        "voice_001",
+    )
+
+    add_turn_with_embedding(
+        episode_1,
+        turn_id="turn_000001",
+        vector=np.array(
+            [1.0, 0.0],
+            dtype=np.float32,
+        ),
+        voice_id="voice_001",
+        assignment_method="manual",
+    )
+
+    add_turn_with_embedding(
+        episode_2,
+        turn_id="turn_000001",
+        vector=np.array(
+            [1.0, 0.0],
+            dtype=np.float32,
+        ),
+    )
+
+    results = rank_voice_matches(
+        episode_2,
+        "turn_000001",
+        "speaker",
+    )
+
+    assert len(results) == 1
+    assert results[0].voice_id == "voice_001"
+
+    assert [
+        match.turn_id
+        for match in results[0].matches
+    ] == [
+        "turn_000001",
+    ]
+
+    assert (
+        results[0].matches[0].similarity
+        == pytest.approx(1.0)
+    )

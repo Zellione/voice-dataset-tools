@@ -1618,3 +1618,54 @@ def test_default_speaker_review_rules_match_reviewer_policy():
             minimum_eligible_count=5,
         )
     )
+
+
+def test_load_calibration_observations_uses_project_datasets(
+    tmp_path,
+):
+    project_root = tmp_path / "arcane"
+
+    episode_1 = DatasetStorage(
+        project_root / "s01e01",
+        project_root=project_root,
+    )
+
+    episode_2 = DatasetStorage(
+        project_root / "s01e02",
+        project_root=project_root,
+    )
+
+    _add_calibration_turn(
+        episode_1,
+        turn_id="turn_000001",
+        source_id="arcane-s01e01",
+        confirmed_voice_id="voice_001",
+    )
+
+    _add_calibration_turn(
+        episode_2,
+        turn_id="turn_000001",
+        source_id="arcane-s01e02",
+        confirmed_voice_id="voice_002",
+    )
+
+    observations = load_calibration_observations(
+        episode_2
+    )
+
+    assert [
+        (
+            observation.source_id,
+            observation.turn_id,
+        )
+        for observation in observations
+    ] == [
+        (
+            "arcane-s01e01",
+            "turn_000001",
+        ),
+        (
+            "arcane-s01e02",
+            "turn_000001",
+        ),
+    ]
