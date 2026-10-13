@@ -1354,29 +1354,36 @@ def test_prepare_source_speaker_evidence_can_capture_worker_output(
         lambda **kwargs: "representation-result",
     )
 
-    def fake_embed_turns(
+    def fake_embed_turns_parallel(
         storage_arg,
         *,
-        encoder,
         representation,
-        name,
+        tasks,
         capture_output=False,
     ):
         calls.append(
             (
-                encoder,
                 representation,
-                name,
+                [
+                    (
+                        task.encoder,
+                        task.name,
+                    )
+                    for task in tasks
+                ],
                 capture_output,
             )
         )
 
-        return f"{encoder}-result"
+        return (
+            "ecapa-result",
+            "wespeaker-result",
+        )
 
     monkeypatch.setattr(
         "voice_dataset.utterance_pipeline."
-        "embed_turns",
-        fake_embed_turns,
+        "embed_turns_parallel",
+        fake_embed_turns_parallel,
     )
 
     from voice_dataset.utterance_pipeline import (
@@ -1391,15 +1398,17 @@ def test_prepare_source_speaker_evidence_can_capture_worker_output(
 
     assert calls == [
         (
-            "ecapa",
             "speaker",
-            "ecapa_speaker",
-            True,
-        ),
-        (
-            "wespeaker",
-            "speaker",
-            "wespeaker_speaker",
+            [
+                (
+                    "ecapa",
+                    "ecapa_speaker",
+                ),
+                (
+                    "wespeaker",
+                    "wespeaker_speaker",
+                ),
+            ],
             True,
         ),
     ]

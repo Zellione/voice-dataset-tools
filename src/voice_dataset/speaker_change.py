@@ -7,7 +7,10 @@ from typing import Any
 
 import numpy as np
 
-from .embeddings import embed_turns
+from .embeddings import (
+    EmbeddingTask,
+    embed_turns_parallel,
+)
 from .representations import (
     materialize_turn_audio,
 )
@@ -724,19 +727,21 @@ def analyze_speaker_change_boundaries(
             boundaries=boundaries,
         )
 
-        embed_turns(
+        embed_turns_parallel(
             analysis_storage,
-            encoder="ecapa",
             representation="speaker_change",
-            name="ecapa_speaker_change",
-            capture_output=capture_output,
-        )
-
-        embed_turns(
-            analysis_storage,
-            encoder="wespeaker",
-            representation="speaker_change",
-            name="wespeaker_speaker_change",
+            tasks=[
+                EmbeddingTask(
+                    encoder="ecapa",
+                    name="ecapa_speaker_change",
+                ),
+                EmbeddingTask(
+                    encoder="wespeaker",
+                    name=(
+                        "wespeaker_speaker_change"
+                    ),
+                ),
+            ],
             capture_output=capture_output,
         )
 

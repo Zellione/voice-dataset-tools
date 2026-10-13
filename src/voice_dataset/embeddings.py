@@ -5,15 +5,21 @@ import json
 import os
 import shutil
 import tempfile
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 import numpy as np
 
 from .schema import EmbeddingReference
 from .storage import DatasetStorage
-from .workers import run_worker, worker
+from .workers import (
+    WorkerInvocation,
+    run_worker,
+    run_workers_parallel,
+    worker,
+)
 
 
 EMBEDDING_OUTPUT_FORMAT = (
@@ -860,6 +866,198 @@ def _completed_turn_embeddings(
         completed += 1
 
     return completed
+
+
+@dataclass(frozen=True)
+class EmbeddingTask:
+    encoder: str
+    name: str
+
+
+def embed_turns_parallel(
+    storage: DatasetStorage,
+    *,
+    representation: str,
+    tasks: Sequence[EmbeddingTask],
+    capture_output: bool = False,
+) -> tuple[EmbeddingRunResult, ...]:
+    if not representation:
+        raise ValueError(
+            "representation must not be empty"
+        )
+
+    if not tasks:
+        return ()
+
+    seen_names: set[str] = set()
+
+    for task in tasks:
+        if task.encoder not in {
+            "ecapa",
+            "wespeaker",
+        }:
+            raise ValueError(
+                "Unsupported speaker encoder: "
+                f"{task.encoder}"
+            )
+
+        if not task.name:
+            raise ValueError(
+                "embedding evidence name "
+                "must not be empty"
+            )
+
+        if task.name in seen_names:
+            raise ValueError(
+                "Duplicate embedding evidence name: "
+                f"{task.name}"
+            )
+
+        seen_names.add(task.name)
+
+    completed_results: dict[
+        str,
+        EmbeddingRunResult,
+    ] = {}
+
+    pending_tasks: list[
+        EmbeddingTask
+    ] = []
+
+    for task in tasks:
+        completed = _completed_turn_embeddings(
+            storage,
+            representation=representation,
+            name=task.name,
+        )
+
+        if completed is not None:
+            completed_results[
+                task.name
+            ] = EmbeddingRunResult(
+                encoder=task.encoder,
+                representation=representation,
+                imported=0,
+                skipped=completed,
+            )
+        else:
+            pending_tasks.append(task)
+
+    imported_results: dict[
+        str,
+        EmbeddingRunResult,
+    ] = {}
+
+    if pending_tasks:
+        with ExitStack() as stack:
+            output_directories: dict[
+                str,
+                Path,
+            ] = {}
+
+            invocations = []
+
+            for task in pending_tasks:
+                temporary_directory = (
+                    stack.enter_context(
+                        tempfile.TemporaryDirectory(
+                            prefix=(
+                                "voice-dataset-"
+                                f"{task.encoder}-"
+                            )
+                        )
+                    )
+                )
+
+                output_directory = (
+                    Path(temporary_directory)
+                    / "output"
+                )
+
+                output_directories[
+                    task.name
+                ] = output_directory
+
+                invocations.append(
+                    WorkerInvocation(
+                        worker=worker(
+                            task.encoder
+                        ),
+                        arguments=[
+                            storage.root,
+                            output_directory,
+                            "--record-type",
+                            "turn",
+                            "--representation",
+                            representation,
+                        ],
+                    )
+                )
+
+            run_workers_parallel(
+                invocations,
+                capture_output=capture_output,
+            )
+
+            loaded_outputs = {}
+
+            # Load and validate every worker result
+            # before mutating the dataset.
+            for task in pending_tasks:
+                output = load_embedding_output(
+                    output_directories[
+                        task.name
+                    ]
+                    / "embeddings.json"
+                )
+
+                if output.record_type != "turn":
+                    raise ValueError(
+                        "Embedding worker produced "
+                        f"{output.record_type} records; "
+                        "turn records are required"
+                    )
+
+                if (
+                    output.representation
+                    != representation
+                ):
+                    raise ValueError(
+                        "Embedding worker used "
+                        "unexpected representation: "
+                        f"{output.representation}"
+                    )
+
+                loaded_outputs[
+                    task.name
+                ] = output
+
+            # Dataset mutation stays deliberately
+            # serial even though inference ran
+            # concurrently.
+            for task in pending_tasks:
+                result = import_embeddings(
+                    storage,
+                    loaded_outputs[
+                        task.name
+                    ],
+                    name=task.name,
+                )
+
+                imported_results[
+                    task.name
+                ] = EmbeddingRunResult(
+                    encoder=task.encoder,
+                    representation=representation,
+                    imported=result.imported,
+                    skipped=result.skipped,
+                )
+
+    return tuple(
+        completed_results.get(task.name)
+        or imported_results[task.name]
+        for task in tasks
+    )
 
 
 def embed_turns(

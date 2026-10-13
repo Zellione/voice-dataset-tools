@@ -148,6 +148,111 @@ def validate_worker(
         )
 
 
+@dataclass(frozen=True)
+class WorkerInvocation:
+    worker: Worker
+    arguments: Sequence[str | Path]
+
+
+def _worker_command(
+    invocation: WorkerInvocation,
+) -> list[str]:
+    validate_worker(
+        invocation.worker
+    )
+
+    return [
+        str(invocation.worker.python),
+        str(invocation.worker.adapter),
+        *(
+            str(argument)
+            for argument
+            in invocation.arguments
+        ),
+    ]
+
+
+def run_workers_parallel(
+    invocations: Sequence[WorkerInvocation],
+    *,
+    capture_output: bool = False,
+) -> None:
+    if not invocations:
+        return
+
+    processes: list[
+        tuple[
+            Worker,
+            subprocess.Popen,
+        ]
+    ] = []
+
+    try:
+        for invocation in invocations:
+            command = _worker_command(
+                invocation
+            )
+
+            kwargs = {}
+
+            if capture_output:
+                kwargs.update({
+                    "stdout": subprocess.PIPE,
+                    "stderr": subprocess.PIPE,
+                    "text": True,
+                })
+
+            process = subprocess.Popen(
+                command,
+                **kwargs,
+            )
+
+            processes.append(
+                (
+                    invocation.worker,
+                    process,
+                )
+            )
+
+        failures = []
+
+        for worker_item, process in processes:
+            stdout, stderr = (
+                process.communicate()
+            )
+
+            if process.returncode != 0:
+                failures.append(
+                    (
+                        worker_item,
+                        process.returncode,
+                        stdout,
+                        stderr,
+                    )
+                )
+
+        if failures:
+            worker_item, returncode, _, _ = (
+                failures[0]
+            )
+
+            raise WorkerError(
+                f"{worker_item.name} worker failed "
+                f"with exit code {returncode}"
+            )
+
+    except Exception:
+        for _, process in processes:
+            if process.poll() is None:
+                process.terminate()
+
+        for _, process in processes:
+            if process.poll() is None:
+                process.wait()
+
+        raise
+
+
 def run_worker(
     worker: Worker,
     arguments: Sequence[str | Path],

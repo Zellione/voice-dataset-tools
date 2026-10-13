@@ -1323,3 +1323,164 @@ def test_prepare_speaker_change_evidence_reruns_stale_version(
         ["version"]
         == SPEAKER_CHANGE_EVIDENCE_VERSION
     )
+
+
+def test_analyze_speaker_change_runs_encoders_in_parallel(
+    tmp_path,
+    monkeypatch,
+):
+    import voice_dataset.speaker_change as module
+
+    storage = object()
+
+    source_path = tmp_path / "source.wav"
+    source_path.touch()
+
+    boundary = SpeakerChangeBoundary(
+        turn_id="turn_001",
+        boundary=11.0,
+        left_start=10.0,
+        left_end=11.0,
+        right_start=11.0,
+        right_end=12.0,
+    )
+
+    monkeypatch.setattr(
+        module,
+        "resolve_source_representation_for_purpose",
+        lambda *args, **kwargs: (
+            "center",
+            {
+                "kind": "center",
+            },
+            source_path,
+        ),
+    )
+
+    monkeypatch.setattr(
+        module,
+        "_prepare_analysis_pairs",
+        lambda *args, **kwargs: [
+            module._AnalysisPair(
+                boundary=boundary,
+                left_window_id="window_left",
+                right_window_id="window_right",
+            ),
+        ],
+    )
+
+    calls = []
+
+    def fake_embed_turns_parallel(
+        storage_arg,
+        *,
+        representation,
+        tasks,
+        capture_output=False,
+    ):
+        calls.append(
+            (
+                representation,
+                [
+                    (
+                        task.encoder,
+                        task.name,
+                    )
+                    for task in tasks
+                ],
+                capture_output,
+            )
+        )
+
+        return (
+            object(),
+            object(),
+        )
+
+    monkeypatch.setattr(
+        module,
+        "embed_turns_parallel",
+        fake_embed_turns_parallel,
+    )
+
+    vectors = {
+        (
+            "window_left",
+            "ecapa_speaker_change",
+        ): np.array(
+            [1.0, 0.0],
+            dtype=np.float32,
+        ),
+        (
+            "window_right",
+            "ecapa_speaker_change",
+        ): np.array(
+            [0.0, 1.0],
+            dtype=np.float32,
+        ),
+        (
+            "window_left",
+            "wespeaker_speaker_change",
+        ): np.array(
+            [1.0, 0.0],
+            dtype=np.float32,
+        ),
+        (
+            "window_right",
+            "wespeaker_speaker_change",
+        ): np.array(
+            [0.8, 0.6],
+            dtype=np.float32,
+        ),
+    }
+
+    monkeypatch.setattr(
+        module,
+        "_embedding_vector",
+        lambda storage_arg, turn_id, name: (
+            vectors[
+                (
+                    turn_id,
+                    name,
+                )
+            ]
+        ),
+    )
+
+    result = (
+        module.analyze_speaker_change_boundaries(
+            storage,
+            "source_001",
+            [boundary],
+            capture_output=True,
+        )
+    )
+
+    assert calls == [
+        (
+            "speaker_change",
+            [
+                (
+                    "ecapa",
+                    "ecapa_speaker_change",
+                ),
+                (
+                    "wespeaker",
+                    "wespeaker_speaker_change",
+                ),
+            ],
+            True,
+        ),
+    ]
+
+    assert len(result) == 1
+
+    assert (
+        result[0].ecapa_similarity
+        == pytest.approx(0.0)
+    )
+
+    assert (
+        result[0].wespeaker_similarity
+        == pytest.approx(0.8)
+    )

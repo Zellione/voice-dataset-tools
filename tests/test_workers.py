@@ -255,3 +255,166 @@ def test_run_worker_can_capture_output(
         "capture_output": True,
         "text": True,
     }
+
+
+def test_run_workers_parallel_starts_all_before_waiting(
+    monkeypatch,
+    tmp_path,
+):
+    import voice_dataset.workers as workers
+
+    events = []
+
+    class FakeProcess:
+        def __init__(
+            self,
+            command,
+            **kwargs,
+        ):
+            self.command = command
+            self.returncode = None
+            events.append(
+                ("start", command[-1])
+            )
+
+        def communicate(self):
+            events.append(
+                (
+                    "wait",
+                    self.command[-1],
+                )
+            )
+            self.returncode = 0
+            return (None, None)
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = -15
+
+        def wait(self):
+            return self.returncode
+
+    monkeypatch.setattr(
+        workers.subprocess,
+        "Popen",
+        FakeProcess,
+    )
+
+    fake_python = tmp_path / "python"
+    fake_adapter = tmp_path / "adapter.py"
+
+    fake_python.touch()
+    fake_adapter.touch()
+
+    first = workers.Worker(
+        name="first",
+        python=fake_python,
+        adapter=fake_adapter,
+    )
+
+    second = workers.Worker(
+        name="second",
+        python=fake_python,
+        adapter=fake_adapter,
+    )
+
+    workers.run_workers_parallel(
+        [
+            workers.WorkerInvocation(
+                worker=first,
+                arguments=["one"],
+            ),
+            workers.WorkerInvocation(
+                worker=second,
+                arguments=["two"],
+            ),
+        ]
+    )
+
+    assert events == [
+        ("start", "one"),
+        ("start", "two"),
+        ("wait", "one"),
+        ("wait", "two"),
+    ]
+
+
+def test_run_workers_parallel_raises_on_failure(
+    monkeypatch,
+    tmp_path,
+):
+    import voice_dataset.workers as workers
+
+    class FakeProcess:
+        next_returncodes = iter([0, 7])
+
+        def __init__(
+            self,
+            command,
+            **kwargs,
+        ):
+            self.returncode = None
+            self.final_returncode = next(
+                self.next_returncodes
+            )
+
+        def communicate(self):
+            self.returncode = (
+                self.final_returncode
+            )
+            return (None, None)
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = -15
+
+        def wait(self):
+            return self.returncode
+
+    monkeypatch.setattr(
+        workers.subprocess,
+        "Popen",
+        FakeProcess,
+    )
+
+    fake_python = tmp_path / "python"
+    fake_adapter = tmp_path / "adapter.py"
+
+    fake_python.touch()
+    fake_adapter.touch()
+
+    first = workers.Worker(
+        name="first",
+        python=fake_python,
+        adapter=fake_adapter,
+    )
+
+    second = workers.Worker(
+        name="second",
+        python=fake_python,
+        adapter=fake_adapter,
+    )
+
+    with pytest.raises(
+        workers.WorkerError,
+        match=(
+            "second worker failed "
+            "with exit code 7"
+        ),
+    ):
+        workers.run_workers_parallel(
+            [
+                workers.WorkerInvocation(
+                    worker=first,
+                    arguments=["one"],
+                ),
+                workers.WorkerInvocation(
+                    worker=second,
+                    arguments=["two"],
+                ),
+            ]
+        )

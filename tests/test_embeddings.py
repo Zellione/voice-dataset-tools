@@ -544,3 +544,334 @@ def test_embed_turns_can_capture_worker_output(
         )
 
     assert calls == [True]
+
+
+def test_embed_turns_parallel_runs_workers_together(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import voice_dataset.embeddings as embeddings_module
+
+    storage = make_storage(tmp_path)
+
+    def update(turn):
+        turn["representations"]["speaker"] = {
+            "path": (
+                "turns/turn_000001/"
+                "speaker.wav"
+            ),
+        }
+        return turn
+
+    storage.update_turn(
+        "turn_000001",
+        update,
+    )
+
+    calls = []
+
+    def fake_parallel(
+        invocations,
+        *,
+        capture_output=False,
+    ):
+        calls.append(
+            (
+                [
+                    invocation.worker.name
+                    for invocation in invocations
+                ],
+                capture_output,
+            )
+        )
+
+        for invocation in invocations:
+            arguments = list(
+                invocation.arguments
+            )
+
+            output_directory = Path(
+                arguments[1]
+            )
+
+            output_directory.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            vector_path = (
+                output_directory
+                / "turn_000001.npy"
+            )
+
+            np.save(
+                vector_path,
+                np.array(
+                    [1.0, 2.0, 3.0],
+                    dtype=np.float32,
+                ),
+            )
+
+            manifest = {
+                "format": (
+                    "voice-dataset-embedding-output"
+                ),
+                "version": 1,
+                "record_type": "turn",
+                "encoder": {
+                    "name": (
+                        invocation.worker.name
+                    ),
+                    "model": "test-model",
+                },
+                "representation": "speaker",
+                "embeddings": [
+                    {
+                        "turn_id": (
+                            "turn_000001"
+                        ),
+                        "path": (
+                            "turn_000001.npy"
+                        ),
+                        "dimension": 3,
+                        "metadata": {},
+                    },
+                ],
+            }
+
+            (
+                output_directory
+                / "embeddings.json"
+            ).write_text(
+                json.dumps(manifest),
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(
+        embeddings_module,
+        "run_workers_parallel",
+        fake_parallel,
+    )
+
+    results = (
+        embeddings_module.embed_turns_parallel(
+            storage,
+            representation="speaker",
+            tasks=[
+                embeddings_module.EmbeddingTask(
+                    encoder="ecapa",
+                    name="ecapa_speaker",
+                ),
+                embeddings_module.EmbeddingTask(
+                    encoder="wespeaker",
+                    name="wespeaker_speaker",
+                ),
+            ],
+            capture_output=True,
+        )
+    )
+
+    assert calls == [
+        (
+            [
+                "ecapa",
+                "wespeaker",
+            ],
+            True,
+        ),
+    ]
+
+    assert [
+        result.encoder
+        for result in results
+    ] == [
+        "ecapa",
+        "wespeaker",
+    ]
+
+    assert all(
+        result.imported == 1
+        for result in results
+    )
+
+    turn = storage.get_turn(
+        "turn_000001"
+    )
+
+    assert turn is not None
+
+    assert set(
+        turn["embeddings"]
+    ) == {
+        "ecapa_speaker",
+        "wespeaker_speaker",
+    }
+
+
+def test_embed_turns_parallel_skips_completed_tasks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import hashlib
+    import voice_dataset.embeddings as embeddings_module
+
+    storage = make_storage(tmp_path)
+
+    embedding_path = (
+        storage.root
+        / "turns"
+        / "turn_000001"
+        / "embeddings"
+        / "ecapa_speaker.npy"
+    )
+
+    embedding_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    np.save(
+        embedding_path,
+        np.array(
+            [1.0, 2.0, 3.0],
+            dtype=np.float32,
+        ),
+    )
+
+    sha256 = hashlib.sha256(
+        embedding_path.read_bytes()
+    ).hexdigest()
+
+    def update(turn):
+        turn["representations"]["speaker"] = {
+            "path": (
+                "turns/turn_000001/"
+                "speaker.wav"
+            ),
+        }
+
+        turn["embeddings"][
+            "ecapa_speaker"
+        ] = {
+            "encoder": "ecapa",
+            "representation": "speaker",
+            "path": (
+                "turns/turn_000001/"
+                "embeddings/"
+                "ecapa_speaker.npy"
+            ),
+            "dimension": 3,
+            "metadata": {
+                "model": "test-model",
+                "sha256": sha256,
+            },
+        }
+
+        return turn
+
+    storage.update_turn(
+        "turn_000001",
+        update,
+    )
+
+    seen_workers = []
+
+    def fake_parallel(
+        invocations,
+        *,
+        capture_output=False,
+    ):
+        seen_workers.extend(
+            invocation.worker.name
+            for invocation in invocations
+        )
+
+        assert len(invocations) == 1
+
+        invocation = invocations[0]
+        arguments = list(
+            invocation.arguments
+        )
+
+        output_directory = Path(
+            arguments[1]
+        )
+
+        output_directory.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        vector_path = (
+            output_directory
+            / "turn_000001.npy"
+        )
+
+        np.save(
+            vector_path,
+            np.array(
+                [4.0, 5.0, 6.0],
+                dtype=np.float32,
+            ),
+        )
+
+        manifest = {
+            "format": (
+                "voice-dataset-embedding-output"
+            ),
+            "version": 1,
+            "record_type": "turn",
+            "encoder": {
+                "name": "wespeaker",
+                "model": "test-model",
+            },
+            "representation": "speaker",
+            "embeddings": [
+                {
+                    "turn_id": "turn_000001",
+                    "path": "turn_000001.npy",
+                    "dimension": 3,
+                    "metadata": {},
+                },
+            ],
+        }
+
+        (
+            output_directory
+            / "embeddings.json"
+        ).write_text(
+            json.dumps(manifest),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(
+        embeddings_module,
+        "run_workers_parallel",
+        fake_parallel,
+    )
+
+    results = (
+        embeddings_module.embed_turns_parallel(
+            storage,
+            representation="speaker",
+            tasks=[
+                embeddings_module.EmbeddingTask(
+                    encoder="ecapa",
+                    name="ecapa_speaker",
+                ),
+                embeddings_module.EmbeddingTask(
+                    encoder="wespeaker",
+                    name="wespeaker_speaker",
+                ),
+            ],
+        )
+    )
+
+    assert seen_workers == [
+        "wespeaker",
+    ]
+
+    assert results[0].imported == 0
+    assert results[0].skipped == 1
+
+    assert results[1].imported == 1

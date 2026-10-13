@@ -19,7 +19,8 @@ from .utterance_candidates import (
 from .workers import run_worker, worker
 from .embeddings import (
     EmbeddingRunResult,
-    embed_turns,
+    EmbeddingTask,
+    embed_turns_parallel,
 )
 from .representations import (
     MaterializeTurnsResult,
@@ -369,19 +370,22 @@ def prepare_source_speaker_evidence(
         purposes=["speaker_embedding"],
     )
 
-    ecapa = embed_turns(
+    (
+        ecapa,
+        wespeaker,
+    ) = embed_turns_parallel(
         storage,
-        encoder="ecapa",
         representation="speaker",
-        name="ecapa_speaker",
-        capture_output=capture_output,
-    )
-
-    wespeaker = embed_turns(
-        storage,
-        encoder="wespeaker",
-        representation="speaker",
-        name="wespeaker_speaker",
+        tasks=[
+            EmbeddingTask(
+                encoder="ecapa",
+                name="ecapa_speaker",
+            ),
+            EmbeddingTask(
+                encoder="wespeaker",
+                name="wespeaker_speaker",
+            ),
+        ],
         capture_output=capture_output,
     )
 
