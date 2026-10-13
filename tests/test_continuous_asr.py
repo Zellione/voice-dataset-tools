@@ -754,3 +754,647 @@ def test_continuous_asr_compatibility_rejects_model_change(
             representation_name="center",
             language=None,
         )
+
+
+def test_plan_continuous_asr_chunks_uses_trailing_source_gap(
+    tmp_path,
+) -> None:
+    storage = DatasetStorage(tmp_path)
+
+    _add_region(
+        storage,
+        "region_000001",
+        0.0,
+        60.0,
+        "First section.",
+    )
+
+    _add_region(
+        storage,
+        "region_000002",
+        61.0,
+        221.0,
+        "Final detected speech",
+    )
+
+    chunks = plan_continuous_asr_chunks(
+        storage,
+        "source_001",
+        duration=500.0,
+        target_seconds=60.0,
+        search_seconds=15.0,
+        max_chunk_seconds=240.0,
+        minimum_gap_seconds=0.5,
+    )
+
+    assert chunks[0].end == pytest.approx(60.5)
+    assert chunks[0].boundary == "sentence_gap"
+
+    assert chunks[1].start == pytest.approx(60.5)
+    assert chunks[1].end == pytest.approx(221.25)
+    assert chunks[1].boundary == "source_gap"
+
+    assert chunks[2].start == pytest.approx(221.25)
+    assert chunks[2].end == pytest.approx(281.25)
+    assert chunks[2].boundary == "source_gap"
+
+    assert chunks[3].start == pytest.approx(281.25)
+    assert chunks[3].end == pytest.approx(341.25)
+    assert chunks[3].boundary == "source_gap"
+
+    assert chunks[4].start == pytest.approx(341.25)
+    assert chunks[4].end == pytest.approx(401.25)
+    assert chunks[4].boundary == "source_gap"
+
+    assert chunks[5].start == pytest.approx(401.25)
+    assert chunks[5].end == pytest.approx(461.25)
+    assert chunks[5].boundary == "source_gap"
+
+    assert chunks[6].start == pytest.approx(461.25)
+    assert chunks[6].end == pytest.approx(500.0)
+    assert chunks[6].boundary == "source_end"
+
+
+def test_plan_continuous_asr_chunks_handles_no_detected_speech(
+    tmp_path,
+) -> None:
+    storage = DatasetStorage(tmp_path)
+
+    chunks = plan_continuous_asr_chunks(
+        storage,
+        "source_001",
+        duration=300.0,
+        target_seconds=60.0,
+        search_seconds=15.0,
+        max_chunk_seconds=240.0,
+        minimum_gap_seconds=0.5,
+    )
+
+    assert [
+        (
+            chunk.start,
+            chunk.end,
+            chunk.boundary,
+        )
+        for chunk in chunks
+    ] == [
+        (0.0, 60.0, "source_gap"),
+        (60.0, 120.0, "source_gap"),
+        (120.0, 180.0, "source_gap"),
+        (180.0, 240.0, "source_gap"),
+        (240.0, 300.0, "source_end"),
+    ]
+
+
+def test_plan_continuous_asr_chunks_handles_long_leading_source_gap(
+    tmp_path,
+) -> None:
+    storage = DatasetStorage(tmp_path)
+
+    _add_region(
+        storage,
+        "region_000001",
+        200.0,
+        260.0,
+        "Detected speech.",
+    )
+
+    chunks = plan_continuous_asr_chunks(
+        storage,
+        "source_001",
+        duration=300.0,
+        target_seconds=60.0,
+        search_seconds=15.0,
+        max_chunk_seconds=240.0,
+        minimum_gap_seconds=0.5,
+    )
+
+    assert chunks[0].start == pytest.approx(0.0)
+    assert chunks[0].end == pytest.approx(60.0)
+    assert chunks[0].boundary == "source_gap"
+
+    assert chunks[1].start == pytest.approx(60.0)
+    assert chunks[1].end == pytest.approx(120.0)
+    assert chunks[1].boundary == "source_gap"
+
+    assert chunks[2].start == pytest.approx(120.0)
+    assert chunks[2].end == pytest.approx(180.0)
+    assert chunks[2].boundary == "source_gap"
+
+    assert chunks[-1].end == pytest.approx(300.0)
+    assert chunks[-1].boundary == "source_end"
+
+
+def test_plan_continuous_asr_chunks_handles_long_internal_gap(
+    tmp_path,
+) -> None:
+    storage = DatasetStorage(tmp_path)
+
+    _add_region(
+        storage,
+        "region_000001",
+        0.0,
+        30.0,
+        "First speech.",
+    )
+
+    _add_region(
+        storage,
+        "region_000002",
+        300.0,
+        340.0,
+        "Second speech.",
+    )
+
+    chunks = plan_continuous_asr_chunks(
+        storage,
+        "source_001",
+        duration=380.0,
+        target_seconds=60.0,
+        search_seconds=15.0,
+        max_chunk_seconds=240.0,
+        minimum_gap_seconds=0.5,
+    )
+
+    assert chunks[0].start == pytest.approx(0.0)
+    assert chunks[0].end == pytest.approx(60.0)
+    assert chunks[0].boundary == "source_gap"
+
+    assert chunks[1].start == pytest.approx(60.0)
+    assert chunks[1].end == pytest.approx(120.0)
+    assert chunks[1].boundary == "source_gap"
+
+    assert chunks[2].start == pytest.approx(120.0)
+    assert chunks[2].end == pytest.approx(180.0)
+    assert chunks[2].boundary == "source_gap"
+
+    assert chunks[3].start == pytest.approx(180.0)
+    assert chunks[3].end == pytest.approx(240.0)
+    assert chunks[3].boundary == "source_gap"
+
+    assert chunks[-1].end == pytest.approx(380.0)
+    assert chunks[-1].boundary == "source_end"
+
+
+def test_continuous_asr_compatibility_rejects_old_provenance_version(
+    tmp_path,
+) -> None:
+    from voice_dataset.continuous_asr import (
+        QWEN3_ASR_MODEL,
+        continuous_asr_evidence_is_compatible,
+    )
+    from voice_dataset.schema import SourceRecord
+
+    storage = DatasetStorage(tmp_path)
+
+    storage.add_source(
+        SourceRecord(
+            id="source_001",
+            metadata={
+                "continuous_asr": {
+                    "qwen3": {
+                        "model": QWEN3_ASR_MODEL,
+                        "representation": "center",
+                        "provenance": {
+                            "version": 1,
+                            "language_override": "English",
+                            "chunking": {
+                                "target_chunk_seconds": 60.0,
+                                "boundary_search_seconds": 15.0,
+                                "max_chunk_seconds": 240.0,
+                                "minimum_gap_seconds": 0.5,
+                            },
+                        },
+                    },
+                },
+            },
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="evidence version is stale",
+    ):
+        continuous_asr_evidence_is_compatible(
+            storage,
+            "source_001",
+            "qwen3",
+            representation_name="center",
+            language="English",
+        )
+
+
+def test_filter_continuous_asr_chunks_skips_non_speech(
+    tmp_path,
+) -> None:
+    from voice_dataset.continuous_asr import (
+        ContinuousAsrChunk,
+        _filter_continuous_asr_chunks_for_speech,
+    )
+
+    storage = DatasetStorage(tmp_path)
+
+    _add_region(
+        storage,
+        "region_000001",
+        10.0,
+        20.0,
+        "Speech.",
+    )
+
+    _add_region(
+        storage,
+        "region_000002",
+        125.0,
+        135.0,
+        "More speech.",
+    )
+
+    chunks = [
+        ContinuousAsrChunk(
+            index=0,
+            start=0.0,
+            end=60.0,
+            boundary="source_gap",
+        ),
+        ContinuousAsrChunk(
+            index=1,
+            start=60.0,
+            end=120.0,
+            boundary="source_gap",
+        ),
+        ContinuousAsrChunk(
+            index=2,
+            start=120.0,
+            end=180.0,
+            boundary="source_gap",
+        ),
+        ContinuousAsrChunk(
+            index=3,
+            start=180.0,
+            end=240.0,
+            boundary="source_end",
+        ),
+    ]
+
+    result = _filter_continuous_asr_chunks_for_speech(
+        storage,
+        "source_001",
+        chunks,
+    )
+
+    assert result == [
+        ContinuousAsrChunk(
+            index=0,
+            start=0.0,
+            end=60.0,
+            boundary="source_gap",
+        ),
+        ContinuousAsrChunk(
+            index=1,
+            start=120.0,
+            end=180.0,
+            boundary="source_gap",
+        ),
+    ]
+
+
+def test_filter_continuous_asr_chunks_ignores_boundary_touch(
+    tmp_path,
+) -> None:
+    from voice_dataset.continuous_asr import (
+        ContinuousAsrChunk,
+        _filter_continuous_asr_chunks_for_speech,
+    )
+
+    storage = DatasetStorage(tmp_path)
+
+    _add_region(
+        storage,
+        "region_000001",
+        60.0,
+        70.0,
+        "Speech.",
+    )
+
+    chunks = [
+        ContinuousAsrChunk(
+            index=0,
+            start=0.0,
+            end=60.0,
+            boundary="source_gap",
+        ),
+        ContinuousAsrChunk(
+            index=1,
+            start=60.0,
+            end=120.0,
+            boundary="source_end",
+        ),
+    ]
+
+    result = _filter_continuous_asr_chunks_for_speech(
+        storage,
+        "source_001",
+        chunks,
+    )
+
+    assert result == [
+        ContinuousAsrChunk(
+            index=0,
+            start=60.0,
+            end=120.0,
+            boundary="source_end",
+        ),
+    ]
+
+
+def test_transcribe_source_qwen3_skips_non_speech_chunks(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import json
+
+    from voice_dataset.continuous_asr import (
+        ContinuousAsrChunk,
+        ContinuousAsrResult,
+        transcribe_source_qwen3,
+    )
+
+    storage = DatasetStorage(tmp_path)
+
+    _add_region(
+        storage,
+        "region_000001",
+        10.0,
+        20.0,
+        "Speech.",
+    )
+
+    source_path = tmp_path / "source.wav"
+    source_path.touch()
+
+    monkeypatch.setattr(
+        "voice_dataset.continuous_asr."
+        "resolve_source_representation",
+        lambda *args, **kwargs: (
+            {
+                "duration": 120.0,
+            },
+            source_path,
+        ),
+    )
+
+    monkeypatch.setattr(
+        "voice_dataset.continuous_asr."
+        "plan_continuous_asr_chunks",
+        lambda *args, **kwargs: [
+            ContinuousAsrChunk(
+                index=0,
+                start=0.0,
+                end=60.0,
+                boundary="source_gap",
+            ),
+            ContinuousAsrChunk(
+                index=1,
+                start=60.0,
+                end=120.0,
+                boundary="source_end",
+            ),
+        ],
+    )
+
+    extracted = []
+
+    def fake_extract_audio_region(
+        *,
+        source,
+        destination,
+        start,
+        end,
+    ):
+        extracted.append(
+            (start, end)
+        )
+        destination.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        destination.touch()
+
+    monkeypatch.setattr(
+        "voice_dataset.continuous_asr."
+        "extract_audio_region",
+        fake_extract_audio_region,
+    )
+
+    worker_manifests = []
+
+    def fake_run_worker(
+        worker_arg,
+        arguments,
+        **kwargs,
+    ):
+        manifest_index = (
+            arguments.index(
+                "--input-manifest"
+            )
+            + 1
+        )
+
+        manifest_path = Path(
+            arguments[manifest_index]
+        )
+
+        worker_manifests.append(
+            json.loads(
+                manifest_path.read_text(
+                    encoding="utf-8"
+                )
+            )
+        )
+
+    monkeypatch.setattr(
+        "voice_dataset.continuous_asr."
+        "run_worker",
+        fake_run_worker,
+    )
+
+    monkeypatch.setattr(
+        "voice_dataset.continuous_asr."
+        "_load_qwen_output",
+        lambda path: ContinuousAsrResult(
+            language="English",
+            text="Speech.",
+            words=[
+                {
+                    "text": "Speech",
+                    "start": 10.0,
+                    "end": 10.5,
+                }
+            ],
+            utterances=[
+                {
+                    "text": "Speech.",
+                    "word_start": 0,
+                    "word_end": 1,
+                }
+            ],
+            chunks=(
+                ContinuousAsrChunk(
+                    index=0,
+                    start=0.0,
+                    end=60.0,
+                    boundary="source_gap",
+                ),
+            ),
+        ),
+    )
+
+    attached = []
+
+    monkeypatch.setattr(
+        "voice_dataset.continuous_asr."
+        "attach_continuous_asr",
+        lambda *args, **kwargs: (
+            attached.append(
+                (args, kwargs)
+            )
+        ),
+    )
+
+    result = transcribe_source_qwen3(
+        storage,
+        "source_001",
+        representation_name="center",
+        language="en",
+    )
+
+    assert result.text == "Speech."
+
+    assert extracted == [
+        (0.0, 60.0),
+    ]
+
+    assert len(worker_manifests) == 1
+
+    assert worker_manifests[0]["chunks"] == [
+        {
+            "index": 0,
+            "path": worker_manifests[0][
+                "chunks"
+            ][0]["path"],
+            "start": 0.0,
+            "end": 60.0,
+            "boundary": "source_gap",
+        }
+    ]
+
+    assert len(attached) == 1
+
+
+def test_transcribe_source_qwen3_handles_no_speech_chunks(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from voice_dataset.continuous_asr import (
+        ContinuousAsrChunk,
+        transcribe_source_qwen3,
+    )
+
+    storage = DatasetStorage(tmp_path)
+
+    source_path = tmp_path / "source.wav"
+    source_path.touch()
+
+    monkeypatch.setattr(
+        "voice_dataset.continuous_asr."
+        "resolve_source_representation",
+        lambda *args, **kwargs: (
+            {
+                "duration": 120.0,
+            },
+            source_path,
+        ),
+    )
+
+    monkeypatch.setattr(
+        "voice_dataset.continuous_asr."
+        "plan_continuous_asr_chunks",
+        lambda *args, **kwargs: [
+            ContinuousAsrChunk(
+                index=0,
+                start=0.0,
+                end=60.0,
+                boundary="source_gap",
+            ),
+            ContinuousAsrChunk(
+                index=1,
+                start=60.0,
+                end=120.0,
+                boundary="source_end",
+            ),
+        ],
+    )
+
+    worker_calls = []
+
+    monkeypatch.setattr(
+        "voice_dataset.continuous_asr."
+        "run_worker",
+        lambda *args, **kwargs: (
+            worker_calls.append(
+                (args, kwargs)
+            )
+        ),
+    )
+
+    extracted = []
+
+    monkeypatch.setattr(
+        "voice_dataset.continuous_asr."
+        "extract_audio_region",
+        lambda **kwargs: (
+            extracted.append(kwargs)
+        ),
+    )
+
+    attached = []
+
+    def fake_attach(
+        *args,
+        **kwargs,
+    ):
+        attached.append(
+            (args, kwargs)
+        )
+
+    monkeypatch.setattr(
+        "voice_dataset.continuous_asr."
+        "attach_continuous_asr",
+        fake_attach,
+    )
+
+    result = transcribe_source_qwen3(
+        storage,
+        "source_001",
+        representation_name="center",
+        language="en",
+    )
+
+    assert worker_calls == []
+    assert extracted == []
+
+    assert result.language is None
+    assert result.text == ""
+    assert result.words == []
+    assert result.utterances == []
+    assert result.chunks == ()
+
+    assert len(attached) == 1
+
+    _, attach_kwargs = attached[0]
+
+    assert attach_kwargs["language"] is None
+    assert attach_kwargs["text"] == ""
+    assert attach_kwargs["words"] == []
+    assert attach_kwargs["utterances"] == []

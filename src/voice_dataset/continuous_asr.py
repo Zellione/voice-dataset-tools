@@ -15,7 +15,7 @@ from .workers import run_worker, worker
 
 QWEN3_ASR_MODEL = "Qwen/Qwen3-ASR-0.6B"
 
-CONTINUOUS_ASR_EVIDENCE_VERSION = 1
+CONTINUOUS_ASR_EVIDENCE_VERSION = 2
 
 _SENTENCE_RE = re.compile(r".+?(?:[.!?]+(?=\s|$)|$)", re.DOTALL)
 _TOKEN_RE = re.compile(r"\w+(?:['’]\w+)*", re.UNICODE)
@@ -237,6 +237,57 @@ def plan_continuous_asr_chunks(
             (boundary, reason)
         )
 
+    silence_zones: list[
+        tuple[float, float]
+    ] = []
+
+    half_gap = minimum_gap_seconds / 2.0
+
+    if not speech_blocks:
+        silence_zones.append(
+            (0.0, duration)
+        )
+    else:
+        first_speech_start = speech_blocks[0][0]
+
+        if first_speech_start >= minimum_gap_seconds:
+            silence_zones.append(
+                (
+                    0.0,
+                    first_speech_start - half_gap,
+                )
+            )
+
+        for previous, following in zip(
+            speech_blocks,
+            speech_blocks[1:],
+        ):
+            previous_end = previous[1]
+            following_start = following[0]
+
+            gap = following_start - previous_end
+
+            if gap < minimum_gap_seconds:
+                continue
+
+            silence_zones.append(
+                (
+                    previous_end + half_gap,
+                    following_start - half_gap,
+                )
+            )
+
+        final_speech_end = speech_blocks[-1][1]
+        trailing_gap = duration - final_speech_end
+
+        if trailing_gap >= minimum_gap_seconds:
+            silence_zones.append(
+                (
+                    final_speech_end + half_gap,
+                    duration,
+                )
+            )
+
     chunks: list[ContinuousAsrChunk] = []
     start = 0.0
 
@@ -255,6 +306,42 @@ def plan_continuous_asr_chunks(
             break
 
         target = start + target_seconds
+
+        current_silence_zone = next(
+            (
+                (zone_start, zone_end)
+                for zone_start, zone_end in silence_zones
+                if zone_start <= start <= zone_end
+            ),
+            None,
+        )
+
+        if current_silence_zone is not None:
+            _, zone_end = current_silence_zone
+
+            if target <= zone_end:
+                end = min(
+                    target,
+                    duration,
+                )
+
+                reason = (
+                    "source_end"
+                    if end >= duration
+                    else "source_gap"
+                )
+
+                chunks.append(
+                    ContinuousAsrChunk(
+                        index=len(chunks),
+                        start=start,
+                        end=end,
+                        boundary=reason,
+                    )
+                )
+
+                start = end
+                continue
 
         preferred_low = max(
             start + 1.0,
@@ -275,6 +362,28 @@ def plan_continuous_asr_chunks(
                 <= preferred_high
             )
         ]
+
+        for zone_start, zone_end in silence_zones:
+            if not (
+                zone_start
+                <= target
+                <= zone_end
+            ):
+                continue
+
+            if not (
+                preferred_low
+                <= target
+                <= preferred_high
+            ):
+                continue
+
+            preferred.append(
+                (
+                    target,
+                    "source_gap",
+                )
+            )
 
         if preferred:
             sentence_candidates = [
@@ -306,7 +415,38 @@ def plan_continuous_asr_chunks(
             ]
 
             if not extension:
-                if duration <= start + max_chunk_seconds:
+                source_gap_extension = []
+
+                for zone_start, zone_end in silence_zones:
+                    safe_start = max(
+                        zone_start,
+                        preferred_high,
+                    )
+
+                    if safe_start > zone_end:
+                        continue
+
+                    if (
+                        safe_start
+                        > start + max_chunk_seconds
+                    ):
+                        continue
+
+                    source_gap_extension.append(
+                        (
+                            safe_start,
+                            "source_gap",
+                        )
+                    )
+
+                if source_gap_extension:
+                    end, reason = min(
+                        source_gap_extension,
+                        key=lambda candidate: (
+                            candidate[0]
+                        ),
+                    )
+                elif duration <= start + max_chunk_seconds:
                     end = duration
                     reason = "source_end"
                 else:
@@ -358,6 +498,53 @@ def plan_continuous_asr_chunks(
         start = end
 
     return chunks
+
+
+def _filter_continuous_asr_chunks_for_speech(
+    storage: DatasetStorage,
+    source_id: str,
+    chunks: list[ContinuousAsrChunk],
+) -> list[ContinuousAsrChunk]:
+    regions = [
+        region
+        for region in storage.regions.load()
+        if region.get("source_id") == source_id
+    ]
+
+    speech_ranges = [
+        (
+            float(region["source_start"]),
+            float(region["source_end"]),
+        )
+        for region in regions
+        if (
+            float(region["source_end"])
+            > float(region["source_start"])
+        )
+    ]
+
+    filtered: list[ContinuousAsrChunk] = []
+
+    for chunk in chunks:
+        has_speech = any(
+            region_start < chunk.end
+            and region_end > chunk.start
+            for region_start, region_end in speech_ranges
+        )
+
+        if not has_speech:
+            continue
+
+        filtered.append(
+            ContinuousAsrChunk(
+                index=len(filtered),
+                start=chunk.start,
+                end=chunk.end,
+                boundary=chunk.boundary,
+            )
+        )
+
+    return filtered
 
 
 def _validate_word_timeline(
@@ -1381,6 +1568,39 @@ def transcribe_source_qwen3(
         source_id,
         duration=duration,
     )
+
+    chunks = _filter_continuous_asr_chunks_for_speech(
+        storage,
+        source_id,
+        chunks,
+    )
+
+    if not chunks:
+        result = ContinuousAsrResult(
+            language=None,
+            text="",
+            words=[],
+            utterances=[],
+            chunks=(),
+        )
+
+        attach_continuous_asr(
+            storage,
+            source_id,
+            evidence_name,
+            model=QWEN3_ASR_MODEL,
+            representation=representation_name,
+            language=result.language,
+            text=result.text,
+            words=result.words,
+            utterances=result.utterances,
+            language_override=language,
+            provenance_version=(
+                CONTINUOUS_ASR_EVIDENCE_VERSION
+            ),
+        )
+
+        return result
 
     with tempfile.TemporaryDirectory(
         prefix="voice-dataset-qwen3-"
