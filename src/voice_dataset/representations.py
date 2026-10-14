@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import soundfile as sf
+
 from .media import (
     extract_audio_region,
     probe_audio_streams,
@@ -13,11 +16,181 @@ from .schema import AudioRepresentation
 from .storage import DatasetStorage
 
 
-TURN_CONTEXT_PADDING_SECONDS = 0.250
-PADDED_TURN_PURPOSES = {
+TURN_BOUNDARY_PADDING_SECONDS = 0.250
+BOUNDARY_PADDED_TURN_PURPOSES = {
     "review",
     "tts_candidate",
 }
+
+BOUNDARY_SIGNAL_WINDOW_SECONDS = 0.030
+BOUNDARY_SIGNAL_MINIMUM_RMS = 0.003
+BOUNDARY_SIGNAL_MINIMUM_CONTINUITY = 0.25
+
+
+def _boundary_requires_padding(
+    source: Path,
+    boundary: float,
+    *,
+    side: str,
+    window: float = BOUNDARY_SIGNAL_WINDOW_SECONDS,
+    minimum_rms: float = BOUNDARY_SIGNAL_MINIMUM_RMS,
+    minimum_continuity: float = (
+        BOUNDARY_SIGNAL_MINIMUM_CONTINUITY
+    ),
+) -> bool:
+    if side not in {"start", "end"}:
+        raise ValueError(
+            f"Unsupported boundary side: {side}"
+        )
+
+    if window <= 0:
+        raise ValueError(
+            "window must be positive"
+        )
+
+    if minimum_rms < 0:
+        raise ValueError(
+            "minimum_rms must not be negative"
+        )
+
+    if not (
+        0.0
+        <= minimum_continuity
+        <= 1.0
+    ):
+        raise ValueError(
+            "minimum_continuity must be between "
+            "zero and one"
+        )
+
+    source = source.resolve()
+
+    if not source.is_file():
+        raise FileNotFoundError(source)
+
+    with sf.SoundFile(source) as audio:
+        sample_rate = int(audio.samplerate)
+        total_frames = int(audio.frames)
+
+        if sample_rate <= 0:
+            raise ValueError(
+                "Audio has invalid sample rate"
+            )
+
+        boundary_frame = int(
+            round(
+                float(boundary)
+                * sample_rate
+            )
+        )
+
+        boundary_frame = max(
+            0,
+            min(
+                total_frames,
+                boundary_frame,
+            ),
+        )
+
+        window_frames = max(
+            1,
+            int(
+                round(
+                    window
+                    * sample_rate
+                )
+            ),
+        )
+
+        left_start = max(
+            0,
+            boundary_frame - window_frames,
+        )
+        left_count = (
+            boundary_frame - left_start
+        )
+
+        right_end = min(
+            total_frames,
+            boundary_frame + window_frames,
+        )
+        right_count = (
+            right_end - boundary_frame
+        )
+
+        if (
+            left_count <= 0
+            or right_count <= 0
+        ):
+            return False
+
+        audio.seek(left_start)
+
+        left = audio.read(
+            left_count,
+            dtype="float32",
+            always_2d=True,
+        )
+
+        audio.seek(boundary_frame)
+
+        right = audio.read(
+            right_count,
+            dtype="float32",
+            always_2d=True,
+        )
+
+    if (
+        left.size == 0
+        or right.size == 0
+    ):
+        return False
+
+    # Compute RMS across all samples and channels
+    # directly. Averaging channels first could cancel
+    # valid signal in anti-phase material.
+    left_rms = float(
+        np.sqrt(
+            np.mean(
+                np.square(
+                    left,
+                    dtype=np.float32,
+                )
+            )
+        )
+    )
+
+    right_rms = float(
+        np.sqrt(
+            np.mean(
+                np.square(
+                    right,
+                    dtype=np.float32,
+                )
+            )
+        )
+    )
+
+    peak_rms = max(
+        left_rms,
+        right_rms,
+    )
+
+    if peak_rms < minimum_rms:
+        return False
+
+    continuity = (
+        min(
+            left_rms,
+            right_rms,
+        )
+        / peak_rms
+    )
+
+    return (
+        continuity
+        >= minimum_continuity
+    )
 
 
 @dataclass
@@ -1072,8 +1245,8 @@ def materialize_turns(
         )
     )
 
-    purpose_uses_context_padding = bool(
-        PADDED_TURN_PURPOSES.intersection(
+    purpose_uses_boundary_padding = bool(
+        BOUNDARY_PADDED_TURN_PURPOSES.intersection(
             purposes
         )
     )
@@ -1139,47 +1312,60 @@ def materialize_turns(
             == "manual"
         )
 
-        use_context_padding = (
-            purpose_uses_context_padding
+        if (
+            purpose_uses_boundary_padding
             and not manually_curated_boundary
-        )
-
-        if use_context_padding:
-            clip_start = max(
-                0.0,
-                canonical_start
-                - TURN_CONTEXT_PADDING_SECONDS,
-            )
-            clip_end = (
-                canonical_end
-                + TURN_CONTEXT_PADDING_SECONDS
+        ):
+            pad_start = _boundary_requires_padding(
+                source,
+                canonical_start,
+                side="start",
             )
 
-            if index > 0:
-                previous_end = float(
-                    source_turns[index - 1][
-                        "source_end"
-                    ]
+            pad_end = _boundary_requires_padding(
+                source,
+                canonical_end,
+                side="end",
+            )
+
+            if pad_start:
+                clip_start = max(
+                    0.0,
+                    canonical_start
+                    - TURN_BOUNDARY_PADDING_SECONDS,
                 )
 
-                if previous_end <= canonical_start:
-                    clip_start = max(
-                        clip_start,
-                        previous_end,
+                if index > 0:
+                    previous_end = float(
+                        source_turns[index - 1][
+                            "source_end"
+                        ]
                     )
 
-            if index + 1 < len(source_turns):
-                next_start = float(
-                    source_turns[index + 1][
-                        "source_start"
-                    ]
+                    if previous_end <= canonical_start:
+                        clip_start = max(
+                            clip_start,
+                            previous_end,
+                        )
+
+            if pad_end:
+                clip_end = (
+                    canonical_end
+                    + TURN_BOUNDARY_PADDING_SECONDS
                 )
 
-                if next_start >= canonical_end:
-                    clip_end = min(
-                        clip_end,
-                        next_start,
+                if index + 1 < len(source_turns):
+                    next_start = float(
+                        source_turns[index + 1][
+                            "source_start"
+                        ]
                     )
+
+                    if next_start >= canonical_end:
+                        clip_end = min(
+                            clip_end,
+                            next_start,
+                        )
 
         representations = turn.get(
             "representations"

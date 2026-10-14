@@ -3439,3 +3439,76 @@ def test_merge_preserves_retained_turn_identity_and_auto_review_status(
     assert storage.get_turn(
         "turn_000002"
     ) is not None
+
+
+def test_trim_noop_does_not_mark_boundary_manual(
+    tmp_path,
+    monkeypatch,
+):
+    storage = _storage_with_qwen(tmp_path)
+
+    storage.turns.append(
+        {
+            "schema_version": 1,
+            "record_type": "turn",
+            "id": "turn_000001",
+            "source_id": "source_001",
+            "source_start": 0.9,
+            "source_end": 1.9,
+            "source_regions": [
+                "region_000001",
+            ],
+            "language": "en",
+            "transcript": "hello there",
+            "assignment": {
+                "status": "unknown",
+                "voice_id": None,
+                "method": None,
+            },
+            "representations": {},
+            "embeddings": {},
+            "metadata": {},
+        }
+    )
+
+    prepared = []
+
+    def fake_prepare(
+        storage_arg,
+        source_id,
+        *,
+        capture_output=False,
+    ):
+        assert storage_arg is storage
+        assert capture_output is True
+        prepared.append(source_id)
+
+    monkeypatch.setattr(
+        "voice_dataset.turn_curation."
+        "prepare_curated_source_turns",
+        fake_prepare,
+    )
+
+    from voice_dataset.turn_curation import (
+        trim_and_prepare_turn,
+    )
+
+    result = trim_and_prepare_turn(
+        storage,
+        "turn_000001",
+        source_start=0.9,
+        source_end=1.9,
+    )
+
+    assert result["source_start"] == 0.9
+    assert result["source_end"] == 1.9
+
+    assert (
+        "boundary_curation"
+        not in result["metadata"]
+    )
+
+    # A no-op boundary submission still reprepares
+    # derived review audio so changed materialization
+    # policy can take effect.
+    assert prepared == ["source_001"]

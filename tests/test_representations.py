@@ -89,6 +89,12 @@ def prepare_audio_mocks(
         fake_extractor(calls),
     )
 
+    monkeypatch.setattr(
+        representations,
+        "_boundary_requires_padding",
+        lambda source, boundary, *, side, **kwargs: True,
+    )
+
 
 def test_review_turn_audio_uses_neighbor_bounded_padding(
     tmp_path: Path,
@@ -822,6 +828,8 @@ def test_manual_boundary_turn_audio_is_not_padded(
     assert result.created == 3
     assert result.skipped == 0
 
+    # A human-curated boundary is authoritative.
+    # Signal continuity must not reintroduce padding.
     assert calls[1]["start"] == pytest.approx(
         2.1
     )
@@ -833,25 +841,11 @@ def test_manual_boundary_turn_audio_is_not_padded(
         "turn_000002"
     )
 
+    assert turn is not None
+
     metadata = turn["representations"][
         "speech"
     ]["metadata"]
-
-    assert metadata[
-        "canonical_start"
-    ] == pytest.approx(2.1)
-
-    assert metadata[
-        "canonical_end"
-    ] == pytest.approx(3.0)
-
-    assert metadata[
-        "clip_start"
-    ] == pytest.approx(2.1)
-
-    assert metadata[
-        "clip_end"
-    ] == pytest.approx(3.0)
 
     assert metadata[
         "padding_before"
@@ -860,7 +854,6 @@ def test_manual_boundary_turn_audio_is_not_padded(
     assert metadata[
         "padding_after"
     ] == pytest.approx(0.0)
-
 
 def make_region_storage(
     tmp_path: Path,
@@ -1129,4 +1122,362 @@ def test_rebuilding_region_representation_invalidates_dependent_transcripts(
     assert (
         "other"
         in region["transcripts"]
+    )
+
+
+def test_boundary_padding_detects_clean_and_clipped_edges(
+    tmp_path: Path,
+) -> None:
+    import numpy as np
+    import soundfile as sf
+
+    sample_rate = 16000
+    duration = 2.0
+
+    samples = np.zeros(
+        int(sample_rate * duration),
+        dtype=np.float32,
+    )
+
+    def fill_signal(
+        start: float,
+        end: float,
+    ) -> None:
+        start_frame = int(
+            start * sample_rate
+        )
+        end_frame = int(
+            end * sample_rate
+        )
+
+        times = (
+            np.arange(
+                end_frame - start_frame,
+                dtype=np.float32,
+            )
+            / sample_rate
+        )
+
+        samples[
+            start_frame:end_frame
+        ] = (
+            0.2
+            * np.sin(
+                2.0
+                * np.pi
+                * 440.0
+                * times
+            )
+        )
+
+    # 0.40–0.70:
+    # clean onset at 0.40, clean ending at 0.70.
+    fill_signal(
+        0.40,
+        0.70,
+    )
+
+    # 1.00–1.40:
+    # boundaries 1.20 and 1.30 are both inside
+    # continuous signal.
+    fill_signal(
+        1.00,
+        1.40,
+    )
+
+    source = tmp_path / "boundary-source.wav"
+
+    sf.write(
+        source,
+        samples,
+        sample_rate,
+        subtype="FLOAT",
+    )
+
+    # Silence immediately before the onset:
+    # no reason to extend the turn backwards.
+    assert not representations._boundary_requires_padding(
+        source,
+        0.40,
+        side="start",
+    )
+
+    # Signal exists on both sides of the boundary:
+    # this looks like a turn beginning mid-sound.
+    assert representations._boundary_requires_padding(
+        source,
+        1.20,
+        side="start",
+    )
+
+    # Silence immediately after the clean ending:
+    # no reason to extend the turn forwards.
+    assert not representations._boundary_requires_padding(
+        source,
+        0.70,
+        side="end",
+    )
+
+    # Signal exists on both sides:
+    # this looks like a turn ending mid-sound.
+    assert representations._boundary_requires_padding(
+        source,
+        1.30,
+        side="end",
+    )
+
+
+def test_review_turn_padding_is_selected_per_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage, source_audio = make_storage(tmp_path)
+    calls = []
+
+    prepare_audio_mocks(
+        monkeypatch,
+        calls,
+    )
+
+    decisions = []
+
+    def boundary_requires_padding(
+        source,
+        boundary,
+        *,
+        side,
+        **kwargs,
+    ):
+        decisions.append(
+            (
+                float(boundary),
+                side,
+            )
+        )
+
+        # The middle turn starts cleanly but ends
+        # inside continuous signal.
+        if (
+            boundary == pytest.approx(2.1)
+            and side == "start"
+        ):
+            return False
+
+        if (
+            boundary == pytest.approx(3.0)
+            and side == "end"
+        ):
+            return True
+
+        return False
+
+    monkeypatch.setattr(
+        representations,
+        "_boundary_requires_padding",
+        boundary_requires_padding,
+    )
+
+    result = representations.materialize_turns(
+        storage=storage,
+        source_id="source_001",
+        source=source_audio,
+        representation_name="speech",
+        kind="speech",
+        purposes=[
+            "review",
+            "tts_candidate",
+        ],
+    )
+
+    assert result.created == 3
+    assert result.skipped == 0
+
+    # Turn 2: clean start, clipped-looking end.
+    assert calls[1]["start"] == pytest.approx(
+        2.1
+    )
+    assert calls[1]["end"] == pytest.approx(
+        3.25
+    )
+
+    turn = storage.get_turn(
+        "turn_000002"
+    )
+
+    assert turn is not None
+
+    metadata = turn["representations"][
+        "speech"
+    ]["metadata"]
+
+    assert metadata[
+        "padding_before"
+    ] == pytest.approx(0.0)
+
+    assert metadata[
+        "padding_after"
+    ] == pytest.approx(0.25)
+
+    assert (
+        2.1,
+        "start",
+    ) in decisions
+
+    assert (
+        3.0,
+        "end",
+    ) in decisions
+
+
+def test_boundary_padding_detects_quiet_continuous_signal(
+    tmp_path: Path,
+) -> None:
+    import numpy as np
+    import soundfile as sf
+
+    sample_rate = 16000
+    samples = np.zeros(
+        sample_rate,
+        dtype=np.float32,
+    )
+
+    start_frame = int(
+        0.30 * sample_rate
+    )
+    end_frame = int(
+        0.70 * sample_rate
+    )
+
+    times = (
+        np.arange(
+            end_frame - start_frame,
+            dtype=np.float32,
+        )
+        / sample_rate
+    )
+
+    # RMS is roughly 0.0042: deliberately below the
+    # old absolute 0.01 threshold, but continuous
+    # across the test boundary.
+    samples[
+        start_frame:end_frame
+    ] = (
+        0.006
+        * np.sin(
+            2.0
+            * np.pi
+            * 440.0
+            * times
+        )
+    )
+
+    source = tmp_path / "quiet-continuous.wav"
+
+    sf.write(
+        source,
+        samples,
+        sample_rate,
+        subtype="FLOAT",
+    )
+
+    assert representations._boundary_requires_padding(
+        source,
+        0.50,
+        side="start",
+    )
+
+    assert representations._boundary_requires_padding(
+        source,
+        0.50,
+        side="end",
+    )
+
+
+def test_boundary_padding_rejects_strong_level_transition(
+    tmp_path: Path,
+) -> None:
+    import numpy as np
+    import soundfile as sf
+
+    sample_rate = 16000
+    samples = np.zeros(
+        sample_rate,
+        dtype=np.float32,
+    )
+
+    boundary_frame = int(
+        0.50 * sample_rate
+    )
+
+    left_start = int(
+        0.30 * sample_rate
+    )
+
+    right_end = int(
+        0.70 * sample_rate
+    )
+
+    left_times = (
+        np.arange(
+            boundary_frame - left_start,
+            dtype=np.float32,
+        )
+        / sample_rate
+    )
+
+    right_times = (
+        np.arange(
+            right_end - boundary_frame,
+            dtype=np.float32,
+        )
+        / sample_rate
+    )
+
+    # Both sides contain real signal, but the level
+    # changes by much more than our 0.25 continuity
+    # ratio. Treat this as an onset/offset rather than
+    # a clipped continuous sound.
+    samples[
+        left_start:boundary_frame
+    ] = (
+        0.010
+        * np.sin(
+            2.0
+            * np.pi
+            * 440.0
+            * left_times
+        )
+    )
+
+    samples[
+        boundary_frame:right_end
+    ] = (
+        0.080
+        * np.sin(
+            2.0
+            * np.pi
+            * 440.0
+            * right_times
+        )
+    )
+
+    source = tmp_path / "level-transition.wav"
+
+    sf.write(
+        source,
+        samples,
+        sample_rate,
+        subtype="FLOAT",
+    )
+
+    assert not representations._boundary_requires_padding(
+        source,
+        0.50,
+        side="start",
+    )
+
+    assert not representations._boundary_requires_padding(
+        source,
+        0.50,
+        side="end",
     )

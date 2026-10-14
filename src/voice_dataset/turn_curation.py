@@ -954,6 +954,11 @@ def trim_and_prepare_turn(
             current_projection.projection.word_indices
         )
 
+    boundaries_changed = (
+        new_start != current_start
+        or new_end != current_end
+    )
+
     def update(
         record: dict[str, Any],
     ) -> dict[str, Any]:
@@ -970,9 +975,10 @@ def trim_and_prepare_turn(
                 f"{turn_id}: invalid metadata"
             )
 
-        metadata["boundary_curation"] = {
-            "method": "manual",
-        }
+        if boundaries_changed:
+            metadata["boundary_curation"] = {
+                "method": "manual",
+            }
 
         if canonical_word_indices:
             metadata["word_range"] = {
