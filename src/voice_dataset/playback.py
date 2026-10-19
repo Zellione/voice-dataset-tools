@@ -77,34 +77,35 @@ class PlaybackEngine:
     def _on_finished(self) -> None:
         self._finished.set()
 
-    def _close_stream_locked(self) -> None:
+    def _detach_stream_locked(self):
         stream = self._stream
 
         self._stream = None
         self._sample_rate = None
         self._channels = None
 
-        if stream is None:
-            return
+        return stream
 
-        stream.close()
-
-    def _ensure_stream_locked(
+    def _ensure_stream(
         self,
         sample_rate: int,
         channels: int,
     ):
-        stream = self._stream
+        with self._lock:
+            stream = self._stream
 
-        if (
-            stream is not None
-            and self._sample_rate == sample_rate
-            and self._channels == channels
-            and not stream.closed
-        ):
-            return stream
+            if (
+                stream is not None
+                and self._sample_rate == sample_rate
+                and self._channels == channels
+                and not stream.closed
+            ):
+                return stream
 
-        self._close_stream_locked()
+            old_stream = self._detach_stream_locked()
+
+        if old_stream is not None:
+            old_stream.close()
 
         stream = sd.OutputStream(
             samplerate=sample_rate,
@@ -115,9 +116,10 @@ class PlaybackEngine:
             finished_callback=self._on_finished,
         )
 
-        self._stream = stream
-        self._sample_rate = sample_rate
-        self._channels = channels
+        with self._lock:
+            self._stream = stream
+            self._sample_rate = sample_rate
+            self._channels = channels
 
         return stream
 
@@ -154,12 +156,12 @@ class PlaybackEngine:
 
         channels = int(samples.shape[1])
 
-        with self._lock:
-            stream = self._ensure_stream_locked(
-                sample_rate,
-                channels,
-            )
+        stream = self._ensure_stream(
+            sample_rate,
+            channels,
+        )
 
+        with self._lock:
             self._audio = samples
             self._position = 0
             self._finished.clear()
@@ -206,7 +208,10 @@ class PlaybackEngine:
         self.stop()
 
         with self._lock:
-            self._close_stream_locked()
+            stream = self._detach_stream_locked()
+
+        if stream is not None:
+            stream.close()
 
 
 _playback_engine = PlaybackEngine()

@@ -746,3 +746,112 @@ def test_playback_engine_finished_callback_marks_idle():
     engine._on_finished()
 
     assert engine.is_playing() is False
+
+
+def test_playback_engine_closes_stream_without_holding_lock(
+    monkeypatch,
+):
+    import threading
+
+    engine = playback.PlaybackEngine()
+    close_checked = threading.Event()
+
+    class LockCheckingStream:
+        closed = False
+        active = False
+
+        def close(self):
+            acquired = []
+
+            def try_lock():
+                got_lock = engine._lock.acquire(
+                    timeout=0.5,
+                )
+
+                acquired.append(got_lock)
+
+                if got_lock:
+                    engine._lock.release()
+
+            thread = threading.Thread(
+                target=try_lock,
+            )
+            thread.start()
+            thread.join(timeout=1.0)
+
+            assert acquired == [True]
+
+            self.closed = True
+            close_checked.set()
+
+    engine._stream = LockCheckingStream()
+    engine._sample_rate = 48000
+    engine._channels = 1
+
+    engine.close()
+
+    assert close_checked.is_set()
+
+
+def test_playback_engine_replaces_stream_without_holding_lock(
+    monkeypatch,
+):
+    import threading
+
+    engine = playback.PlaybackEngine()
+    created = []
+
+    class LockCheckingStream(FakeOutputStream):
+        def close(self):
+            acquired = []
+
+            def try_lock():
+                got_lock = engine._lock.acquire(
+                    timeout=0.5,
+                )
+
+                acquired.append(got_lock)
+
+                if got_lock:
+                    engine._lock.release()
+
+            thread = threading.Thread(
+                target=try_lock,
+            )
+            thread.start()
+            thread.join(timeout=1.0)
+
+            assert acquired == [True]
+
+            super().close()
+
+    def make_stream(**kwargs):
+        stream = LockCheckingStream(**kwargs)
+        created.append(stream)
+        return stream
+
+    monkeypatch.setattr(
+        playback.sd,
+        "OutputStream",
+        make_stream,
+    )
+
+    engine.play(
+        np.zeros(
+            480,
+            dtype=np.float32,
+        ),
+        48000,
+    )
+
+    engine.play(
+        np.zeros(
+            (480, 2),
+            dtype=np.float32,
+        ),
+        48000,
+    )
+
+    assert len(created) == 2
+
+    engine.close()
