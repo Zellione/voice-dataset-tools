@@ -7,7 +7,7 @@ from voice_dataset.voices import (
 
 
 
-def test_assigning_ignored_voice_rejects_turn(
+def test_assigning_ignored_voice_does_not_change_curation(
     tmp_path,
 ):
     storage = DatasetStorage(tmp_path)
@@ -48,13 +48,12 @@ def test_assigning_ignored_voice_rejects_turn(
         "turn_001"
     )
 
-    assert (
-        turn["curation"]["status"]
-        == "rejected"
-    )
+    assert turn["curation"] == {
+        "status": "pending",
+    }
 
 
-def test_ignoring_voice_rejects_all_assigned_turns(
+def test_ignoring_voice_does_not_change_turn_curation(
     tmp_path,
 ):
     storage = DatasetStorage(tmp_path)
@@ -98,10 +97,9 @@ def test_ignoring_voice_rejects_all_assigned_turns(
             f"turn_{index:03d}"
         )
 
-        assert (
-            turn["curation"]["status"]
-            == "rejected"
-        )
+        assert turn["curation"] == {
+            "status": "accepted",
+        }
 
 def test_rejected_turn_does_not_ignore_voice(
     tmp_path,

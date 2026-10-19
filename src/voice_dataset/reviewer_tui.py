@@ -173,7 +173,6 @@ class HelpScreen(ModalScreen[None]):
 class NewVoiceRequest:
     character: str | None
     language: str | None
-    ignored: bool = False
 
 
 @dataclass(frozen=True)
@@ -252,22 +251,10 @@ class NewVoiceScreen(
         ),
     ]
 
-    def __init__(
-        self,
-        *,
-        ignored: bool = False,
-    ) -> None:
-        super().__init__()
-        self.ignored = ignored
-
     def compose(self) -> ComposeResult:
         with Vertical(id="new-voice-dialog"):
             yield Static(
-                (
-                    "Create Ignored Voice"
-                    if self.ignored
-                    else "Create Voice"
-                ),
+                "Create Voice",
                 id="new-voice-title",
             )
 
@@ -353,7 +340,6 @@ class NewVoiceScreen(
             NewVoiceRequest(
                 character=character_value or None,
                 language=language_value or None,
-                ignored=self.ignored,
             )
         )
 
@@ -458,11 +444,6 @@ class VoicePickerScreen(
             "New Voice",
         ),
         Binding(
-            "g",
-            "new_ignored_voice",
-            "New Ignored",
-        ),
-        Binding(
             "escape",
             "cancel",
             "Cancel",
@@ -555,12 +536,10 @@ class VoicePickerScreen(
                 "Enter Assign   "
                 "e Edit   "
                 "n New Voice   "
-                "g New Ignored   "
                 "Esc Cancel"
                 if self.voice_ids
                 else (
                     "n New Voice   "
-                    "g New Ignored   "
                     "Esc Cancel"
                 )
             ),
@@ -640,14 +619,6 @@ class VoicePickerScreen(
     def action_new_voice(self) -> None:
         self.app.push_screen(
             NewVoiceScreen(),
-            self._new_voice_created,
-        )
-
-    def action_new_ignored_voice(self) -> None:
-        self.app.push_screen(
-            NewVoiceScreen(
-                ignored=True,
-            ),
             self._new_voice_created,
         )
 
@@ -2955,11 +2926,6 @@ class ReviewerTUI(App[None]):
             "Voice",
         ),
         Binding(
-            "g",
-            "ignore_assigned_voice",
-            "Ignore Voice",
-        ),
-        Binding(
             "a",
             "mark_reviewed",
             "Reviewed",
@@ -3041,7 +3007,6 @@ class ReviewerTUI(App[None]):
 
     SECONDARY_SHORTCUT_ACTIONS = {
         "assign_voice",
-        "ignore_assigned_voice",
         "mark_reviewed",
         "mark_pending",
         "mark_unknown",
@@ -3590,16 +3555,11 @@ class ReviewerTUI(App[None]):
                     .create_and_assign_voice(
                         character=result.character,
                         language=result.language,
-                        ignored=result.ignored,
                     )
                 )
 
                 message = (
-                    (
-                        "Created and assigned ignored voice: "
-                        if result.ignored
-                        else "Created and assigned voice: "
-                    )
+                    "Created and assigned voice: "
                     + str(voice["id"])
                 )
             else:
@@ -3678,30 +3638,6 @@ class ReviewerTUI(App[None]):
             ),
             self._voice_selected,
         )
-
-    def action_ignore_assigned_voice(
-        self,
-    ) -> None:
-        try:
-            voice = (
-                self.session
-                .ignore_assigned_voice()
-            )
-
-            self._refresh_view()
-            self._set_status(
-                "Voice ignored: "
-                f"{voice['id']}"
-            )
-        except (
-            ValueError,
-            KeyError,
-            RuntimeError,
-            OSError,
-        ) as exc:
-            self._set_status(
-                f"Ignore voice failed: {exc}"
-            )
 
     def action_mark_reviewed(self) -> None:
         try:

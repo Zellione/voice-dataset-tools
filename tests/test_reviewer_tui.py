@@ -5787,3 +5787,17 @@ async def test_edge_recovery_failure_closes_progress_modal(
         await pilot.pause()
 
         assert len(app.screen_stack) == 2
+
+
+def test_reviewer_tui_has_no_ignore_voice_bindings():
+    assert all(
+        binding.action
+        != "ignore_assigned_voice"
+        for binding in ReviewerTUI.BINDINGS
+    )
+
+    assert all(
+        binding.action
+        != "new_ignored_voice"
+        for binding in VoicePickerScreen.BINDINGS
+    )

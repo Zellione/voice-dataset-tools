@@ -2616,6 +2616,13 @@ def turn_review(
                 .get("automatic_pipeline", {})
                 .get("status")
                 == "review"
+                and (
+                    turn.get("review") or {}
+                ).get(
+                    "status",
+                    "pending",
+                )
+                != "reviewed"
             )
         ]
 
