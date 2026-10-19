@@ -4762,42 +4762,6 @@ class ReviewerTUI(App[None]):
                 != "reviewed"
             )
 
-        if action == "ignore_assigned_voice":
-            turn = self.session.current()
-
-            if turn is None:
-                return False
-
-            assignment = (
-                turn.get("assignment")
-                or {}
-            )
-
-            if assignment.get("status") != "assigned":
-                return False
-
-            voice_id = assignment.get(
-                "voice_id"
-            )
-
-            if (
-                not isinstance(voice_id, str)
-                or not voice_id
-            ):
-                return False
-
-            voice = (
-                self.session.storage
-                .get_voice(voice_id)
-            )
-
-            return (
-                isinstance(voice, dict)
-                and not bool(
-                    voice.get("ignored")
-                )
-            )
-
         if action == "mark_unknown":
             turn = self.session.current()
 
