@@ -4434,3 +4434,234 @@ def test_alignment_recovery_trims_next_word_overlap(
     assert trimmed.words[0]["end"] == pytest.approx(
         1554.348781
     )
+
+
+def test_alignment_recovery_rejects_zero_duration_word():
+    from voice_dataset.word_alignment import (
+        LocalAlignmentRecovery,
+        alignment_recovery_is_valid,
+    )
+
+    words = [
+        {
+            "text": "No",
+            "start": 10.0,
+            "end": 10.2,
+        }
+    ]
+
+    recovery = LocalAlignmentRecovery(
+        word_indices=(0,),
+        region_id="region_000001",
+        region_start=9.5,
+        region_end=10.5,
+        text="No",
+        words=(
+            {
+                "text": "No",
+                "start": 10.1,
+                "end": 10.1,
+            },
+        ),
+    )
+
+    assert not alignment_recovery_is_valid(
+        words,
+        recovery,
+    )
+
+
+def test_trim_alignment_recovery_drops_zero_duration_trailing_word():
+    from voice_dataset.word_alignment import (
+        LocalAlignmentRecovery,
+        trim_alignment_recovery_to_stable_boundaries,
+    )
+
+    words = [
+        {
+            "text": "Wait",
+            "start": 10.0,
+            "end": 10.2,
+        },
+        {
+            "text": "No",
+            "start": 10.3,
+            "end": 10.4,
+        },
+    ]
+
+    recovery = LocalAlignmentRecovery(
+        word_indices=(0, 1),
+        region_id="region_000001",
+        region_start=9.9,
+        region_end=10.5,
+        text="Wait No",
+        words=(
+            {
+                "text": "Wait",
+                "start": 9.9,
+                "end": 10.3,
+            },
+            {
+                "text": "No",
+                "start": 10.3,
+                "end": 10.3,
+            },
+        ),
+    )
+
+    result = trim_alignment_recovery_to_stable_boundaries(
+        words,
+        recovery,
+        recovered_word_indices={0, 1},
+        unstable_word_indices=set(),
+    )
+
+    assert result is not None
+    assert result.word_indices == (0,)
+    assert result.words == (
+        {
+            "text": "Wait",
+            "start": 9.9,
+            "end": 10.3,
+        },
+    )
+
+
+def test_trim_alignment_recovery_keeps_zero_duration_interior_word():
+    from voice_dataset.word_alignment import (
+        LocalAlignmentRecovery,
+        trim_alignment_recovery_to_stable_boundaries,
+    )
+
+    words = [
+        {"text": "one", "start": 10.0, "end": 10.2},
+        {"text": "two", "start": 10.2, "end": 10.3},
+        {"text": "three", "start": 10.3, "end": 10.5},
+    ]
+
+    recovery = LocalAlignmentRecovery(
+        word_indices=(0, 1, 2),
+        region_id="region_000001",
+        region_start=9.9,
+        region_end=10.6,
+        text="one two three",
+        words=(
+            {"text": "one", "start": 9.9, "end": 10.2},
+            {"text": "two", "start": 10.2, "end": 10.2},
+            {"text": "three", "start": 10.2, "end": 10.6},
+        ),
+    )
+
+    result = trim_alignment_recovery_to_stable_boundaries(
+        words,
+        recovery,
+        recovered_word_indices={0, 1, 2},
+        unstable_word_indices=set(),
+    )
+
+    assert result is not None
+    assert result.word_indices == (0, 1, 2)
+
+
+def test_effective_alignment_trims_zero_duration_edge_from_stranded_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from voice_dataset.word_alignment import (
+        LocalAlignmentRecovery,
+        StrandedAlignmentCandidate,
+    )
+
+    words = [
+        word("Wait", 10.0, 10.2),
+        word("No", 10.3, 10.4),
+    ]
+
+    monkeypatch.setattr(
+        word_alignment,
+        "collect_region_evidence",
+        lambda *args, **kwargs: [],
+    )
+
+    monkeypatch.setattr(
+        word_alignment,
+        "find_stranded_alignment_candidates",
+        lambda *args, **kwargs: [
+            StrandedAlignmentCandidate(
+                word_indices=(0, 1),
+                region_id="region_stranded",
+                region_start=9.9,
+                region_end=10.5,
+                speaker="SPEAKER_0",
+            )
+        ],
+    )
+
+    def fake_recover_alignment_candidates_batch(
+        storage,
+        source_id,
+        candidates,
+        words_arg,
+        **kwargs,
+    ):
+        if not candidates:
+            return []
+
+        assert len(candidates) == 1
+        assert candidates[0].word_indices == (0, 1)
+
+        return [
+            LocalAlignmentRecovery(
+                word_indices=(0, 1),
+                region_id="region_stranded",
+                region_start=9.9,
+                region_end=10.5,
+                text="Wait No",
+                words=(
+                    word("Wait", 9.9, 10.3),
+                    word("No", 10.3, 10.3),
+                ),
+            )
+        ]
+
+    monkeypatch.setattr(
+        word_alignment,
+        "recover_alignment_candidates_batch",
+        fake_recover_alignment_candidates_batch,
+    )
+
+    monkeypatch.setattr(
+        word_alignment,
+        "find_post_recovery_word_conflicts",
+        lambda *args, **kwargs: [],
+    )
+
+    result = (
+        word_alignment.build_effective_word_alignment(
+            storage=None,
+            source_id="source",
+            words=words,
+            representation_name="center",
+            language="English",
+        )
+    )
+
+    assert result.words[0]["start"] == pytest.approx(
+        9.9
+    )
+    assert result.words[0]["end"] == pytest.approx(
+        10.3
+    )
+
+    # The collapsed trailing recovery word must not
+    # overwrite the original valid Qwen geometry.
+    assert result.words[1]["start"] == pytest.approx(
+        10.3
+    )
+    assert result.words[1]["end"] == pytest.approx(
+        10.4
+    )
+
+    assert result.recoveries[0].word_indices == (
+        0,
+    )

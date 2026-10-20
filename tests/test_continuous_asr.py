@@ -1398,3 +1398,203 @@ def test_transcribe_source_qwen3_handles_no_speech_chunks(
     assert attach_kwargs["text"] == ""
     assert attach_kwargs["words"] == []
     assert attach_kwargs["utterances"] == []
+
+
+def test_qwen_chunk_without_text_or_alignment_is_empty():
+    from adapters.qwen3_asr import (
+        _continuous_chunk_result,
+    )
+
+    class Result:
+        language = "English"
+        text = ""
+        time_stamps = None
+
+    result = _continuous_chunk_result(
+        {
+            "index": 40,
+            "start": 2529.704,
+            "end": 2589.704,
+            "boundary": "source_gap",
+        },
+        Result(),
+    )
+
+    assert result == {
+        "index": 40,
+        "start": 2529.704,
+        "end": 2589.704,
+        "boundary": "source_gap",
+        "language": None,
+        "text": "",
+        "words": [],
+    }
+
+
+def test_qwen_chunk_with_text_but_no_alignment_fails():
+    from adapters.qwen3_asr import (
+        _continuous_chunk_result,
+    )
+
+    class Result:
+        language = "English"
+        text = "Actual speech"
+        time_stamps = None
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "Qwen returned no forced alignment "
+            "for chunk 40"
+        ),
+    ):
+        _continuous_chunk_result(
+            {
+                "index": 40,
+                "start": 2529.704,
+                "end": 2589.704,
+                "boundary": "source_gap",
+            },
+            Result(),
+        )
+
+
+def test_qwen_chunk_with_alignment_serializes_words():
+    from adapters.qwen3_asr import (
+        _continuous_chunk_result,
+    )
+
+    class AlignmentItem:
+        def __init__(
+            self,
+            text,
+            start_time,
+            end_time,
+        ):
+            self.text = text
+            self.start_time = start_time
+            self.end_time = end_time
+
+    class Alignment:
+        items = [
+            AlignmentItem(
+                "Hello",
+                0.5,
+                0.9,
+            ),
+            AlignmentItem(
+                "world",
+                1.0,
+                1.4,
+            ),
+        ]
+
+    class Result:
+        language = "English"
+        text = "Hello world."
+        time_stamps = Alignment()
+
+    result = _continuous_chunk_result(
+        {
+            "index": 7,
+            "start": 420.0,
+            "end": 480.0,
+            "boundary": "sentence_gap",
+        },
+        Result(),
+    )
+
+    assert result == {
+        "index": 7,
+        "start": 420.0,
+        "end": 480.0,
+        "boundary": "sentence_gap",
+        "language": "English",
+        "text": "Hello world.",
+        "words": [
+            {
+                "text": "Hello",
+                "start": 0.5,
+                "end": 0.9,
+            },
+            {
+                "text": "world",
+                "start": 1.0,
+                "end": 1.4,
+            },
+        ],
+    }
+
+
+def test_load_qwen_output_ignores_empty_chunk_language():
+    import json
+
+    from voice_dataset.continuous_asr import (
+        _load_qwen_output,
+    )
+
+    from tempfile import TemporaryDirectory
+
+    with TemporaryDirectory() as tmp:
+        path = Path(tmp) / "continuous.json"
+
+        path.write_text(
+            json.dumps(
+                {
+                    "format": (
+                        "voice-dataset-continuous-asr-output"
+                    ),
+                    "version": 2,
+                    "transcriber": {
+                        "name": "qwen3-asr",
+                        "model": "Qwen/Qwen3-ASR-0.6B",
+                    },
+                    "aligner": {
+                        "name": "qwen3-forced-aligner",
+                        "model": (
+                            "Qwen/"
+                            "Qwen3-ForcedAligner-0.6B"
+                        ),
+                    },
+                    "chunks": [
+                        {
+                            "index": 0,
+                            "start": 0.0,
+                            "end": 60.0,
+                            "boundary": "sentence_gap",
+                            "language": "English",
+                            "text": "Hello.",
+                            "words": [
+                                {
+                                    "text": "Hello",
+                                    "start": 1.0,
+                                    "end": 1.5,
+                                }
+                            ],
+                        },
+                        {
+                            "index": 1,
+                            "start": 60.0,
+                            "end": 120.0,
+                            "boundary": "source_gap",
+                            "language": None,
+                            "text": "",
+                            "words": [],
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = _load_qwen_output(path)
+
+    assert result.language == "English"
+    assert result.text == "Hello."
+    assert result.words == [
+        {
+            "text": "Hello",
+            "start": 1.0,
+            "end": 1.5,
+        }
+    ]

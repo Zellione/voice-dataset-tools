@@ -109,6 +109,60 @@ def _alignment_words(
     return words
 
 
+def _continuous_chunk_result(
+    item: dict,
+    result,
+) -> dict:
+    index = int(
+        item["index"]
+    )
+
+    result_text = result.text
+
+    if not isinstance(
+        result_text,
+        str,
+    ):
+        raise RuntimeError(
+            "Qwen returned invalid text "
+            f"for chunk {index}"
+        )
+
+    alignment = result.time_stamps
+
+    if alignment is None:
+        if result_text.strip():
+            raise RuntimeError(
+                "Qwen returned no forced "
+                "alignment for chunk "
+                f"{index}"
+            )
+
+        words = []
+        result_language = None
+    else:
+        words = _alignment_words(
+            alignment
+        )
+        result_language = result.language
+
+    return {
+        "index": index,
+        "start": float(
+            item["start"]
+        ),
+        "end": float(
+            item["end"]
+        ),
+        "boundary": str(
+            item["boundary"]
+        ),
+        "language": result_language,
+        "text": result_text,
+        "words": words,
+    }
+
+
 def main() -> None:
     args = parse_args()
 
@@ -412,46 +466,16 @@ def main() -> None:
                     "batch size"
                 )
 
-            chunks = []
-
-            for item, result in zip(
-                raw_chunks,
-                results,
-            ):
-                alignment = (
-                    result.time_stamps
+            chunks = [
+                _continuous_chunk_result(
+                    item,
+                    result,
                 )
-
-                if alignment is None:
-                    raise RuntimeError(
-                        "Qwen returned no forced "
-                        "alignment for chunk "
-                        f"{item['index']}"
-                    )
-
-                chunks.append(
-                    {
-                        "index": int(
-                            item["index"]
-                        ),
-                        "start": float(
-                            item["start"]
-                        ),
-                        "end": float(
-                            item["end"]
-                        ),
-                        "boundary": str(
-                            item["boundary"]
-                        ),
-                        "language": (
-                            result.language
-                        ),
-                        "text": result.text,
-                        "words": _alignment_words(
-                            alignment
-                        ),
-                    }
+                for item, result in zip(
+                    raw_chunks,
+                    results,
                 )
+            ]
 
             document = {
                 "format": (

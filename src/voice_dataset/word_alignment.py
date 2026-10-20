@@ -826,17 +826,53 @@ def trim_alignment_recovery_to_stable_boundaries(
     if not recovery.word_indices or not recovery.words:
         return None
 
+    trimmed_indices = list(
+        recovery.word_indices
+    )
+
     trimmed_words = [
         dict(word)
         for word in recovery.words
     ]
 
-    first_index = recovery.word_indices[0]
+    while (
+        trimmed_words
+        and (
+            float(trimmed_words[0]["end"])
+            - float(trimmed_words[0]["start"])
+            <= 1e-6
+        )
+    ):
+        trimmed_indices.pop(0)
+        trimmed_words.pop(0)
+
+    while (
+        trimmed_words
+        and (
+            float(trimmed_words[-1]["end"])
+            - float(trimmed_words[-1]["start"])
+            <= 1e-6
+        )
+    ):
+        trimmed_indices.pop()
+        trimmed_words.pop()
+
+    if not trimmed_words:
+        return None
+
+    effective_recovered_word_indices = (
+        set(recovered_word_indices)
+        - set(recovery.word_indices)
+        | set(trimmed_indices)
+    )
+
+    first_index = trimmed_indices[0]
     previous_index = first_index - 1
 
     while previous_index >= 0:
         if (
-            previous_index in recovered_word_indices
+            previous_index
+            in effective_recovered_word_indices
             or previous_index in unstable_word_indices
         ):
             previous_index -= 1
@@ -861,12 +897,13 @@ def trim_alignment_recovery_to_stable_boundaries(
 
             trimmed_words[0]["start"] = previous_end
 
-    last_index = recovery.word_indices[-1]
+    last_index = trimmed_indices[-1]
     next_index = last_index + 1
 
     while next_index < len(words):
         if (
-            next_index in recovered_word_indices
+            next_index
+            in effective_recovered_word_indices
             or next_index in unstable_word_indices
         ):
             next_index += 1
@@ -892,11 +929,16 @@ def trim_alignment_recovery_to_stable_boundaries(
             trimmed_words[-1]["end"] = next_start
 
     return LocalAlignmentRecovery(
-        word_indices=recovery.word_indices,
+        word_indices=tuple(
+            trimmed_indices
+        ),
         region_id=recovery.region_id,
         region_start=recovery.region_start,
         region_end=recovery.region_end,
-        text=recovery.text,
+        text=" ".join(
+            str(word["text"])
+            for word in trimmed_words
+        ),
         words=tuple(trimmed_words),
     )
 
@@ -1185,12 +1227,41 @@ def build_effective_word_alignment(
         )
     )
 
+    stranded_recovered_word_indices = {
+        index
+        for recovery in (
+            *recoveries,
+            *stranded_recoveries,
+        )
+        for index in recovery.word_indices
+    }
+
     for recovery in stranded_recoveries:
-        if alignment_recovery_is_valid(
+        if not alignment_recovery_is_valid(
             words,
             recovery,
         ):
-            recoveries.append(recovery)
+            continue
+
+        trimmed_recovery = (
+            trim_alignment_recovery_to_stable_boundaries(
+                words,
+                recovery,
+                recovered_word_indices=(
+                    stranded_recovered_word_indices
+                ),
+                unstable_word_indices=(
+                    unstable_word_indices
+                ),
+            )
+        )
+
+        if trimmed_recovery is None:
+            continue
+
+        recoveries.append(
+            trimmed_recovery
+        )
 
     effective_words = apply_alignment_recoveries(
         words,
@@ -2803,6 +2874,16 @@ def alignment_recovery_is_valid(
             return False
 
         previous_recovered_end = recovered_end
+
+    recovery_start = float(
+        recovery.words[0]["start"]
+    )
+    recovery_end = float(
+        recovery.words[-1]["end"]
+    )
+
+    if recovery_end - recovery_start <= 1e-6:
+        return False
 
     return True
 
