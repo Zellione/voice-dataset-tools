@@ -1723,3 +1723,56 @@ def test_mark_curated_reconciliation_does_not_invent_legacy_automatic_plan(
         "automatic_word_ranges"
         not in reconciliation
     )
+
+
+def test_turn_edge_evidence_suggests_missing_prefix_start_extension():
+    from voice_dataset.utterance_reconciliation import (
+        _turn_edge_evidence,
+    )
+
+    candidate = UtteranceCandidate(
+        start_word_index=0,
+        end_word_index=0,
+        start=379.83190625,
+        end=380.47190625,
+        text="changed",
+        speaker="SPEAKER_13",
+        word_indices=(0,),
+        unresolved_word_indices=(),
+        known_speakers=("SPEAKER_13",),
+        alignment_issue_word_indices=(),
+        end_boundary="sat",
+    )
+
+    regions = [
+        {
+            "id": "region_000087",
+            "source_id": "source_001",
+            "source_start": 379.48221875,
+            "source_end": 380.44409375,
+            "detector_label": "SPEAKER_13",
+            "transcripts": {
+                "whisper": {
+                    "text": "Deals changed.",
+                },
+            },
+        },
+    ]
+
+    result = _turn_edge_evidence(
+        regions,
+        candidate=candidate,
+    )
+
+    assert result == {
+        "status": "suggested",
+        "method": (
+            "community_whisper_start_extension"
+        ),
+        "edge": "start",
+        "source_start": 379.48221875,
+        "region_id": "region_000087",
+        "speaker": "SPEAKER_13",
+        "candidate_text": "changed",
+        "whisper_text": "Deals changed.",
+    }

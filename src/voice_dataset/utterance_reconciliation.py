@@ -239,6 +239,81 @@ def _turn_edge_evidence(
     if len(end_suggestions) == 1:
         return end_suggestions[0]
 
+    start_extension_suggestions: list[
+        dict[str, Any]
+    ] = []
+
+    for region in regions:
+        region_start = float(
+            region["source_start"]
+        )
+        region_end = float(
+            region["source_end"]
+        )
+
+        # Look for local speech evidence that begins
+        # before the candidate but still overlaps its
+        # start. The region transcript must contain the
+        # complete candidate transcript as a suffix plus
+        # at least one additional leading token.
+        if not (
+            region_start
+            < candidate.start - 0.001
+            and region_end
+            > candidate.start
+        ):
+            continue
+
+        whisper_text = _whisper_text(
+            region
+        )
+
+        if whisper_text is None:
+            continue
+
+        whisper_tokens = lexical_tokens(
+            whisper_text
+        )
+
+        if (
+            len(whisper_tokens)
+            <= len(candidate_tokens)
+        ):
+            continue
+
+        if (
+            whisper_tokens[
+                -len(candidate_tokens):
+            ]
+            != candidate_tokens
+        ):
+            continue
+
+        start_extension_suggestions.append(
+            {
+                "status": "suggested",
+                "method": (
+                    "community_whisper_"
+                    "start_extension"
+                ),
+                "edge": "start",
+                "source_start": region_start,
+                "region_id": region["id"],
+                "speaker": region.get(
+                    "detector_label"
+                ),
+                "candidate_text": (
+                    candidate.text
+                ),
+                "whisper_text": (
+                    whisper_text
+                ),
+            }
+        )
+
+    if len(start_extension_suggestions) == 1:
+        return start_extension_suggestions[0]
+
     containing_start_regions = [
         region
         for region in regions

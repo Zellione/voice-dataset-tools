@@ -1,3 +1,5 @@
+import pytest
+
 
 
 def test_accept_alignment_recovery_removes_stale_turn_artifacts(
@@ -79,3 +81,63 @@ def test_accept_alignment_recovery_removes_stale_turn_artifacts(
     )
 
     assert not artifact_dir.exists()
+
+
+def test_accept_start_extension_updates_transcript(
+    tmp_path,
+):
+    from voice_dataset.review import (
+        accept_edge_recovery,
+    )
+    from voice_dataset.schema import TurnRecord
+    from voice_dataset.storage import DatasetStorage
+
+    storage = DatasetStorage(tmp_path)
+
+    storage.add_turn(
+        TurnRecord(
+            id="turn_000001",
+            source_id="source_001",
+            source_start=379.83190625,
+            source_end=380.47190625,
+            source_regions=[],
+            language="en",
+            transcript="changed",
+            metadata={
+                "edge_evidence": {
+                    "status": "suggested",
+                    "method": (
+                        "community_whisper_start_extension"
+                    ),
+                    "edge": "start",
+                    "source_start": 379.48221875,
+                    "region_id": "region_000087",
+                    "speaker": "SPEAKER_13",
+                    "candidate_text": "changed",
+                    "whisper_text": "Deals changed.",
+                },
+            },
+        )
+    )
+
+    updated = accept_edge_recovery(
+        storage,
+        "turn_000001",
+    )
+
+    assert updated["source_start"] == pytest.approx(
+        379.48221875
+    )
+
+    assert updated["source_end"] == pytest.approx(
+        380.47190625
+    )
+
+    assert updated["transcript"] == (
+        "Deals changed."
+    )
+
+    assert (
+        updated["metadata"]["edge_evidence"]["status"]
+        == "accepted"
+    )
