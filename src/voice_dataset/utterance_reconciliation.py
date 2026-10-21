@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass
 from typing import Any
 
@@ -286,6 +288,73 @@ def _turn_edge_evidence(
                 -len(candidate_tokens):
             ]
             != candidate_tokens
+        ):
+            continue
+
+        # The candidate must be missing only the
+        # beginning of the same sentence. Do not pull
+        # one or more preceding sentences into the turn
+        # merely because the candidate transcript is a
+        # lexical suffix of the Whisper region.
+        lexical_spans: list[
+            tuple[str, int, int]
+        ] = []
+
+        for match in re.finditer(
+            r"\S+",
+            whisper_text,
+        ):
+            normalized = "".join(
+                character
+                for character
+                in match.group(0).casefold()
+                if (
+                    character.isalnum()
+                    or character == "'"
+                )
+            )
+
+            if not normalized:
+                continue
+
+            lexical_spans.append(
+                (
+                    normalized,
+                    match.start(),
+                    match.end(),
+                )
+            )
+
+        prefix_token_count = (
+            len(whisper_tokens)
+            - len(candidate_tokens)
+        )
+
+        if (
+            len(lexical_spans)
+            != len(whisper_tokens)
+            or prefix_token_count <= 0
+        ):
+            continue
+
+        candidate_raw_start = (
+            lexical_spans[
+                prefix_token_count
+            ][1]
+        )
+
+        raw_prefix = whisper_text[
+            :candidate_raw_start
+        ]
+
+        if any(
+            marker in raw_prefix
+            for marker in (
+                ".",
+                "!",
+                "?",
+                "…",
+            )
         ):
             continue
 

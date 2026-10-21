@@ -1776,3 +1776,56 @@ def test_turn_edge_evidence_suggests_missing_prefix_start_extension():
         "candidate_text": "changed",
         "whisper_text": "Deals changed.",
     }
+
+
+@pytest.mark.parametrize(
+    "whisper_text",
+    [
+        "Thicc. Dibs on the bat.",
+        "Stop! Dibs on the bat.",
+        "Really? Dibs on the bat.",
+        "Wait… Dibs on the bat.",
+    ],
+)
+def test_turn_edge_evidence_does_not_extend_across_sentence_boundary(
+    whisper_text,
+):
+    from voice_dataset.utterance_reconciliation import (
+        _turn_edge_evidence,
+    )
+
+    candidate = UtteranceCandidate(
+        start_word_index=0,
+        end_word_index=3,
+        start=917.54471875,
+        end=918.10471875,
+        text="Dibs on the bat",
+        speaker="SPEAKER_13",
+        word_indices=(0, 1, 2, 3),
+        unresolved_word_indices=(),
+        known_speakers=("SPEAKER_13",),
+        alignment_issue_word_indices=(),
+        end_boundary="sat",
+    )
+
+    regions = [
+        {
+            "id": "region_000250",
+            "source_id": "source_001",
+            "source_start": 916.98471875,
+            "source_end": 918.10471875,
+            "detector_label": "SPEAKER_13",
+            "transcripts": {
+                "whisper": {
+                    "text": whisper_text,
+                },
+            },
+        },
+    ]
+
+    result = _turn_edge_evidence(
+        regions,
+        candidate=candidate,
+    )
+
+    assert result is None
