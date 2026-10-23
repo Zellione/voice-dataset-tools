@@ -83,7 +83,7 @@ def test_accept_alignment_recovery_removes_stale_turn_artifacts(
     assert not artifact_dir.exists()
 
 
-def test_accept_start_extension_updates_transcript(
+def test_accept_start_extension_preserves_transcript(
     tmp_path,
 ):
     from voice_dataset.review import (
@@ -134,7 +134,7 @@ def test_accept_start_extension_updates_transcript(
     )
 
     assert updated["transcript"] == (
-        "Deals changed."
+        "changed"
     )
 
     assert (

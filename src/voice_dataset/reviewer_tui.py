@@ -781,6 +781,28 @@ class ConfirmRecoveryScreen(
 
     BINDINGS = [
         Binding(
+            "space",
+            "preview",
+            "Preview",
+            key_display="Space",
+        ),
+        Binding(
+            "p",
+            "preview",
+            "Preview",
+            show=False,
+        ),
+        Binding(
+            "c",
+            "play_context",
+            "Context",
+        ),
+        Binding(
+            "s",
+            "stop_audio",
+            "Stop",
+        ),
+        Binding(
             "enter",
             "accept",
             "Accept",
@@ -796,9 +818,20 @@ class ConfirmRecoveryScreen(
         self,
         *,
         content: str,
+        source: dict | None = None,
+        preview_start: float | None = None,
+        preview_end: float | None = None,
+        context_padding: float = 2.0,
     ) -> None:
         super().__init__()
+
         self.content = content
+        self.source = source
+        self.preview_start = preview_start
+        self.preview_end = preview_end
+        self.context_padding = float(
+            context_padding
+        )
 
     def compose(self) -> ComposeResult:
         with Vertical(id="recovery-dialog"):
@@ -809,11 +842,73 @@ class ConfirmRecoveryScreen(
 
         yield Footer()
 
+    def _play(
+        self,
+        *,
+        padding: float,
+    ) -> None:
+        if self.source is None:
+            return
+
+        if (
+            self.preview_start is None
+            or self.preview_end is None
+        ):
+            return
+
+        if self.preview_end <= self.preview_start:
+            return
+
+        source_id = self.source.get(
+            "id"
+        )
+
+        if not isinstance(
+            source_id,
+            str,
+        ):
+            return
+
+        preview_turn = {
+            "source_id": source_id,
+            "source_start": (
+                self.preview_start
+            ),
+            "source_end": (
+                self.preview_end
+            ),
+        }
+
+        play_turn_context(
+            self.source,
+            preview_turn,
+            padding=padding,
+            blocking=False,
+        )
+
+    def action_preview(self) -> None:
+        self._play(
+            padding=0.0,
+        )
+
+    def action_play_context(self) -> None:
+        self._play(
+            padding=self.context_padding,
+        )
+
+    def action_stop_audio(self) -> None:
+        stop()
+
     def action_accept(self) -> None:
+        stop()
         self.dismiss(True)
 
     def action_cancel(self) -> None:
+        stop()
         self.dismiss(None)
+
+    def on_unmount(self) -> None:
+        stop()
 
 
 class ConfirmMergeScreen(
@@ -3316,6 +3411,28 @@ class ReviewerTUI(App[None]):
 
         return turn
 
+    def _recovery_source(
+        self,
+    ) -> dict | None:
+        turn = self.session.current()
+
+        if turn is None:
+            return None
+
+        source_id = turn.get(
+            "source_id"
+        )
+
+        if not isinstance(
+            source_id,
+            str,
+        ):
+            return None
+
+        return self.session.storage.get_source(
+            source_id
+        )
+
     def _set_status(
         self,
         message: str,
@@ -4010,6 +4127,18 @@ class ReviewerTUI(App[None]):
         self.push_screen(
             ConfirmRecoveryScreen(
                 content=content,
+                source=(
+                    self._recovery_source()
+                ),
+                preview_start=(
+                    recovery.source_start
+                ),
+                preview_end=(
+                    recovery.source_end
+                ),
+                context_padding=(
+                    self.context_padding
+                ),
             ),
             self._alignment_recovery_confirmed,
         )
@@ -4194,9 +4323,36 @@ class ReviewerTUI(App[None]):
                 edge.conflicting_whisper_text,
             ])
 
+        preview_start = view.start
+        preview_end = view.end
+
+        if (
+            edge.edge == "start"
+            and edge.source_start is not None
+        ):
+            preview_start = (
+                edge.source_start
+            )
+
+        elif (
+            edge.edge == "end"
+            and edge.source_end is not None
+        ):
+            preview_end = (
+                edge.source_end
+            )
+
         self.push_screen(
             ConfirmRecoveryScreen(
                 content="\n".join(lines),
+                source=(
+                    self._recovery_source()
+                ),
+                preview_start=preview_start,
+                preview_end=preview_end,
+                context_padding=(
+                    self.context_padding
+                ),
             ),
             self._edge_recovery_confirmed,
         )

@@ -422,33 +422,11 @@ def accept_edge_recovery(
                 "edge recovery candidate"
             )
 
-        method = edge.get("method")
-
-        if (
-            method
-            == "community_whisper_start_extension"
-        ):
-            whisper_text = edge.get(
-                "whisper_text"
-            )
-
-            if not isinstance(
-                whisper_text,
-                str,
-            ) or not whisper_text.strip():
-                raise ValueError(
-                    "Start extension has invalid "
-                    "Whisper transcript"
-                )
-
-            # Human acceptance confirms both the
-            # earlier start and the lexical prefix
-            # supplied by the local Whisper region.
-            transcript = whisper_text
-
-        # Other start recoveries only fix geometry.
-        # Their Whisper transcript remains boundary
-        # evidence rather than canonical lexical truth.
+        # Start recoveries only fix geometry.
+        # Whisper provides evidence that speech exists
+        # before the current boundary, but is not
+        # canonical lexical truth. Transcript curation
+        # remains a separate human decision.
 
     source_regions = list(
         turn.get("source_regions") or []

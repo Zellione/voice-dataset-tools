@@ -5801,3 +5801,196 @@ def test_reviewer_tui_has_no_ignore_voice_bindings():
         != "new_ignored_voice"
         for binding in VoicePickerScreen.BINDINGS
     )
+
+
+@pytest.mark.asyncio
+async def test_recovery_screen_previews_proposed_audio(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=1.0,
+    )
+
+    session = ReviewerSession(storage)
+
+    calls = []
+
+    def fake_play_turn_context(
+        source,
+        turn,
+        *,
+        padding,
+        blocking,
+    ):
+        calls.append(
+            (
+                "play",
+                source["id"],
+                turn["source_start"],
+                turn["source_end"],
+                padding,
+                blocking,
+            )
+        )
+
+        return (
+            "context",
+            tmp_path / "source.wav",
+            turn["source_start"],
+            turn["source_end"],
+        )
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui."
+        "play_turn_context",
+        fake_play_turn_context,
+    )
+
+    monkeypatch.setattr(
+        "voice_dataset.reviewer_tui.stop",
+        lambda: calls.append(
+            ("stop",)
+        ),
+    )
+
+    source = {
+        "id": "source_001",
+    }
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        app.push_screen(
+            ConfirmRecoveryScreen(
+                content="Recovery",
+                source=source,
+                preview_start=10.0,
+                preview_end=11.0,
+                context_padding=2.0,
+            )
+        )
+
+        await pilot.pause()
+
+        await pilot.press("space")
+        await pilot.pause()
+
+        await pilot.press("c")
+        await pilot.pause()
+
+        await pilot.press("s")
+        await pilot.pause()
+
+        assert calls == [
+            (
+                "play",
+                "source_001",
+                10.0,
+                11.0,
+                0.0,
+                False,
+            ),
+            (
+                "play",
+                "source_001",
+                10.0,
+                11.0,
+                2.0,
+                False,
+            ),
+            (
+                "stop",
+            ),
+        ]
+
+
+@pytest.mark.asyncio
+async def test_edge_recovery_preview_uses_proposed_geometry(
+    tmp_path,
+    monkeypatch,
+):
+    storage = DatasetStorage(tmp_path)
+
+    add_turn(
+        storage,
+        "turn_000001",
+        source_start=10.0,
+    )
+
+    storage.update_turn(
+        "turn_000001",
+        lambda turn: {
+            **turn,
+            "source_end": 11.0,
+            "metadata": {
+                **(turn.get("metadata") or {}),
+                "edge_evidence": {
+                    "status": "suggested",
+                    "method": (
+                        "community_whisper_"
+                        "start_extension"
+                    ),
+                    "edge": "start",
+                    "source_start": 9.5,
+                    "region_id": "region_000001",
+                    "speaker": "SPEAKER_01",
+                    "candidate_text": "changed",
+                    "whisper_text": (
+                        "Deals changed."
+                    ),
+                },
+            },
+        },
+    )
+
+    session = ReviewerSession(storage)
+
+    storage.sources.append(
+        {
+            "schema_version": 1,
+            "record_type": "source",
+            "id": "source_001",
+            "representations": {},
+            "metadata": {},
+        }
+    )
+
+    app = ReviewerTUI(
+        session,
+        embedding_names=(),
+        context_padding=2.0,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("e")
+        await pilot.pause()
+
+        assert isinstance(
+            app.screen,
+            ConfirmRecoveryScreen,
+        )
+
+        assert app.screen.source is not None
+        assert (
+            app.screen.source["id"]
+            == "source_001"
+        )
+        assert app.screen.preview_start == (
+            pytest.approx(9.5)
+        )
+        assert app.screen.preview_end == (
+            pytest.approx(11.0)
+        )
+        assert (
+            app.screen.context_padding
+            == pytest.approx(2.0)
+        )
